@@ -77,10 +77,12 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-subagent-pretool-check.sh` | Primary-home delegation-shape PreToolUse guard (docs/subagent-guard.md) |
 | `fm-lavish-pretool-check.sh` | Stable PreToolUse transport for the lavish-guard command policy (docs/lavish-access.md) |
 | `fm-lavish-command-policy.mjs` | Semantic owner of the bare-`lavish-axi` PreToolUse policy (docs/lavish-access.md) |
-| `fm-lavish.sh`           | Open review boards on this vessel's own tailnet address and port (docs/lavish-access.md) |
+| `fm-lavish.sh`           | Open review boards on a checked link that reaches this vessel off this machine, binding its tailnet address or publishing a proxy onto it (docs/lavish-access.md) |
 | `fm-board.sh`            | Build a review board on the shared standard layout and refuse one that reaches the network (docs/board-layout.md) |
 | `fm-service-port.sh`     | Resolve one vessel-local service's reachable address and a port it actually bound     |
-| `fm-service-port-probe.mjs` | Bind, DNS, and readiness oracle for the service-port allocator                    |
+| `fm-service-port-probe.mjs` | Bind, address, DNS, and readiness oracle for the service-port allocator          |
+| `fm-reachability-lib.sh` | Own a service's reachability verdict and the evidence behind it, refusing any claim of more reach than something established (docs/lavish-access.md) |
+| `fm-tailnet-serve-lib.sh` | Publish a loopback port onto this node's tailnet address, and withdraw it again (docs/lavish-access.md) |
 | `fm-supervision-instructions.sh` | Render the session-start primary-harness supervision block or the one-line repair instruction |
 | `fm-home-seed.sh`        | Transactionally provision a secondmate home and maintain `data/secondmates.md`       |
 | `fm-spawn.sh`            | Spawn crewmates, scouts, `id=repo` batches, and secondmates on the resolved harness and runtime backend |

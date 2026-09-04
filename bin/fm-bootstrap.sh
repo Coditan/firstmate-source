@@ -1188,7 +1188,7 @@ currency_base_validate() {
 # A host with no tailnet is honestly limited rather than regressed, so it is
 # silent.
 lavish_access_check() {
-  local loopback found=0 reach shared
+  local loopback found=0 reach shared record
   command -v jq >/dev/null 2>&1 || return 0
   # This home's own store, written by bin/fm-lavish.sh. Everything in it belongs
   # to this home, so no attribution filter is needed.
@@ -1224,9 +1224,28 @@ lavish_access_check() {
     esac
   fi
   [ "$found" -gt 0 ] || return 0
-  reach=$("$SCRIPT_DIR/fm-service-port.sh" lavish --check 2>/dev/null \
-    | sed -n 's/^reachability=\(.*\)$/\1/p' | head -1)
-  [ "$reach" = tailnet ] || return 0
+  # Read from the record the ALLOCATION wrote, never from a --check pre-read.
+  # Whether a proxy can be published is unanswerable until a port exists, so on a
+  # vessel that degrades, --check answers tailnet-proxied while every board it
+  # actually opened correctly carries a loopback link. This notice would then
+  # fire on every session start with a remedy - reopen the board - that only
+  # re-degrades and re-emits the same link. The record stays a published fact and
+  # nothing more: it is read for the resolution it already recorded, never
+  # consulted to decide whether a port is free. With no readable record there is
+  # no authoritative resolution to stand on, so nothing is claimed at all.
+  record="$STATE/service-port.lavish"
+  [ -r "$record" ] || return 0
+  reach=$(sed -n 's/^reachability=\(.*\)$/\1/p' "$record" | head -1)
+  # A vessel serving its boards through a published proxy has just as much reach
+  # to offer as one binding its own address, so a loopback link is just as stale
+  # there and the notice has to fire for both. Every other value stays silent,
+  # and reachability=untested deliberately so: nothing has established that this
+  # vessel has any reach to offer, so telling the captain to reopen a board would
+  # promise an outcome no run here has seen.
+  case "$reach" in
+    tailnet|tailnet-proxied) ;;
+    *) return 0 ;;
+  esac
   echo "LAVISH_ACCESS: $found open review board link(s) still point at this machine only and will not open on the captain's devices; reopen them with bin/fm-lavish.sh"
 }
 

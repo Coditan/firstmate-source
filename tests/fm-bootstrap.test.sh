@@ -1028,7 +1028,7 @@ ROWS
 # regression this check exists to catch: it is silent by construction, because a
 # loopback board renders correctly on the machine that made it.
 test_lavish_access_detection() {
-  local case_dir fakebin home out
+  local case_dir fakebin home out preread
   case_dir="$TMP_ROOT/lavish-access"
   home="$case_dir/home"
   mkdir -p "$home/config" "$home/state/lavish"
@@ -1041,10 +1041,35 @@ test_lavish_access_detection() {
 [ "${1:-}" = status ] && [ "${2:-}" = --json ] || exit 1
 case "${FM_FAKE_TAILNET:-on}" in
   on) printf '{"BackendState":"Running","MagicDNSSuffix":"","Self":{"HostName":"localhost","DNSName":"localhost.","TailscaleIPs":["127.0.0.1"]}}\n' ;;
+  userspace) printf '{"BackendState":"Running","MagicDNSSuffix":"","Self":{"HostName":"userspace","DNSName":"userspace.","TailscaleIPs":["192.0.2.1"]}}\n' ;;
   *)  printf '{"BackendState":"Stopped","Self":{}}\n' ;;
 esac
 SH
   chmod +x "$fakebin/tailscale"
+
+  # This suite fakes node away, so the address probe has to be faked with it, to
+  # the exit codes bin/fm-service-port-probe.mjs documents and that the real
+  # probe is separately held to in tests/fm-lavish-access.test.sh: 4 for an
+  # address this host cannot carry, 0 for one it can. That is what makes the
+  # userspace pre-read genuinely answer tailnet-proxied here.
+  cat > "$fakebin/node" <<'SH'
+#!/usr/bin/env bash
+case "${2:-}:${3:-}" in
+  addr:192.0.2.1) exit 4 ;;
+  addr:*) exit 0 ;;
+  resolve:*) exit 1 ;;
+esac
+exit 0
+SH
+  chmod +x "$fakebin/node"
+
+  # bin/fm-service-port.sh publishes state/service-port.<service> as a documented
+  # key=value record, and docs/fleet-service-port-registry.md points other
+  # vessel-local services straight at it, so writing one here is writing that
+  # contract rather than reaching into an implementation.
+  record_as() {
+    printf 'port=4387\nreachability=%s\n' "$1" > "$home/state/service-port.lavish"
+  }
 
   run_case() {
     PATH="$fakebin:$BASE_PATH" FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" \
@@ -1064,12 +1089,47 @@ SH
   printf '{"sessions":{"a":{"url":"http://127.0.0.1:4387/session/a","status":"open"},"b":{"url":"http://127.0.0.1:4387/session/b","status":"ended"}}}\n' \
     > "$home/state/lavish/state.json"
   out=$(run_case on)
+  assert_not_contains "$out" "LAVISH_ACCESS:" \
+    "with no record of what the allocation resolved, no reach is claimed either way"
+
+  record_as tailnet
+  out=$(run_case on)
   assert_contains "$out" "LAVISH_ACCESS: 1 open review board link(s)" \
     "an open loopback board link must be reported, and an ended one must not be counted"
 
+  # A vessel reached by a published proxy has just as much reach to offer, so a
+  # loopback link is just as stale there. The record keeps saying tailnet-proxied
+  # even after a run that published no route, because that is a fact about the
+  # host, so this notice must keep firing on exactly that vessel.
+  record_as tailnet-proxied
+  out=$(run_case userspace)
+  assert_contains "$out" "LAVISH_ACCESS: 1 open review board link(s)" \
+    "a proxied vessel's stale loopback link is reported like any other"
+
+  record_as loopback
   out=$(run_case off)
   assert_not_contains "$out" "LAVISH_ACCESS:" \
     "a host with no tailnet is honestly limited, not regressed, so it stays silent"
+
+  # The case that proves the notice decides from the RECORD and not from the
+  # pre-read: the pre-read here claims MORE reach than the allocation that
+  # actually opened these boards established. Deciding from it would fire a
+  # notice on every single session start whose only remedy, reopening the board,
+  # re-emits the same link. The guard below is what keeps this case honest -
+  # once the pre-read stops claiming the flattering answer, this shape proves
+  # nothing and must be rebuilt rather than left standing as if it did.
+  record_as loopback
+  preread=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" \
+    HOME="$case_dir/fakehome" FM_FAKE_TAILNET=on \
+    "$ROOT/bin/fm-service-port.sh" lavish --check 2>/dev/null \
+    | sed -n 's/^reachability=\(.*\)$/\1/p' | head -1)
+  [ "$preread" = tailnet ] \
+    || fail "this case only discriminates while the pre-read claims more reach than the record, got '$preread'"
+  out=$(run_case on)
+  assert_not_contains "$out" "LAVISH_ACCESS:" \
+    "a board that correctly degraded to loopback is not a stale link, however reachable the pre-read says the host is"
+
+  record_as tailnet
 
   # lavish-axi's default store is shared by every home of one UNIX account, so a
   # board belonging to another home must never be blamed on this one.

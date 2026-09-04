@@ -5,6 +5,12 @@
 # Three cooperating pieces are covered here:
 #   - bin/fm-service-port.sh, the general vessel-local port allocator, whose one
 #     rule is that a successful bind is the only proof a port is free;
+#   - bin/fm-reachability-lib.sh, the one owner of the reachability verdict and
+#     of the evidence behind it, driven directly below as well as through the
+#     allocator that uses it;
+#   - bin/fm-tailnet-serve-lib.sh, the one owner of publishing a loopback port
+#     onto this node's tailnet address and withdrawing it again, driven end to
+#     end here through the fake `tailscale serve` below;
 #   - bin/fm-lavish.sh, the entry point that turns that into a link the captain
 #     can actually open, and that degrades honestly when it cannot;
 #   - bin/fm-lavish-pretool-check.sh, the guard that denies bare `lavish-axi`.
@@ -32,12 +38,87 @@ command -v jq >/dev/null 2>&1 || fail "jq is required for the tailnet identity r
 #   badname  - running, but the DNS name does not resolve to the address
 #   stopped  - installed but not running
 #   noipv4   - running with no IPv4 address
+#   userspace - running on an address no local interface carries, which is what
+#               tailscale userspace networking mode looks like. 192.0.2.1 is
+#               TEST-NET-1: it is assigned on no host, so the bind really does
+#               fail EADDRNOTAVAIL here rather than being mocked into failing.
+#   kernel    - running on a bindable address that is NOT loopback, which is
+#               what a node looks like once it has kernel-mode networking. It is
+#               the address this vessel binds and probes, so a listener that a
+#               publication forwards to on 127.0.0.1 is somewhere else entirely.
+#   portscoped - running on an address whose bind fails for a reason that is
+#               NOT address-scoped, so the probe answers exit 1 and says nothing
+#               about the address either way. 1.2.3.4.5 is not an IPv4 address,
+#               so node resolves it as a name and the bind really does fail
+#               ENOTFOUND, the same class as the EPERM and fd-pressure answers a
+#               healthy kernel-mode vessel can meet.
+#
+# It also fakes `tailscale serve`, keeping its published ports in
+# FM_TEST_TS_SERVE_STATE and logging every serve invocation to
+# FM_TEST_TS_SERVE_LOG, so a test can assert that the proxy path was taken - or,
+# just as importantly, that it was NOT. FM_TEST_TS_SERVE_PROXY names a directory
+# and turns a publication into a REAL reverse proxy on
+# FM_TEST_TS_SERVE_PROXY_ADDR, torn down again by the matching `off`, so a test
+# can send a request the whole way through one. FM_TEST_TS_SERVE=broken makes
+# every serve mutation fail, which is the vessel that has the unbindable address
+# and no way around it. FM_TEST_TS_DOWN_MARKER names a file whose existence makes
+# every LATER `tailscale status --json` report a stopped backend, so a tailscaled
+# that goes down partway through a run - after its identity was read and before
+# a route could be published onto it - is reproducible rather than hypothetical.
 make_fake_tailscale() {
   local bin=$1
   cat > "$bin/tailscale" <<'SH'
 #!/usr/bin/env bash
+if [ "${1:-}" = serve ]; then
+  printf '%s\n' "$*" >> "${FM_TEST_TS_SERVE_LOG:-/dev/null}"
+  state=${FM_TEST_TS_SERVE_STATE:-/dev/null}
+  if [ "${2:-}" = status ]; then
+    printf '{"TCP":{'
+    sep=""
+    while read -r p; do
+      [ -n "$p" ] || continue
+      printf '%s"%s":{"HTTP":true}' "$sep" "$p"
+      sep=","
+    done < <(sort -u "$state" 2>/dev/null)
+    printf '}}\n'
+    exit 0
+  fi
+  [ "${FM_TEST_TS_SERVE:-ok}" = broken ] && exit 1
+  port=""
+  for a in "$@"; do
+    case "$a" in --http=*) port=${a#--http=} ;; esac
+  done
+  [ -n "$port" ] || exit 1
+  if [ "${*: -1}" = off ]; then
+    if [ -n "${FM_TEST_TS_SERVE_PROXY:-}" ] && [ -s "$FM_TEST_TS_SERVE_PROXY/$port.pid" ]; then
+      kill "$(cat "$FM_TEST_TS_SERVE_PROXY/$port.pid")" 2>/dev/null || true
+      rm -f "$FM_TEST_TS_SERVE_PROXY/$port.pid"
+    fi
+    grep -vx "$port" "$state" > "$state.tmp" 2>/dev/null || : > "$state.tmp"
+    mv -f "$state.tmp" "$state"
+  else
+    # A publication that really proxies, when a test asks for one. Off by
+    # default, because most cases only need to know that a port was published
+    # and starting a listener for them would be noise.
+    if [ -n "${FM_TEST_TS_SERVE_PROXY:-}" ]; then
+      ready="$FM_TEST_TS_SERVE_PROXY/$port.ready"
+      rm -f "$ready"
+      node "$FM_TEST_TS_SERVE_PROXY_SCRIPT" "$ready" "$FM_TEST_TS_SERVE_PROXY_ADDR" "$port" "$port" \
+        </dev/null >"$FM_TEST_TS_SERVE_PROXY/$port.log" 2>&1 &
+      echo $! > "$FM_TEST_TS_SERVE_PROXY/$port.pid"
+      for _ in $(seq 1 100); do [ -s "$ready" ] && break; sleep 0.05; done
+      [ -s "$ready" ] || exit 1
+    fi
+    printf '%s\n' "$port" >> "$state"
+  fi
+  exit 0
+fi
 [ "${1:-}" = status ] || exit 1
 [ "${2:-}" = --json ] || { echo "127.0.0.1 fake"; exit 0; }
+if [ -n "${FM_TEST_TS_DOWN_MARKER:-}" ] && [ -e "$FM_TEST_TS_DOWN_MARKER" ]; then
+  printf '{"BackendState":"Stopped","MagicDNSSuffix":"","Self":{}}\n'
+  exit 0
+fi
 case "${FM_TEST_TS_MODE:-running}" in
   running)
     printf '{"BackendState":"Running","MagicDNSSuffix":"","Self":{"HostName":"localhost","DNSName":"localhost.","TailscaleIPs":["127.0.0.1","fd7a::1"]}}\n'
@@ -50,6 +131,15 @@ case "${FM_TEST_TS_MODE:-running}" in
     ;;
   noipv4)
     printf '{"BackendState":"Running","MagicDNSSuffix":"","Self":{"HostName":"v6only","DNSName":"v6only.","TailscaleIPs":["fd7a::1"]}}\n'
+    ;;
+  userspace)
+    printf '{"BackendState":"Running","MagicDNSSuffix":"","Self":{"HostName":"userspace","DNSName":"userspace.","TailscaleIPs":["192.0.2.1"]}}\n'
+    ;;
+  portscoped)
+    printf '{"BackendState":"Running","MagicDNSSuffix":"","Self":{"HostName":"portscoped","DNSName":"portscoped.","TailscaleIPs":["1.2.3.4.5"]}}\n'
+    ;;
+  kernel)
+    printf '{"BackendState":"Running","MagicDNSSuffix":"","Self":{"HostName":"kernel","DNSName":"kernel.","TailscaleIPs":["127.0.0.2"]}}\n'
     ;;
   *) exit 1 ;;
 esac
@@ -141,6 +231,10 @@ make_fake_tailscale "$FAKEBIN"
 PATH="$FAKEBIN:$PATH"
 export PATH
 export FM_TEST_TS_MODE=running
+export FM_TEST_TS_SERVE_STATE="$TMP_ROOT/serve-state"
+export FM_TEST_TS_SERVE_LOG="$TMP_ROOT/serve-log"
+: > "$FM_TEST_TS_SERVE_STATE"
+: > "$FM_TEST_TS_SERVE_LOG"
 
 # --- the probe is the oracle -------------------------------------------------
 
@@ -290,6 +384,962 @@ for mode in stopped noipv4; do
   esac
 done
 pass "a vessel with no usable tailnet says so concretely instead of implying reach"
+
+# --- allocator: an address the node has but cannot bind ----------------------
+#
+# The case that is neither of the other two. Each assertion below is paired with
+# its negative, because a fallback that fires everywhere has replaced the
+# resolution rather than extended it, and would hand every ordinary vessel a
+# proxy it never needed.
+
+: > "$FM_TEST_TS_SERVE_STATE"
+: > "$FM_TEST_TS_SERVE_LOG"
+node "$PROBE" addr 127.0.0.1 >/dev/null 2>&1
+expect_code 0 "$?" "loopback is bindable, so the address probe must say so"
+node "$PROBE" addr 192.0.2.1 >/dev/null 2>&1
+expect_code 4 "$?" "an address no interface carries is exit 4 from the address probe"
+pass "the address probe separates a bindable address from one this host cannot carry"
+
+# The bindable case first, so the negative is measured on the same fixtures.
+bindable=$(FM_HOME="$HOME_B" FM_SERVICE_PORT_RANGE=4740-4759 \
+  "$ROOT/bin/fm-service-port.sh" lavish)
+[ "$(field reachability "$bindable")" = tailnet ] \
+  || fail "a bindable tailnet address must stay reachability=tailnet"
+[ "$(field addr "$bindable")" = 127.0.0.1 ] || fail "the bindable address is bound directly"
+[ "$(field tailaddr "$bindable")" = 127.0.0.1 ] || fail "tailaddr names the node's own address"
+[ ! -s "$FM_TEST_TS_SERVE_LOG" ] \
+  || fail "a bindable address must not publish a proxy: $(cat "$FM_TEST_TS_SERVE_LOG")"
+pass "a vessel that can bind its own tailnet address never reaches the proxy path"
+
+: > "$FM_TEST_TS_SERVE_LOG"
+proxied=$(FM_TEST_TS_MODE=userspace FM_HOME="$HOME_B" FM_SERVICE_PORT_RANGE=4740-4759 \
+  "$ROOT/bin/fm-service-port.sh" lavish --serving)
+expect_code 0 "$?" "an unbindable address with a working serve must resolve, not refuse"
+[ "$(field reachability "$proxied")" = tailnet-proxied ] \
+  || fail "an unbindable tailnet address is its own reachability, got '$(field reachability "$proxied")'"
+[ "$(field addr "$proxied")" = 127.0.0.1 ] || fail "the proxied case binds loopback"
+[ "$(field tailaddr "$proxied")" = 192.0.2.1 ] \
+  || fail "the proxied case must still name the tailnet address it could not bind"
+proxied_port=$(field port "$proxied")
+[ "$(field route "$proxied")" = published ] \
+  || fail "a serving run that published must say so in route=, got '$(field route "$proxied")'"
+[ "$(field reachability_evidence "$proxied")" = probed ] \
+  || fail "the publish attempt IS the test, so proxied reach is earned rather than assumed, got '$(field reachability_evidence "$proxied")'"
+assert_contains "$(cat "$FM_TEST_TS_SERVE_LOG")" "--http=$proxied_port" \
+  "the port actually bound is the port published"
+assert_contains "$(cat "$FM_TEST_TS_SERVE_LOG")" "http://127.0.0.1:$proxied_port" \
+  "the proxy points at the loopback port that was bound"
+# The diagnosis is the thing a vessel in this state most needs said out loud,
+# and making it work is not a licence to stop saying it.
+assert_contains "$proxied" "EADDRNOTAVAIL" "the reason keeps the concrete errno"
+assert_contains "$proxied" "userspace" "the reason keeps the userspace-mode diagnosis"
+pass "an address the node holds but cannot bind is served over a published proxy and still diagnosed"
+
+# A publication is node-wide and survives a reboot, so only a caller that says it
+# will leave a service listening may make one. The same fixtures that publish
+# above must publish nothing here, or the flag is not carrying the decision.
+: > "$FM_TEST_TS_SERVE_STATE"
+: > "$FM_TEST_TS_SERVE_LOG"
+unserved=$(FM_TEST_TS_MODE=userspace FM_HOME="$HOME_B" FM_SERVICE_PORT_RANGE=4740-4759 \
+  "$ROOT/bin/fm-service-port.sh" lavish)
+expect_code 0 "$?" "a caller that will not leave a service listening still gets a port"
+# The run made no route, and says so in route=. What it must NOT do is restate
+# that as a fact about the host: this vessel can be reached by proxy, and a
+# consumer of the record - the fleet registry, the session-start notice - would
+# otherwise read a proxy-capable vessel as loopback-only because a board closed.
+[ "$(field reachability "$unserved")" = tailnet-proxied ] \
+  || fail "a run that published nothing must not restate the host as unreachable, got '$(field reachability "$unserved")'"
+[ "$(field route "$unserved")" = none ] \
+  || fail "the run's own outcome belongs in route=, got '$(field route "$unserved")'"
+assert_contains "$(cat "$FM_TEST_TS_SERVE_LOG")" "serve status" \
+  "the allocator still has to READ whether a route already exists"
+assert_not_contains "$(cat "$FM_TEST_TS_SERVE_LOG")" "--bg" \
+  "nothing may be published for a run that will not leave a service listening"
+# One reason cannot say both that a route exists and that none was made, and a
+# deliberate choice is not a degradation: the caller's own flag has no business
+# in a line the captain reads.
+assert_not_contains "$unserved" "published onto" \
+  "the reason must not claim a route this run did not make"
+assert_not_contains "$unserved" "was not told" \
+  "the caller's flag is not a diagnosis and must not reach user-facing output"
+
+# Reading a route somebody else established is not making one, so an already
+# published port is still the reach it is.
+printf '%s\n' "$(field seat "$unserved")" > "$FM_TEST_TS_SERVE_STATE"
+: > "$FM_TEST_TS_SERVE_LOG"
+standing=$(FM_TEST_TS_MODE=userspace FM_HOME="$HOME_B" \
+  FM_SERVICE_PORT_RANGE="$(field seat "$unserved")-$(field seat "$unserved")" \
+  "$ROOT/bin/fm-service-port.sh" lavish)
+[ "$(field reachability "$standing")" = tailnet-proxied ] \
+  || fail "an already published port is still proxied reach, got '$(field reachability "$standing")'"
+[ "$(field route "$standing")" = published ] \
+  || fail "a route somebody else established is still a route, got '$(field route "$standing")'"
+assert_not_contains "$(cat "$FM_TEST_TS_SERVE_LOG")" "--bg" \
+  "an existing route must be read, never re-made"
+: > "$FM_TEST_TS_SERVE_STATE"
+: > "$FM_TEST_TS_SERVE_LOG"
+pass "only a caller that will leave a service listening may publish a route onto the tailnet"
+
+# The proxied reading above is carried forward from a run that ACTUALLY published,
+# not asserted from tailscaled being up. On a vessel whose serve cannot publish,
+# a run that attempted it established loopback, and a later run that attempts
+# nothing must not overwrite that: doing so tells the session-start notice to
+# offer a reopen that only degrades to the same link again, and tells the fleet
+# registry that a vessel with no reach off the machine is proxy-reachable.
+: > "$FM_TEST_TS_SERVE_STATE"
+: > "$FM_TEST_TS_SERVE_LOG"
+HOME_P=$(make_home "$TMP_ROOT/vessel-p")
+tried=$(FM_TEST_TS_MODE=userspace FM_TEST_TS_SERVE=broken FM_HOME="$HOME_P" \
+  FM_SERVICE_PORT_RANGE=4846-4847 "$ROOT/bin/fm-service-port.sh" lavish --serving)
+[ "$(field reachability "$tried")" = loopback ] \
+  || fail "a run that attempted a publish and failed establishes loopback, got '$(field reachability "$tried")'"
+untested=$(FM_TEST_TS_MODE=userspace FM_TEST_TS_SERVE=broken FM_HOME="$HOME_P" \
+  FM_SERVICE_PORT_RANGE=4846-4847 "$ROOT/bin/fm-service-port.sh" lavish)
+[ "$(field reachability "$untested")" = loopback ] \
+  || fail "a run that tested nothing must not overwrite a tested host fact, got '$(field reachability "$untested")'"
+[ -z "$(field route "$untested")" ] \
+  || fail "route describes a proxied route and is empty off that value, got '$(field route "$untested")'"
+[ -z "$(field dnsname "$untested")" ] \
+  || fail "no name may be offered where no reach was established"
+assert_grep "reachability=loopback" "$HOME_P/state/service-port.lavish" \
+  "the published record keeps the resolution a run that tested it established"
+assert_not_contains "$untested" "was not told" \
+  "the caller's flag must not be named as the cause on a vessel that cannot publish at all"
+: > "$FM_TEST_TS_SERVE_STATE"
+: > "$FM_TEST_TS_SERVE_LOG"
+pass "a run that neither published nor found a route claims no proxy reach of its own"
+
+# --- allocator: a recorded verdict this run has DISPROVED is refused ---------
+#
+# The refusal is not a hypothetical the door can only be shown in isolation: a
+# container that has lost /dev/net/tun since its last allocation leaves a record
+# saying `tailnet` on a node whose address this run then proves unbindable. The
+# door refuses that carry because a test outranks a record, and the resolver has
+# no case arm deciding which recorded values are still credible.
+: > "$FM_TEST_TS_SERVE_STATE"
+: > "$FM_TEST_TS_SERVE_LOG"
+HOME_K2=$(make_home "$TMP_ROOT/vessel-k2")
+printf 'port=4871\nreachability=tailnet\nreachability_evidence=probed\n' \
+  > "$HOME_K2/state/service-port.lavish"
+disproved=$(FM_TEST_TS_MODE=userspace FM_HOME="$HOME_K2" FM_SERVICE_PORT_RANGE=4871-4872 \
+  "$ROOT/bin/fm-service-port.sh" lavish)
+expect_code 0 "$?" "a refused carry is a resolution, not a failure"
+[ "$(field reachability "$disproved")" = untested ] \
+  || fail "a record this run disproved must not be carried, got '$(field reachability "$disproved")'"
+[ "$(field reachability_evidence "$disproved")" = none ] \
+  || fail "and nothing is left claiming to back it, got '$(field reachability_evidence "$disproved")'"
+assert_contains "$disproved" "nothing credible has tested" \
+  "and the reason it prints says exactly that, rather than describing a record it refused"
+# The half-applied record the whole mechanism exists to prevent: a tailnet
+# verdict sitting beside a loopback bind address.
+[ "$(field addr "$disproved")" = 127.0.0.1 ] \
+  || fail "the bind address still degrades, got '$(field addr "$disproved")'"
+assert_grep "reachability=untested" "$HOME_K2/state/service-port.lavish" \
+  "and the record it publishes says so too"
+: > "$FM_TEST_TS_SERVE_STATE"
+: > "$FM_TEST_TS_SERVE_LOG"
+pass "a verdict this run ruled out is refused however credible the record claiming it"
+
+# The concrete emission the finding named: a run whose address probe returns a
+# status that is NOT an address verdict - exit 3 here, and the same holds for a
+# probe runtime that is missing entirely. Nothing about binding that address was
+# established, so the pre-read every wrapper invocation makes must not hand back
+# a tested label for it.
+: > "$FM_TEST_TS_SERVE_STATE"
+: > "$FM_TEST_TS_SERVE_LOG"
+NOVERDICT="$TMP_ROOT/noverdict-bin"
+mkdir -p "$NOVERDICT"
+cat > "$NOVERDICT/node" <<'SH'
+#!/usr/bin/env bash
+exit 3
+SH
+chmod +x "$NOVERDICT/node"
+unprobed=$(PATH="$NOVERDICT:$PATH" FM_TEST_TS_MODE=running FM_HOME="$HOME_B" \
+  FM_SERVICE_PORT_RANGE=4876-4877 "$ROOT/bin/fm-service-port.sh" lavish --check)
+expect_code 0 "$?" "a pre-read whose probe gave no verdict still resolves identity"
+[ "$(field tailaddr "$unprobed")" = 127.0.0.1 ] \
+  || fail "the node's own address is still read from tailscale, got '$(field tailaddr "$unprobed")'"
+[ "$(field reachability "$unprobed")" = untested ] \
+  || fail "an address no bind was proved on must not be reported as reach, got '$(field reachability "$unprobed")'"
+[ "$(field reachability_evidence "$unprobed")" = none ] \
+  || fail "and must not borrow a tested label, got '$(field reachability_evidence "$unprobed")'"
+assert_contains "$unprobed" "the address probe did not answer" \
+  "and the reason names why nothing was established rather than asserting an answer"
+: > "$FM_TEST_TS_SERVE_STATE"
+: > "$FM_TEST_TS_SERVE_LOG"
+pass "reading a node's identity establishes its address, never that anything can reach it"
+
+# A probe runtime that answers every ADDRESS question with a port-scoped status
+# while leaving every other probe mode intact, which is what EPERM, ENOTSUP or
+# fd pressure look like on an otherwise healthy vessel.
+REFUSES_ADDR="$TMP_ROOT/refuses-addr-bin"
+mkdir -p "$REFUSES_ADDR"
+REAL_NODE=$(command -v node) || fail "these cases need a real node to delegate to"
+cat > "$REFUSES_ADDR/node" <<SH
+#!/usr/bin/env bash
+[ "\${2:-}" = addr ] && exit 1
+exec "$REAL_NODE" "\$@"
+SH
+chmod +x "$REFUSES_ADDR/node"
+
+# A checked name is still a name for reach nobody established. Under a verdict
+# that names no reach, offering it invites the consumer to write it into a URL
+# on a vessel whose port is bound somewhere else entirely.
+: > "$FM_TEST_TS_SERVE_STATE"
+: > "$FM_TEST_TS_SERVE_LOG"
+nameless=$(PATH="$REFUSES_ADDR:$PATH" FM_TEST_TS_MODE=running FM_HOME="$HOME_B" \
+  FM_SERVICE_PORT_RANGE=4881-4882 "$ROOT/bin/fm-service-port.sh" lavish --check)
+expect_code 0 "$?" "a pre-read whose address answer was port-scoped still resolves identity"
+[ "$(field reachability "$nameless")" = untested ] \
+  || fail "a port-scoped answer is not an address verdict, got '$(field reachability "$nameless")'"
+[ -z "$(field dnsname "$nameless")" ] \
+  || fail "no name may be offered under a verdict that names no reach, got '$(field dnsname "$nameless")'"
+[ "$(field tailaddr "$nameless")" = 127.0.0.1 ] \
+  || fail "the node's own address is still reported, got '$(field tailaddr "$nameless")'"
+pass "a name is withheld wherever nothing established the reach it would name"
+
+# The ephemeral probe can miss for a port-scoped reason, but the window walk
+# binds the tailnet address for real. That bind IS the test.
+HOME_WB=$(make_home "$TMP_ROOT/vessel-wb")
+walked=$(PATH="$REFUSES_ADDR:$PATH" FM_TEST_TS_MODE=kernel FM_HOME="$HOME_WB" \
+  FM_SERVICE_PORT_RANGE=4883-4884 "$ROOT/bin/fm-service-port.sh" lavish)
+expect_code 0 "$?" "the walk still allocates when the address probe answered nothing"
+[ "$(field addr "$walked")" = 127.0.0.2 ] \
+  || fail "the board is bound on the tailnet address, got '$(field addr "$walked")'"
+[ "$(field reachability "$walked")" = tailnet ] \
+  || fail "a board demonstrably bound on the tailnet address is not untested, got '$(field reachability "$walked")'"
+[ "$(field reachability_evidence "$walked")" = probed ] \
+  || fail "and the bind is what established it, got '$(field reachability_evidence "$walked")'"
+assert_grep "reachability=tailnet" "$HOME_WB/state/service-port.lavish" \
+  "the published record carries the same answer"
+pass "a successful walk on the tailnet address is evidence, not something to discard"
+
+# The vessel this whole resolver exists for, reached the hard way: its address
+# probe meets a port-scoped errno instead of EADDRNOTAVAIL, so nothing is
+# established before the walk, and the walk itself then meets the real
+# EADDRNOTAVAIL on 192.0.2.1. Refusing there hands the captain no board at all.
+: > "$FM_TEST_TS_SERVE_STATE"
+: > "$FM_TEST_TS_SERVE_LOG"
+HOME_WU=$(make_home "$TMP_ROOT/vessel-wu")
+walkfall=$(PATH="$REFUSES_ADDR:$PATH" FM_TEST_TS_MODE=userspace FM_HOME="$HOME_WU" \
+  FM_SERVICE_PORT_RANGE=4893-4894 "$ROOT/bin/fm-service-port.sh" lavish --serving)
+expect_code 0 "$?" "an address the probe could not answer for must still get a board"
+[ "$(field addr "$walkfall")" = 127.0.0.1 ] \
+  || fail "the board falls back to loopback, got '$(field addr "$walkfall")'"
+[ "$(field reachability "$walkfall")" = tailnet-proxied ] \
+  || fail "and is reached over the published route, got '$(field reachability "$walkfall")'"
+[ "$(field route "$walkfall")" = published ] \
+  || fail "which this run actually made, got '$(field route "$walkfall")'"
+assert_contains "$walkfall" "EADDRNOTAVAIL" \
+  "the userspace diagnosis is still named, established by the walk this time"
+grep -q "4893\|4894" "$FM_TEST_TS_SERVE_LOG" \
+  || fail "the port it bound is the port it published: $(cat "$FM_TEST_TS_SERVE_LOG")"
+: > "$FM_TEST_TS_SERVE_STATE"
+: > "$FM_TEST_TS_SERVE_LOG"
+pass "a walk that proves the address unbindable degrades to the proxy rather than refusing"
+
+# The shape measured on the captain's own seat: the walk fails port-scoped
+# rather than address-scoped, so it establishes nothing about the address
+# either. That is still not grounds to refuse a board, and the run must not
+# dress an unanswered address as an exhausted window.
+: > "$FM_TEST_TS_SERVE_STATE"
+: > "$FM_TEST_TS_SERVE_LOG"
+NOWALK="$TMP_ROOT/nowalk-bin"
+mkdir -p "$NOWALK"
+cat > "$NOWALK/node" <<SH
+#!/usr/bin/env bash
+[ "\${2:-}" = addr ] && exit 1
+if [ "\${2:-}" = bind ] && [ "\${3:-}" = 192.0.2.1 ]; then
+  printf 'fm-service-port-probe: refused\\n' >&2
+  exit 5
+fi
+exec "$REAL_NODE" "\$@"
+SH
+chmod +x "$NOWALK/node"
+HOME_WP=$(make_home "$TMP_ROOT/vessel-wp")
+portscoped_walk=$(PATH="$NOWALK:$PATH" FM_TEST_TS_MODE=userspace FM_HOME="$HOME_WP" \
+  FM_SERVICE_PORT_RANGE=4896-4897 "$ROOT/bin/fm-service-port.sh" lavish --serving 2>/dev/null)
+expect_code 0 "$?" "a port-scoped walk failure on an unestablished address must not refuse a board"
+[ "$(field addr "$portscoped_walk")" = 127.0.0.1 ] \
+  || fail "the board falls back to loopback, got '$(field addr "$portscoped_walk")'"
+[ "$(field reachability "$portscoped_walk")" = tailnet-proxied ] \
+  || fail "and is reached over the published route, got '$(field reachability "$portscoped_walk")'"
+assert_not_contains "$portscoped_walk" "EADDRNOTAVAIL" \
+  "an errno this run never met must not be named"
+assert_contains "$portscoped_walk" "never established" \
+  "the reason says what was actually not established rather than blaming the window"
+: > "$FM_TEST_TS_SERVE_STATE"
+: > "$FM_TEST_TS_SERVE_LOG"
+pass "an unanswerable address is never dressed as an exhausted window"
+
+# The publish is the only thing this run tested, and it failed. Whether the
+# address binds was never established, so the run may not record the tested
+# no-reach - that value silences the bootstrap notice and is carried forward by
+# every later non-serving run.
+: > "$FM_TEST_TS_SERVE_STATE"
+: > "$FM_TEST_TS_SERVE_LOG"
+HOME_PF=$(make_home "$TMP_ROOT/vessel-pf")
+pubfail=$(PATH="$NOWALK:$PATH" FM_TEST_TS_MODE=userspace FM_TEST_TS_SERVE=broken \
+  FM_HOME="$HOME_PF" FM_SERVICE_PORT_RANGE=4898-4899 \
+  "$ROOT/bin/fm-service-port.sh" lavish --serving 2>/dev/null)
+expect_code 0 "$?" "a board still opens locally when the publish does not take"
+[ "$(field reachability "$pubfail")" = untested ] \
+  || fail "a failed publish on an untested address is not a tested no-reach, got '$(field reachability "$pubfail")'"
+[ "$(field reachability_evidence "$pubfail")" = none ] \
+  || fail "and nothing backs it, got '$(field reachability_evidence "$pubfail")'"
+assert_contains "$pubfail" "never established" \
+  "the reason and the verdict agree about what was not established"
+assert_not_contains "$pubfail" "EADDRNOTAVAIL" \
+  "an errno this run never met must not be named"
+assert_grep "reachability=untested" "$HOME_PF/state/service-port.lavish" \
+  "and the published record carries the same answer"
+# The proved-unbindable vessel is the other caller of that same branch, and it
+# HAS tested the address, so a failed publish there really is a tested no-reach.
+HOME_PU=$(make_home "$TMP_ROOT/vessel-pu")
+provenfail=$(FM_TEST_TS_MODE=userspace FM_TEST_TS_SERVE=broken FM_HOME="$HOME_PU" \
+  FM_SERVICE_PORT_RANGE=4901-4902 "$ROOT/bin/fm-service-port.sh" lavish --serving)
+[ "$(field reachability "$provenfail")" = loopback ] \
+  || fail "a proved-unbindable address with no route is reach tested and absent, got '$(field reachability "$provenfail")'"
+[ "$(field reachability_evidence "$provenfail")" = probed ] \
+  || fail "and this run tested it, got '$(field reachability_evidence "$provenfail")'"
+: > "$FM_TEST_TS_SERVE_STATE"
+: > "$FM_TEST_TS_SERVE_LOG"
+pass "a failed publish claims a tested no-reach only where the address was tested"
+
+# The board that failed publish left behind is still up on loopback, and every
+# later run for it comes back through --mine, which walks nothing and so tests
+# nothing of its own. Carrying the resolution forward is right; restating it
+# forever is not. The carried address IS the statement that this board is on
+# loopback with a route the one way off this machine, which is the same
+# condition the walk fallback uses to reach the publish, so a serving run gets
+# to try again rather than waiting for the server to idle out.
+: > "$FM_TEST_TS_SERVE_STATE"
+: > "$FM_TEST_TS_SERVE_LOG"
+assert_grep "addr=127.0.0.1" "$HOME_PF/state/service-port.lavish" \
+  "this case starts from the loopback board that failed publish left behind"
+pf_port=$(field port "$pubfail")
+retry=$(PATH="$NOWALK:$PATH" FM_TEST_TS_MODE=userspace FM_HOME="$HOME_PF" \
+  FM_SERVICE_PORT_RANGE=4898-4899 \
+  "$ROOT/bin/fm-service-port.sh" lavish --mine "$pf_port" --serving 2>/dev/null)
+expect_code 0 "$?" "a later serving run on that live board still resolves"
+[ "$(field port "$retry")" = "$pf_port" ] \
+  || fail "the board keeps the port it is listening on, got '$(field port "$retry")'"
+[ "$(field addr "$retry")" = 127.0.0.1 ] \
+  || fail "and the loopback address it is listening on, got '$(field addr "$retry")'"
+[ "$(field reachability "$retry")" = tailnet-proxied ] \
+  || fail "the retried publish settles what the failed one could not, got '$(field reachability "$retry")'"
+[ "$(field route "$retry")" = published ] \
+  || fail "and this run actually made the route, got '$(field route "$retry")'"
+grep -q -- "--http=$pf_port http://127.0.0.1:$pf_port" "$FM_TEST_TS_SERVE_LOG" \
+  || fail "the port it is listening on is the port it published: $(cat "$FM_TEST_TS_SERVE_LOG")"
+assert_grep "reachability=tailnet-proxied" "$HOME_PF/state/service-port.lavish" \
+  "and the record stops saying nothing was established"
+# The reason prints verbatim to the captain under this verdict, so it may not
+# describe as carried a reach the evidence field beside it calls probed. The
+# ADDRESS was carried; the reach is this run's own publish.
+[ "$(field reachability_evidence "$retry")" = probed ] \
+  || fail "this run established the reach itself, got '$(field reachability_evidence "$retry")'"
+assert_contains "$retry" "the reach on that address is this run's own answer" \
+  "so the reason says whose answer the emitted reach is"
+assert_not_contains "$retry" "address and reach a previous allocation established" \
+  "rather than calling a reach this run published carried forward"
+: > "$FM_TEST_TS_SERVE_STATE"
+: > "$FM_TEST_TS_SERVE_LOG"
+pass "a serving run on a live loopback board retries the publish rather than restating untested"
+
+# `untested` is the one recorded value with nothing in it to carry: it says a
+# previous allocation established neither reach nor its absence, which is what
+# this run already holds. Carrying it would dress that non-answer in `carried`
+# evidence and a reason naming a route nothing ever established, so the same
+# state must not come out in two shapes depending on whether a record exists.
+: > "$FM_TEST_TS_SERVE_STATE"
+: > "$FM_TEST_TS_SERVE_LOG"
+HOME_CU=$(make_home "$TMP_ROOT/vessel-cu")
+PATH="$NOWALK:$PATH" FM_TEST_TS_MODE=userspace FM_TEST_TS_SERVE=broken \
+  FM_HOME="$HOME_CU" FM_SERVICE_PORT_RANGE=4903-4904 \
+  "$ROOT/bin/fm-service-port.sh" lavish --serving >/dev/null 2>&1
+assert_grep "reachability=untested" "$HOME_CU/state/service-port.lavish" \
+  "this case needs a home whose record says nothing was established"
+carryu=$(FM_TEST_TS_MODE=userspace FM_HOME="$HOME_CU" FM_SERVICE_PORT_RANGE=4903-4904 \
+  "$ROOT/bin/fm-service-port.sh" lavish)
+expect_code 0 "$?" "a non-serving run on that home still gets a port"
+[ "$(field reachability "$carryu")" = untested ] \
+  || fail "nothing was established and nothing carried changes that, got '$(field reachability "$carryu")'"
+[ "$(field reachability_evidence "$carryu")" = none ] \
+  || fail "a verdict that says nothing was established carries no evidence, got '$(field reachability_evidence "$carryu")'"
+assert_contains "$carryu" "nothing credible has tested" \
+  "and it reads the same as the home that had no record at all"
+: > "$FM_TEST_TS_SERVE_STATE"
+: > "$FM_TEST_TS_SERVE_LOG"
+pass "a recorded untested is nothing to carry, so one state has one shape"
+
+# The same rule at the OTHER carry, the one a --mine run takes. A recorded
+# untested has no verdict in it to raise there either - but the address that
+# allocation BOUND is a fact it did establish, and the retry above depends on
+# it, so the address travels while the non-answer stays a non-answer.
+: > "$FM_TEST_TS_SERVE_STATE"
+: > "$FM_TEST_TS_SERVE_LOG"
+MINEDOWN="$TMP_ROOT/mine-down-bin"
+mkdir -p "$MINEDOWN"
+MINE_DOWN_MARKER="$TMP_ROOT/mine-tailscaled-down"
+rm -f "$MINE_DOWN_MARKER"
+# Takes the backend down at the address probe, which is after the identity read
+# that resolved the address and before the carry decides whether a route could
+# still be published, so this carry never reaches the publish block.
+cat > "$MINEDOWN/node" <<SH
+#!/usr/bin/env bash
+if [ "\${2:-}" = addr ]; then
+  : > "\${FM_TEST_TS_DOWN_MARKER:-/dev/null}"
+  exit 1
+fi
+exec "$REAL_NODE" "\$@"
+SH
+chmod +x "$MINEDOWN/node"
+cu_port=$(field port "$carryu")
+minecarry=$(PATH="$MINEDOWN:$PATH" FM_TEST_TS_MODE=userspace \
+  FM_TEST_TS_DOWN_MARKER="$MINE_DOWN_MARKER" FM_HOME="$HOME_CU" \
+  FM_SERVICE_PORT_RANGE=4903-4904 \
+  "$ROOT/bin/fm-service-port.sh" lavish --mine "$cu_port" 2>/dev/null)
+expect_code 0 "$?" "a --mine run on that home still resolves"
+[ -e "$MINE_DOWN_MARKER" ] || fail "this case needs the backend to have gone down during the run"
+[ "$(field addr "$minecarry")" = 127.0.0.1 ] \
+  || fail "the address that allocation bound still travels, got '$(field addr "$minecarry")'"
+[ "$(field reachability "$minecarry")" = untested ] \
+  || fail "and the non-answer it recorded is still a non-answer, got '$(field reachability "$minecarry")'"
+[ "$(field reachability_evidence "$minecarry")" = none ] \
+  || fail "which is not something carried, got '$(field reachability_evidence "$minecarry")'"
+# The reason is what the wrapper prints to the captain inside "nothing has
+# established whether this vessel is reachable off this machine (<reason>)", so
+# a run holding no evidence may speak about the address it carried and about
+# nothing else. An answer claimed here contradicts the sentence around it.
+assert_contains "$minecarry" "the address a previous allocation established for lavish is carried forward" \
+  "the reason speaks about the address this run carried"
+assert_not_contains "$minecarry" "this run's own answer" \
+  "and claims no answer about a reach this run never established"
+rm -f "$MINE_DOWN_MARKER"
+: > "$FM_TEST_TS_SERVE_STATE"
+: > "$FM_TEST_TS_SERVE_LOG"
+pass "a --mine carry takes the address a recorded untested established without raising its verdict"
+
+# The other arm that reaches the publish block on a carried address and comes
+# back holding nothing: the retry above with the publish refused. Its own reason
+# says neither reach nor its absence is claimed, so the carry sentence beside it
+# may not claim one either.
+: > "$FM_TEST_TS_SERVE_STATE"
+: > "$FM_TEST_TS_SERVE_LOG"
+retryfail=$(PATH="$NOWALK:$PATH" FM_TEST_TS_MODE=userspace FM_TEST_TS_SERVE=broken \
+  FM_HOME="$HOME_CU" FM_SERVICE_PORT_RANGE=4903-4904 \
+  "$ROOT/bin/fm-service-port.sh" lavish --mine "$cu_port" --serving 2>/dev/null)
+expect_code 0 "$?" "a refused publish on a carried address still resolves"
+[ "$(field addr "$retryfail")" = 127.0.0.1 ] \
+  || fail "the carried address still travels, got '$(field addr "$retryfail")'"
+[ "$(field reachability "$retryfail")" = untested ] \
+  || fail "a refused publish on an untested address establishes nothing, got '$(field reachability "$retryfail")'"
+[ "$(field reachability_evidence "$retryfail")" = none ] \
+  || fail "and nothing backs it, got '$(field reachability_evidence "$retryfail")'"
+assert_contains "$retryfail" "neither reach nor its absence is claimed" \
+  "the publish failure says nothing was established"
+assert_contains "$retryfail" "the address a previous allocation established for lavish is carried forward" \
+  "and the carry beside it speaks about the address alone"
+assert_not_contains "$retryfail" "this run's own answer" \
+  "so the two halves of one reason cannot contradict each other"
+: > "$FM_TEST_TS_SERVE_STATE"
+: > "$FM_TEST_TS_SERVE_LOG"
+pass "a carried address whose publish was refused claims no answer in either half of its reason"
+
+# And the sentence a carry prints is unchanged wherever the reach really was
+# carried: a recorded loopback is a tested no-reach the previous allocation
+# established, this run tests nothing, and the evidence beside it says carried.
+: > "$FM_TEST_TS_SERVE_STATE"
+: > "$FM_TEST_TS_SERVE_LOG"
+assert_grep "reachability=loopback" "$HOME_PU/state/service-port.lavish" \
+  "this case starts from a home whose record is a tested no-reach"
+pu_port=$(field port "$provenfail")
+carryl=$(PATH="$NOWALK:$PATH" FM_TEST_TS_MODE=userspace FM_HOME="$HOME_PU" \
+  FM_SERVICE_PORT_RANGE=4901-4902 \
+  "$ROOT/bin/fm-service-port.sh" lavish --mine "$pu_port" 2>/dev/null)
+expect_code 0 "$?" "a --mine run on that home still resolves"
+[ "$(field reachability "$carryl")" = loopback ] \
+  || fail "the tested no-reach is carried, got '$(field reachability "$carryl")'"
+[ "$(field reachability_evidence "$carryl")" = carried ] \
+  || fail "and says so, got '$(field reachability_evidence "$carryl")'"
+[ "$(field addr "$carryl")" = 127.0.0.1 ] \
+  || fail "on the address it was established at, got '$(field addr "$carryl")'"
+assert_contains "$carryl" "the address and reach a previous allocation established" \
+  "and the reason describes both as carried, because both were"
+: > "$FM_TEST_TS_SERVE_STATE"
+: > "$FM_TEST_TS_SERVE_LOG"
+pass "a carry that really carries the reach still says so"
+
+# One refused publish must not pin a live board to the verdict that refusal
+# produced. The board is up on loopback with a recorded loopback, every later
+# open comes back through --mine, and a run that WALKED into this same state
+# attempts the publish whatever any record says - so the carry must attempt it
+# too, and a refusal must leave the tested no-reach it carried standing rather
+# than erasing it on the strength of a non-test.
+: > "$FM_TEST_TS_SERVE_STATE"
+: > "$FM_TEST_TS_SERVE_LOG"
+refusedretry=$(PATH="$NOWALK:$PATH" FM_TEST_TS_MODE=userspace FM_TEST_TS_SERVE=broken \
+  FM_HOME="$HOME_PU" FM_SERVICE_PORT_RANGE=4901-4902 \
+  "$ROOT/bin/fm-service-port.sh" lavish --mine "$pu_port" --serving 2>/dev/null)
+expect_code 0 "$?" "a serving run on that live board still resolves"
+grep -q -- "--http=$pu_port http://127.0.0.1:$pu_port" "$FM_TEST_TS_SERVE_LOG" \
+  || fail "the publish must be attempted on a carried loopback board: $(cat "$FM_TEST_TS_SERVE_LOG")"
+[ "$(field reachability "$refusedretry")" = loopback ] \
+  || fail "a refused publish tests nothing that erases a tested no-reach, got '$(field reachability "$refusedretry")'"
+[ "$(field reachability_evidence "$refusedretry")" = carried ] \
+  || fail "and the verdict is still the one that allocation established, got '$(field reachability_evidence "$refusedretry")'"
+[ -z "$(field route "$refusedretry")" ] \
+  || fail "no route exists off that verdict, got '$(field route "$refusedretry")'"
+[ "$(field addr "$refusedretry")" = 127.0.0.1 ] \
+  || fail "the board keeps the address it is listening on, got '$(field addr "$refusedretry")'"
+assert_contains "$refusedretry" "the tested no-reach a previous allocation established stands" \
+  "and the reason says why the refusal did not move the verdict"
+assert_grep "reachability=loopback" "$HOME_PU/state/service-port.lavish" \
+  "the record keeps the tested answer too"
+: > "$FM_TEST_TS_SERVE_STATE"
+: > "$FM_TEST_TS_SERVE_LOG"
+pass "a refused retry on a carried loopback board leaves the tested verdict standing"
+
+# And once serve is healthy again the same run settles it, which is the whole
+# point of retrying: the reach is established by this run's own publish and
+# rises through the one door on probed evidence.
+: > "$FM_TEST_TS_SERVE_STATE"
+: > "$FM_TEST_TS_SERVE_LOG"
+goodretry=$(PATH="$NOWALK:$PATH" FM_TEST_TS_MODE=userspace FM_HOME="$HOME_PU" \
+  FM_SERVICE_PORT_RANGE=4901-4902 \
+  "$ROOT/bin/fm-service-port.sh" lavish --mine "$pu_port" --serving 2>/dev/null)
+expect_code 0 "$?" "a serving run on that live board still resolves"
+[ "$(field reachability "$goodretry")" = tailnet-proxied ] \
+  || fail "the retried publish settles what the refusal could not, got '$(field reachability "$goodretry")'"
+[ "$(field reachability_evidence "$goodretry")" = probed ] \
+  || fail "and this run's own publish established it, got '$(field reachability_evidence "$goodretry")'"
+[ "$(field route "$goodretry")" = published ] \
+  || fail "which this run actually made, got '$(field route "$goodretry")'"
+assert_contains "$goodretry" "the reach on that address is this run's own answer" \
+  "so the reason names whose answer it is, matching the evidence beside it"
+assert_not_contains "$goodretry" "the address and reach a previous allocation established" \
+  "rather than calling a reach this run published carried forward"
+: > "$FM_TEST_TS_SERVE_STATE"
+: > "$FM_TEST_TS_SERVE_LOG"
+pass "a healthy retry on a carried loopback board raises the verdict through the one door"
+
+# The errno the walk actually met, read back from the probe rather than guessed.
+# Exit 4 also covers EAFNOSUPPORT and EINVAL, and the walk stops at the FIRST
+# address-scoped verdict rather than trying every candidate.
+: > "$FM_TEST_TS_SERVE_STATE"
+: > "$FM_TEST_TS_SERVE_LOG"
+HOME_ER=$(make_home "$TMP_ROOT/vessel-er")
+errno_out=$(PATH="$REFUSES_ADDR:$PATH" FM_TEST_TS_MODE=userspace FM_HOME="$HOME_ER" \
+  FM_SERVICE_PORT_RANGE=4903-4904 "$ROOT/bin/fm-service-port.sh" lavish --serving)
+expect_code 0 "$?" "the walk-established userspace vessel still gets its board"
+assert_contains "$errno_out" "EADDRNOTAVAIL" \
+  "the reason carries the errno the probe reported"
+assert_not_contains "$errno_out" "every candidate bind failed" \
+  "and does not claim candidates the walk never tried"
+: > "$FM_TEST_TS_SERVE_STATE"
+: > "$FM_TEST_TS_SERVE_LOG"
+pass "the walk names the errno it met rather than a hardcoded guess"
+
+
+# A tailscale that cannot be READ has tested nothing. Recording that as a tested
+# no-reach would silence the bootstrap notice and bar the proxy verdict for the
+# rest of the run on the strength of a missing jq.
+HOME_UR=$(make_home "$TMP_ROOT/vessel-ur")
+unread=$(FM_TEST_TS_MODE=unreadable FM_HOME="$HOME_UR" \
+  FM_SERVICE_PORT_RANGE=4886-4887 "$ROOT/bin/fm-service-port.sh" lavish)
+expect_code 0 "$?" "a vessel whose tailscale will not answer still gets a local board"
+[ "$(field reachability "$unread")" = untested ] \
+  || fail "an unreadable status establishes nothing either way, got '$(field reachability "$unread")'"
+[ "$(field reachability_evidence "$unread")" = none ] \
+  || fail "and nothing backs it, got '$(field reachability_evidence "$unread")'"
+assert_contains "$unread" "tailscale status could not be read as JSON" \
+  "and the reason names the read that failed rather than claiming an answer"
+[ "$(field addr "$unread")" = 127.0.0.1 ] \
+  || fail "the board still binds somewhere, got '$(field addr "$unread")'"
+assert_grep "reachability=untested" "$HOME_UR/state/service-port.lavish" \
+  "and the record does not claim a tested no-reach"
+# A vessel that really has no tailnet is a different fact, and still says so.
+none_at_all=$(FM_TEST_TS_MODE=stopped FM_HOME="$HOME_UR" \
+  FM_SERVICE_PORT_RANGE=4888-4889 "$ROOT/bin/fm-service-port.sh" lavish)
+[ "$(field reachability "$none_at_all")" = loopback ] \
+  || fail "a backend that answered and is not running IS a tested negative, got '$(field reachability "$none_at_all")'"
+[ "$(field reachability_evidence "$none_at_all")" = probed ] \
+  || fail "and this run tested it, got '$(field reachability_evidence "$none_at_all")'"
+: > "$FM_TEST_TS_SERVE_STATE"
+: > "$FM_TEST_TS_SERVE_LOG"
+pass "a status that could not be read is never recorded as reach that was tested and absent"
+
+# --- allocator: reachability has one door, and it refuses to be raised --------
+#
+# Three review rounds each found a different path asserting the flattering
+# reachability value on evidence that did not support it. The rule is enforced
+# rather than remembered: a verdict is carried together with how it was
+# established, and one function refuses to RAISE the claim on anything but
+# probed evidence.
+#
+# The first assertion is a STRUCTURAL invariant rather than a behavioural one,
+# and says so when it fails: the contract is "the reachability globals are
+# assigned only inside bin/fm-reachability-lib.sh". No behavioural test can
+# catch a writer that behaves correctly today, which is what every one of those
+# three rounds looked like at the time.
+#
+# It names WHERE each assignment is allowed rather than counting them, because a
+# change that adds one writer while removing another keeps a count unchanged.
+# Every assignment shape is in scope: bare or indented, a conditional tail, an
+# export, a read, and a local in some helper.
+reachability_assignments() {
+  grep -nE \
+    -e '(^|[^[:alnum:]_])(export[[:space:]]+|local[[:space:]]+|declare[[:space:]]+([^;|&]*[[:space:]])?)?REACHABILITY(_EVIDENCE|_CEILING)?=' \
+    -e '(^|[^[:alnum:]_])(read|mapfile|readarray)[[:space:]][^;|&#]*[^[:alnum:]_]REACHABILITY(_EVIDENCE|_CEILING)?([^[:alnum:]_]|$)' \
+    "$1" | grep -v '^[0-9]*:[[:space:]]*#' || true
+}
+
+# The resolver and the publish library must not touch the verdict at all: every
+# one of them goes through the library that owns the rule.
+for owned in fm-service-port.sh fm-tailnet-serve-lib.sh; do
+  strays=$(reachability_assignments "$ROOT/bin/$owned")
+  [ -z "$strays" ] \
+    || fail "STRUCTURAL GUARD, not a behavioural failure: the reachability verdict, its evidence and its ceiling may be assigned only inside bin/fm-reachability-lib.sh, and bin/$owned now assigns one directly - route it through fm_set_reachability and cover the new path here. Offending lines: $strays"
+done
+
+# The wrapper is different: it does not resolve a verdict, it PARSES the one the
+# allocator emitted. So exactly two shapes are allowed there, the record
+# parser's initialiser and its key dispatch, and anything else is the wrapper
+# starting to invent a verdict of its own.
+strays=$(reachability_assignments "$ROOT/bin/fm-lavish.sh" \
+  | grep -v 'REACHABILITY=""' | grep -v 'REACHABILITY=\$value' || true)
+[ -z "$strays" ] \
+  || fail "STRUCTURAL GUARD, not a behavioural failure: bin/fm-lavish.sh may only copy reachability out of the allocation it read (REACHABILITY=\"\" and REACHABILITY=\$value), never synthesise one - route this through the allocator and cover it here. Offending lines: $strays"
+
+# And the guard has to be watching the file that actually owns the field.
+[ -n "$(reachability_assignments "$ROOT/bin/fm-reachability-lib.sh")" ] \
+  || fail "STRUCTURAL GUARD, not a behavioural failure: bin/fm-reachability-lib.sh is named as the one owner of the reachability globals but assigns none, so this guard is watching the wrong file"
+
+# And the door itself, executed: every verdict this allocator can reach arrives
+# with evidence that says how, and no path reports a bare claim.
+: > "$FM_TEST_TS_SERVE_STATE"
+: > "$FM_TEST_TS_SERVE_LOG"
+bound=$(FM_HOME="$HOME_B" FM_SERVICE_PORT_RANGE=4856-4857 \
+  "$ROOT/bin/fm-service-port.sh" lavish --serving)
+[ "$(field reachability "$bound")" = tailnet ] || fail "a bindable address is tailnet"
+[ "$(field reachability_evidence "$bound")" = probed ] \
+  || fail "a bind this run performed is probed evidence, got '$(field reachability_evidence "$bound")'"
+
+notail=$(FM_TEST_TS_MODE=stopped FM_HOME="$HOME_B" FM_SERVICE_PORT_RANGE=4856-4857 \
+  "$ROOT/bin/fm-service-port.sh" lavish --serving)
+[ "$(field reachability "$notail")" = loopback ] || fail "no tailnet is loopback"
+[ "$(field reachability_evidence "$notail")" = probed ] \
+  || fail "a tailscale this run read is probed evidence, got '$(field reachability_evidence "$notail")'"
+
+# The pre-read claims no port, so it never reaches a publish attempt and has
+# established nothing about proxy reach. It says exactly that rather than
+# borrowing a tested label for an address no bind was ever attempted on.
+preread=$(FM_TEST_TS_MODE=userspace FM_HOME="$HOME_B" FM_SERVICE_PORT_RANGE=4856-4857 \
+  "$ROOT/bin/fm-service-port.sh" lavish --check)
+[ "$(field reachability "$preread")" = untested ] \
+  || fail "a pre-read that tested no route claims none, got '$(field reachability "$preread")'"
+[ "$(field reachability_evidence "$preread")" = none ] \
+  || fail "and carries no evidence, got '$(field reachability_evidence "$preread")'"
+assert_contains "$preread" "EADDRNOTAVAIL" "while still naming what it DID test"
+: > "$FM_TEST_TS_SERVE_STATE"
+: > "$FM_TEST_TS_SERVE_LOG"
+pass "every reachability verdict travels with how it was established, through one door"
+
+# --- the door itself: a raise on untested evidence is refused ----------------
+#
+# bin/fm-reachability-lib.sh is sourced and driven directly, because the rule it
+# enforces is about writers that do not exist yet: every path in the allocator
+# today is internally consistent, so no fixture can make the allocator attempt
+# the raise. What the library must guarantee is that when one does, it fails
+# closed and leaves nothing half-applied.
+(
+  # shellcheck source=bin/fm-reachability-lib.sh
+  . "$ROOT/bin/fm-reachability-lib.sh"
+  fm_reachability_init
+  [ "$REACHABILITY" = untested ] && [ "$REACHABILITY_EVIDENCE" = none ] \
+    || exit 1
+
+  # A run that has looked at nothing holds nothing, so the very first verdict is
+  # already gated: tailscaled being up is not evidence of reach.
+  fm_set_reachability tailnet-proxied assumed && exit 2
+  [ "$REACHABILITY" = untested ] || exit 3
+  [ "$REACHABILITY_EVIDENCE" = none ] || exit 4
+
+  # Established evidence raises freely, because it tested what it claims.
+  fm_set_reachability tailnet probed || exit 5
+  [ "$REACHABILITY" = tailnet ] || exit 6
+
+  # Lowering on any evidence passes: a run may always report less than it found.
+  fm_set_reachability tailnet-proxied assumed || exit 7
+  fm_set_reachability loopback probed || exit 8
+  [ "$REACHABILITY" = loopback ] || exit 9
+
+  # The round-six defect returning: proxy reach claimed from tailscaled being
+  # up, after a run has probed its way down to no reach at all.
+  fm_set_reachability tailnet-proxied assumed && exit 10
+  [ "$REACHABILITY" = loopback ] || exit 11
+  [ "$REACHABILITY_EVIDENCE" = probed ] || exit 12
+
+  # A refusal leaves nothing half-applied, so a caller that ignores the status
+  # cannot end up with a verdict and an evidence value from different writes.
+  fm_set_reachability tailnet none && exit 13
+  [ "$REACHABILITY" = loopback ] && [ "$REACHABILITY_EVIDENCE" = probed ] || exit 14
+
+  # A record carried forward is a run that probed it, once, so it may raise.
+  fm_set_reachability tailnet-proxied carried || exit 15
+  [ "$REACHABILITY" = tailnet-proxied ] || exit 16
+
+  # But a test that RULES a verdict out outranks any record of it: nothing may
+  # claim it again, on any evidence at all.
+  fm_reachability_rule_out tailnet-proxied
+  fm_set_reachability tailnet-proxied carried && exit 17
+  fm_set_reachability tailnet probed && exit 18
+  # And a verdict the new bar contradicts does not stand: the run just learned
+  # its own held answer is false.
+  [ "$REACHABILITY" = untested ] || exit 19
+  fm_set_reachability loopback carried || exit 20
+  [ "$REACHABILITY" = loopback ] || exit 21
+  exit 0
+)
+expect_code 0 "$?" "the door must refuse a raise on untested evidence and leave the verdict whole"
+
+# A verdict it has never heard of is a programming error, not a resolution, and
+# must not be written under any evidence.
+(
+  # shellcheck source=bin/fm-reachability-lib.sh
+  . "$ROOT/bin/fm-reachability-lib.sh"
+  fm_reachability_init
+  fm_set_reachability sideways probed 2>/dev/null && exit 1
+  [ "$REACHABILITY" = untested ] || exit 2
+  fm_set_reachability loopback hearsay 2>/dev/null && exit 3
+  [ "$REACHABILITY" = untested ] || exit 4
+  exit 0
+)
+expect_code 0 "$?" "an unknown verdict or evidence is refused rather than written"
+pass "the one door refuses a raise nothing tested, and refuses it whole"
+
+# --- allocator: nothing established is its own answer ------------------------
+#
+# A run that neither published a route nor found one, on a home with no record
+# to carry forward, has tested NOTHING. Claiming loopback there is the same
+# unbacked assertion as claiming proxied, just in the flattering direction for
+# a different reader, so the honest value is neither.
+: > "$FM_TEST_TS_SERVE_STATE"
+: > "$FM_TEST_TS_SERVE_LOG"
+HOME_U0=$(make_home "$TMP_ROOT/vessel-u0")
+[ ! -e "$HOME_U0/state/service-port.lavish" ] || fail "this case needs a home with no record yet"
+first=$(FM_TEST_TS_MODE=userspace FM_HOME="$HOME_U0" FM_SERVICE_PORT_RANGE=4861-4862 \
+  "$ROOT/bin/fm-service-port.sh" lavish)
+expect_code 0 "$?" "a first run that will not serve still gets a port"
+[ "$(field reachability "$first")" = untested ] \
+  || fail "with nothing tested and nothing to carry, neither answer may be asserted, got '$(field reachability "$first")'"
+[ "$(field reachability_evidence "$first")" = none ] \
+  || fail "untested carries no evidence, got '$(field reachability_evidence "$first")'"
+assert_contains "$first" "nothing credible has tested" \
+  "and the reason claims neither reach nor its absence"
+assert_not_contains "$first" "carried forward" \
+  "with nothing to carry, nothing is described as carried"
+[ -z "$(field route "$first")" ] \
+  || fail "route describes a proxied route and must be empty off that value, got '$(field route "$first")'"
+[ -z "$(field dnsname "$first")" ] || fail "no name is offered where nothing was established"
+
+# The wrapper must not turn that into a claim either.
+HOME_U1=$(make_home "$TMP_ROOT/vessel-u1")
+u1=$(FM_TEST_TS_MODE=userspace FM_HOME="$HOME_U1" FM_SERVICE_PORT_RANGE=4863-4864 \
+  "$ROOT/bin/fm-lavish.sh" end "$HOME_U1/.lavish/board.html" 2>&1)
+assert_not_contains "$u1" "not reachable off this machine" \
+  "an untested vessel must not be told it is unreachable"
+assert_not_contains "$u1" "no tailnet on this host" \
+  "nor that it has no tailnet, which it plainly has"
+assert_contains "$u1" "nothing has established whether" \
+  "the captain is told which of the two it is: neither"
+assert_contains "$u1" "no tailscale serve route onto 192.0.2.1 has been established yet" \
+  "and what this run met is named without predicting what a later one will do"
+assert_not_contains "$u1" "the next open settles the rest" \
+  "because a publish can be refused durably while tailscale status keeps reporting Running"
+: > "$FM_TEST_TS_SERVE_STATE"
+: > "$FM_TEST_TS_SERVE_LOG"
+pass "a run that established nothing says so rather than picking the flattering answer"
+
+# The other producer of untested, and the promise above is untrue for it: a host
+# whose tailscale cannot be READ answers the same way on every later run, so a
+# sentence telling the captain to open again would send him round a loop that
+# settles nothing.
+HOME_U2=$(make_home "$TMP_ROOT/vessel-u2")
+u2=$(FM_TEST_TS_MODE=unreadable FM_HOME="$HOME_U2" FM_SERVICE_PORT_RANGE=4891-4892 \
+  "$ROOT/bin/fm-lavish.sh" end "$HOME_U2/.lavish/board.html" 2>&1)
+assert_contains "$u2" "nothing here could read whether" \
+  "an unreadable tailscale is reported as unread, not as a tested answer"
+assert_contains "$u2" "jq missing or tailscale not responding" \
+  "and the concrete cause is named"
+assert_not_contains "$u2" "the next open settles the rest" \
+  "without promising a further open resolves what no further open can"
+assert_not_contains "$u2" "not reachable off this machine" \
+  "nor claiming the vessel was shown unreachable"
+: > "$FM_TEST_TS_SERVE_STATE"
+: > "$FM_TEST_TS_SERVE_LOG"
+pass "only the vessel a later run can settle is told to try again"
+
+# The third producer of untested, and the promise above is untrue for it too:
+# this node's identity WAS read, so that sentence would fire, but its tailscale
+# went down before a route could be published onto that address. What blocked
+# the route is named and the sentence stops there. It may NOT tell the captain
+# that nothing further can be settled either: this state is not durable, and the
+# very next run resolves a definite verdict - the same unbacked claim as the
+# promise, only inverted.
+: > "$FM_TEST_TS_SERVE_STATE"
+: > "$FM_TEST_TS_SERVE_LOG"
+DOWNBIN="$TMP_ROOT/down-bin"
+mkdir -p "$DOWNBIN"
+DOWN_MARKER="$TMP_ROOT/tailscaled-down"
+rm -f "$DOWN_MARKER"
+# Takes the backend down at the moment the walk on the tailnet address fails,
+# which is between the identity read that resolved that address and the
+# availability read that decides whether a route can still be published onto it.
+cat > "$DOWNBIN/node" <<SH
+#!/usr/bin/env bash
+[ "\${2:-}" = addr ] && exit 1
+if [ "\${2:-}" = bind ] && [ "\${3:-}" = 192.0.2.1 ]; then
+  : > "\${FM_TEST_TS_DOWN_MARKER:-/dev/null}"
+  printf 'fm-service-port-probe: refused\\n' >&2
+  exit 5
+fi
+exec "$REAL_NODE" "\$@"
+SH
+chmod +x "$DOWNBIN/node"
+HOME_U3=$(make_home "$TMP_ROOT/vessel-u3")
+u3=$(PATH="$DOWNBIN:$PATH" FM_TEST_TS_MODE=userspace FM_TEST_TS_DOWN_MARKER="$DOWN_MARKER" \
+  FM_HOME="$HOME_U3" FM_SERVICE_PORT_RANGE=4905-4906 \
+  "$ROOT/bin/fm-lavish.sh" end "$HOME_U3/.lavish/board.html" 2>&1)
+[ -e "$DOWN_MARKER" ] || fail "this case needs the backend to have gone down during the run"
+assert_contains "$u3" "nothing has established whether" \
+  "neither reach nor its absence was established, and that is what is said"
+assert_not_contains "$u3" "the next open settles the rest" \
+  "without promising a further open resolves what no further open can"
+assert_contains "$u3" "no route could be published onto 192.0.2.1" \
+  "what could not be established is named"
+assert_contains "$u3" "tailscale could not serve here just now" \
+  "along with the cause that blocked it"
+assert_not_contains "$u3" "nothing more can be settled" \
+  "and nothing is claimed about what a later run will meet"
+assert_not_contains "$u3" "not reachable off this machine" \
+  "nor claiming the vessel was shown unreachable"
+
+# Why that claim would have been untrue: the state is not durable. With the
+# backend still down, the very next run reads it as down from the start and
+# settles a definite verdict, which is the opposite of nothing more being
+# settleable.
+u3next=$(PATH="$DOWNBIN:$PATH" FM_TEST_TS_MODE=userspace FM_TEST_TS_DOWN_MARKER="$DOWN_MARKER" \
+  FM_HOME="$HOME_U3" FM_SERVICE_PORT_RANGE=4905-4906 \
+  "$ROOT/bin/fm-lavish.sh" end "$HOME_U3/.lavish/board.html" 2>&1)
+assert_contains "$u3next" "no tailnet on this host" \
+  "the next run settles it, so the run before it may not say nothing more can be settled"
+assert_not_contains "$u3next" "nothing has established whether" \
+  "and stops calling the answer unestablished once it has one"
+rm -f "$DOWN_MARKER"
+: > "$FM_TEST_TS_SERVE_STATE"
+: > "$FM_TEST_TS_SERVE_LOG"
+pass "a vessel whose tailscale cannot serve is told what blocked the route and nothing more"
+
+# --- entry point: a run that opens nothing publishes no route ----------------
+#
+# `open --help <board>.html` is an accepted shape that dispatches open and then
+# answers help without reaching the handler, so lavish-axi binds nothing. A
+# route published for it is node-wide, outlives this process and the machine's
+# next reboot, and republishes whatever binds that loopback port next.
+
+: > "$FM_TEST_TS_SERVE_STATE"
+: > "$FM_TEST_TS_SERVE_LOG"
+HOME_H=$(make_home "$TMP_ROOT/vessel-h")
+FM_TEST_TS_MODE=userspace FM_HOME="$HOME_H" FM_SERVICE_PORT_RANGE=4866-4867 \
+  "$ROOT/bin/fm-lavish.sh" open --help "$HOME_H/.lavish/board.html" >/dev/null 2>&1
+[ -z "$(sort -u "$FM_TEST_TS_SERVE_STATE" | tr -d '[:space:]')" ] \
+  || fail "a run that opens nothing must leave no route: $(cat "$FM_TEST_TS_SERVE_STATE")"
+
+# The positive half on the same fixtures, or the rule above would be satisfied
+# by never publishing at all.
+h_out=$(FM_TEST_TS_MODE=userspace FM_HOME="$HOME_H" FM_SERVICE_PORT_RANGE=4866-4867 \
+  "$ROOT/bin/fm-lavish.sh" "$HOME_H/.lavish/board.html" 2>/dev/null)
+h_port=$(printf '%s\n' "$h_out" | sed -n 's|.*://[^:]*:\([0-9][0-9]*\)/session/.*|\1|p' | head -1)
+[ -n "$h_port" ] || fail "an ordinary open should emit a port, got: $h_out"
+grep -qx "$h_port" "$FM_TEST_TS_SERVE_STATE" \
+  || fail "an ordinary open still publishes its route: $(cat "$FM_TEST_TS_SERVE_STATE")"
+: > "$FM_TEST_TS_SERVE_STATE"
+: > "$FM_TEST_TS_SERVE_LOG"
+pass "only a run that actually leaves a board serving publishes a route"
+
+# Serve is the whole reason this case is not simply loopback, so a serve that
+# cannot publish must not be reported as reach.
+: > "$FM_TEST_TS_SERVE_STATE"
+: > "$FM_TEST_TS_SERVE_LOG"
+noserve=$(FM_TEST_TS_MODE=userspace FM_TEST_TS_SERVE=broken FM_HOME="$HOME_B" \
+  FM_SERVICE_PORT_RANGE=4740-4759 "$ROOT/bin/fm-service-port.sh" lavish --serving)
+expect_code 0 "$?" "a vessel with no way off the machine still gets a local board"
+[ "$(field reachability "$noserve")" = loopback ] \
+  || fail "an unpublishable proxy must degrade to loopback, not claim tailnet reach"
+[ -z "$(field dnsname "$noserve")" ] \
+  || fail "a name that cannot be reached must not be offered for links"
+assert_contains "$noserve" "EADDRNOTAVAIL" "the degraded case still names why the address failed"
+pass "an unbindable address with no working proxy is reported as loopback rather than as reach"
+
+# Only an address-scoped verdict may move a vessel onto the proxy path. Reading
+# every non-zero probe exit as "unbindable" would take a healthy kernel-mode
+# vessel that met fd pressure or EPERM, rebind it on loopback, publish a
+# node-wide serve entry it never needed, and tell it its address fails
+# EADDRNOTAVAIL in userspace mode - a concrete diagnosis with nothing behind it.
+: > "$FM_TEST_TS_SERVE_STATE"
+: > "$FM_TEST_TS_SERVE_LOG"
+node "$PROBE" addr 1.2.3.4.5 >/dev/null 2>&1
+expect_code 1 "$?" "a bind that failed for a port-scoped reason answers nothing about the address"
+# Seeded rather than inherited: this vessel binds loopback, so a record claiming
+# the tailnet address is exactly what it must refuse to carry forward, and a case
+# that leans on whatever an earlier case last wrote proves nothing about that.
+printf 'port=4816\nreachability=tailnet\nreachability_evidence=probed\n' \
+  > "$HOME_B/state/service-port.lavish"
+portscoped=$(FM_TEST_TS_MODE=portscoped FM_HOME="$HOME_B" FM_SERVICE_PORT_RANGE=4816-4817 \
+  "$ROOT/bin/fm-service-port.sh" lavish 2>&1)
+expect_code 0 "$?" "an address nothing could answer for still gets a board, on loopback"
+[ "$(field addr "$portscoped")" = 127.0.0.1 ] \
+  || fail "and binds it there, got '$(field addr "$portscoped")'"
+assert_not_contains "$portscoped" "userspace" \
+  "a userspace-mode diagnosis must never be asserted from a probe answer that did not say it"
+assert_not_contains "$portscoped" "EADDRNOTAVAIL" \
+  "the errno this run never met must not be named"
+# The round-2 rule still stands where it was aimed: a port-scoped failure is not
+# a licence to CLAIM proxy reach. Falling back to loopback is what the run does;
+# asserting the tailnet is reached is what it still may not say.
+[ "$(field reachability "$portscoped")" != tailnet-proxied ] \
+  || fail "a port-scoped failure must not claim a proxy reach nothing tested"
+[ "$(field reachability "$portscoped")" != tailnet ] \
+  || fail "nor reach on an address no bind ever succeeded on, even carried from a record"
+assert_grep "addr=127.0.0.1" "$HOME_B/state/service-port.lavish" \
+  "the published record binds loopback"
+grep -q '^reachability=tailnet$' "$HOME_B/state/service-port.lavish" \
+  && fail "and must not publish a verdict its own bind address disproves: $(cat "$HOME_B/state/service-port.lavish")"
+# Reading serve status is how the run learns whether a route already exists;
+# what it must not do is make one, and a publication is what carries --http=.
+grep -q -- '--http=' "$FM_TEST_TS_SERVE_LOG" \
+  && fail "a run that leaves no service listening publishes nothing: $(cat "$FM_TEST_TS_SERVE_LOG")"
+[ ! -s "$FM_TEST_TS_SERVE_STATE" ] \
+  || fail "and leaves nothing published behind it: $(cat "$FM_TEST_TS_SERVE_STATE")"
+pass "an address no probe could answer for is served locally without claiming reach"
+
+# The no-tailnet vessel is unchanged by any of this: same reachability, same
+# message, and no serve configuration touched on its behalf.
+: > "$FM_TEST_TS_SERVE_LOG"
+for mode in stopped noipv4; do
+  untouched=$(FM_TEST_TS_MODE=$mode FM_HOME="$HOME_B" FM_SERVICE_PORT_RANGE=4740-4759 \
+    "$ROOT/bin/fm-service-port.sh" lavish)
+  [ "$(field reachability "$untouched")" = loopback ] || fail "$mode must still be loopback"
+  [ -z "$(field tailaddr "$untouched")" ] \
+    || fail "$mode has no tailnet address to name"
+done
+[ ! -s "$FM_TEST_TS_SERVE_LOG" ] \
+  || fail "a host with no tailnet must not publish anything: $(cat "$FM_TEST_TS_SERVE_LOG")"
+: > "$FM_TEST_TS_SERVE_STATE"
+: > "$FM_TEST_TS_SERVE_LOG"
+pass "a host with no tailnet at all keeps its existing loopback behaviour untouched"
 
 badname=$(FM_TEST_TS_MODE=badname FM_HOME="$HOME_B" FM_SERVICE_PORT_RANGE=4740-4759 \
   "$ROOT/bin/fm-service-port.sh" lavish --check)
@@ -446,6 +1496,8 @@ err=$(FM_TEST_TS_MODE=stopped FM_HOME="$HOME_B" FM_SERVICE_PORT_RANGE=4740-4759 
   "$ROOT/bin/fm-lavish.sh" "$HOME_B/.lavish/board.html" 2>&1 >/dev/null)
 assert_contains "$err" "no tailnet on this host" "a loopback-only board must say so"
 assert_contains "$err" "opens only on this machine" "the consequence is stated in plain words"
+assert_not_contains "$err" "not reachable off this machine" \
+  "a vessel that genuinely has no tailnet keeps naming that, not the softer fact"
 assert_contains "$(cat "$FM_TEST_LAVISH_LOG")" "HOST=127.0.0.1" "the board still opens locally"
 pass "a vessel with no tailnet still opens the board and never implies it is reachable"
 
@@ -664,13 +1716,23 @@ pidfile="\$FM_TEST_SERVERS/\${LAVISH_AXI_PORT:-none}.pid"
 if [ "\${1:-}" = stop ]; then
   target="\${3:-\$LAVISH_AXI_PORT}"
   pidfile="\$FM_TEST_SERVERS/\$target.pid"
+  hostfile="\$FM_TEST_SERVERS/\$target.host"
+  # The real tool reaches its target at LAVISH_AXI_HOST and reports not-running
+  # when nothing answers there, so a stop aimed at an address this board is not
+  # bound to must leave it serving rather than kill it by pidfile.
+  if [ -s "\$hostfile" ] && [ "\$(cat "\$hostfile")" != "\${LAVISH_AXI_HOST:-}" ]; then
+    printf 'not-running %s\n' "\$target"
+    exit 0
+  fi
   if [ -s "\$pidfile" ]; then kill "\$(cat "\$pidfile")" 2>/dev/null || true; rm -f "\$pidfile"; fi
+  rm -f "\$hostfile"
   printf 'stopped %s\n' "\$target"
   exit 0
 fi
 if [ ! -s "\$pidfile" ]; then
   ready="\$FM_TEST_SERVERS/\${LAVISH_AXI_PORT}.ready"
   rm -f "\$ready"
+  printf '%s\n' "\$LAVISH_AXI_HOST" > "\$FM_TEST_SERVERS/\${LAVISH_AXI_PORT}.host"
   # Detach every stream: a background child that inherits stdout would keep the
   # caller's command substitution open until it exits, which never happens.
   node "$TMP_ROOT/board-server.mjs" "\$ready" "\$LAVISH_AXI_HOST" "\$LAVISH_AXI_PORT" \$LAVISH_AXI_ALLOWED_HOSTS \\
@@ -768,6 +1830,452 @@ out=$(FM_HOME="$HOME_C" FM_SERVICE_PORT_RANGE=4792-4793 "$ROOT/bin/fm-lavish.sh"
 assert_contains "$out" "nothing to stop" "a second stop has nothing left to reach"
 pass "stop reaches this vessel's own server and then reports honestly that none is left"
 
+# --- entry point: the vessel whose address it cannot bind --------------------
+#
+# The board binds loopback here, but nothing the captain is handed may say so:
+# the link and the allowlist have to name the tailnet, because the published
+# proxy is where the board actually answers.
+
+: > "$FM_TEST_TS_SERVE_STATE"
+: > "$FM_TEST_TS_SERVE_LOG"
+HOME_U=$(make_home "$TMP_ROOT/vessel-u")
+make_serving_lavish "$HOME_U"
+out=$(FM_TEST_TS_MODE=userspace FM_HOME="$HOME_U" FM_SERVICE_PORT_RANGE=4796-4799 \
+  "$ROOT/bin/fm-lavish.sh" "$HOME_U/.lavish/board.html" 2>&1)
+assert_contains "$out" "EADDRNOTAVAIL" "the vessel still says its address cannot be bound"
+u_port=$(printf '%s\n' "$out" | sed -n 's|.*://[^:]*:\([0-9][0-9]*\)/session/.*|\1|p' | head -1)
+[ -n "$u_port" ] || fail "the proxied open should still emit a session link, got: $out"
+assert_contains "$out" "192.0.2.1:$u_port/session/" \
+  "the link must name the tailnet address, never the loopback the board is bound to"
+assert_not_contains "$out" "127.0.0.1:$u_port/session/" \
+  "a loopback link is exactly what this wrapper exists to stop handing over"
+u_owner="$HOME_U/state/lavish/fm-owner"
+assert_grep "addr=127.0.0.1" "$u_owner" "the board still binds the address it can bind"
+assert_grep "link_host=192.0.2.1" "$u_owner" "the recorded link host is the tailnet address"
+u_allowed=$(sed -n 's/^allowed=//p' "$u_owner" | tail -1)
+# Measured, not reasoned about: a request through the published proxy carries
+# the tailnet name as its Host, and the allowlist is compared on hostname alone.
+case " $u_allowed " in
+  *" 192.0.2.1 "*) : ;;
+  *) fail "the allowlist must carry the tailnet address the proxy answers on: $u_allowed" ;;
+esac
+case " $u_allowed " in
+  *" userspace "*) : ;;
+  *) fail "the allowlist must carry this node's own name: $u_allowed" ;;
+esac
+case " $u_allowed " in
+  *" * "*) fail "the allowlist must never become a wildcard: $u_allowed" ;;
+esac
+assert_contains "$(cat "$FM_TEST_TS_SERVE_LOG")" "--http=$u_port" \
+  "the port the board bound is the port published onto the tailnet"
+# The link host here is by construction an address this machine cannot bind, so
+# it not answering locally is the premise of this whole path rather than news
+# about the board. Advising the loopback link on the strength of that is the
+# exact hand-over this branch exists to remove.
+assert_not_contains "$out" "does not answer here" \
+  "the link host cannot be expected to answer on the vessel that could not bind it"
+assert_not_contains "$out" "hand over http://127.0.0.1" \
+  "a loopback link may not be advised under a link the proxy genuinely answers"
+# And nothing may claim in exchange that the link was reached: the probe that
+# replaced it touched loopback only.
+assert_not_contains "$out" "is reachable at http" \
+  "no sentence may assert the tailnet name answers, because nothing here tested it"
+pass "a vessel that cannot bind its own address still hands over a tailnet link"
+
+# A proxy outliving its board leaves this vessel's own name answering nothing,
+# which reads as a broken board rather than a closed one.
+FM_TEST_TS_MODE=userspace FM_HOME="$HOME_U" FM_SERVICE_PORT_RANGE=4796-4799 \
+  "$ROOT/bin/fm-lavish.sh" stop >/dev/null 2>&1
+[ "$(sort -u "$FM_TEST_TS_SERVE_STATE" | tr -d '[:space:]')" = "" ] \
+  || fail "stopping the board must withdraw its published proxy, still published: $(cat "$FM_TEST_TS_SERVE_STATE")"
+assert_contains "$(cat "$FM_TEST_TS_SERVE_LOG")" "--http=$u_port off" \
+  "the withdrawal names the port it published"
+pass "stopping a proxied board takes its tailnet endpoint down with it"
+
+# The loopback probe is not decoration: it is the one readiness question this
+# state can still answer, and a board that does not answer on the port it bound
+# is a real failure however well its route was published.
+: > "$FM_TEST_TS_SERVE_STATE"
+: > "$FM_TEST_TS_SERVE_LOG"
+HOME_UD=$(make_home "$TMP_ROOT/vessel-ud")
+make_fake_lavish "$HOME_UD"
+export FM_TEST_LAVISH_LOG="$TMP_ROOT/lavish-ud.log"
+: > "$FM_TEST_LAVISH_LOG"
+ud_out=$(FM_TEST_TS_MODE=userspace FM_HOME="$HOME_UD" FM_SERVICE_PORT_RANGE=4936-4937 \
+  "$ROOT/bin/fm-lavish.sh" "$HOME_UD/.lavish/board.html" 2>&1)
+ud_port=$(printf '%s\n' "$ud_out" | sed -n 's|.*://[^:]*:\([0-9][0-9]*\)/session/.*|\1|p' | head -1)
+[ -n "$ud_port" ] || fail "the proxied open should emit a session link, got: $ud_out"
+grep -qx "$ud_port" "$FM_TEST_TS_SERVE_STATE" \
+  || fail "this case only means anything while $ud_port is genuinely published"
+assert_contains "$ud_out" "did not answer" \
+  "a board that answers nothing on the port it bound is still a failure worth reporting"
+assert_contains "$ud_out" "127.0.0.1:$ud_port" \
+  "the failure names the address and port the run actually probed"
+pass "a published route does not excuse a board that never came up on the port it bound"
+
+# Every other state keeps the old behaviour, because there the link host is one
+# this machine did bind and a failed probe against it is real evidence.
+HOME_TN=$(make_home "$TMP_ROOT/vessel-tn")
+make_fake_lavish "$HOME_TN"
+: > "$FM_TEST_LAVISH_LOG"
+tn_out=$(FM_TEST_TS_MODE=kernel FM_HOME="$HOME_TN" FM_SERVICE_PORT_RANGE=4941-4942 \
+  "$ROOT/bin/fm-lavish.sh" "$HOME_TN/.lavish/board.html" 2>&1)
+assert_contains "$tn_out" "/session/" "the tailnet open still emits a session link"
+assert_contains "$tn_out" "does not answer here" \
+  "on a bindable tailnet address a failed probe against the link host is real evidence"
+assert_contains "$tn_out" "hand over http://127.0.0.2" \
+  "and the address form that does work is still named there"
+pass "a bindable tailnet address keeps the link-host probe and its advice"
+: > "$FM_TEST_TS_SERVE_STATE"
+: > "$FM_TEST_TS_SERVE_LOG"
+
+# A withdrawal that does not take is the exact residue this mechanism exists to
+# prevent, and `stop` replaces this process, so the moment before it is the only
+# one in which it can be said at all.
+: > "$FM_TEST_TS_SERVE_STATE"
+: > "$FM_TEST_TS_SERVE_LOG"
+HOME_Y=$(make_home "$TMP_ROOT/vessel-y")
+make_serving_lavish "$HOME_Y"
+y_out=$(FM_TEST_TS_MODE=userspace FM_HOME="$HOME_Y" FM_SERVICE_PORT_RANGE=4826-4827 \
+  "$ROOT/bin/fm-lavish.sh" "$HOME_Y/.lavish/board.html" 2>/dev/null)
+y_port=$(printf '%s\n' "$y_out" | sed -n 's|.*://[^:]*:\([0-9][0-9]*\)/session/.*|\1|p' | head -1)
+[ -n "$y_port" ] || fail "the proxied open should emit a port, got: $y_out"
+grep -qx "$y_port" "$FM_TEST_TS_SERVE_STATE" || fail "the open should have published $y_port"
+
+# Serve can still be read but no longer mutated, so the off command runs and the
+# port stays published, which is the one answer that means the withdrawal failed
+# rather than that there was nothing to withdraw.
+y_stop=$(FM_TEST_TS_MODE=userspace FM_TEST_TS_SERVE=broken FM_HOME="$HOME_Y" \
+  FM_SERVICE_PORT_RANGE=4826-4827 "$ROOT/bin/fm-lavish.sh" stop 2>&1)
+expect_code 0 "$?" "a failed withdrawal must be reported, never turned into a refusal to stop"
+assert_contains "$y_stop" "could not be withdrawn" \
+  "a tailnet endpoint left standing must be said out loud, not left for the captain to find"
+assert_contains "$y_stop" "$y_port" "the report names the port still answering"
+assert_contains "$y_stop" "stopped" "the board really did stop, and the run says so"
+grep -qx "$y_port" "$FM_TEST_TS_SERVE_STATE" \
+  || fail "this case only means anything while the withdrawal genuinely did not take"
+pass "a withdrawal that did not take is reported rather than left silent"
+
+# The promise was never "bind this address". It was "never hand him a link that
+# opens nowhere", so the branch with no proxy at all has to keep saying so.
+: > "$FM_TEST_TS_SERVE_STATE"
+: > "$FM_TEST_TS_SERVE_LOG"
+HOME_N=$(make_home "$TMP_ROOT/vessel-n")
+make_serving_lavish "$HOME_N"
+out=$(FM_TEST_TS_MODE=userspace FM_TEST_TS_SERVE=broken FM_HOME="$HOME_N" \
+  FM_SERVICE_PORT_RANGE=4801-4804 "$ROOT/bin/fm-lavish.sh" "$HOME_N/.lavish/board.html" 2>&1)
+assert_contains "$out" "this board opens only on this machine" \
+  "with no proxy to publish, the vessel must still say the link goes nowhere else"
+assert_contains "$out" "EADDRNOTAVAIL" "and must still name why"
+# The lead clause and the parenthetical have to agree. This node HAS a tailnet
+# address; it just cannot be bound or proxied, and being sent hunting a missing
+# tailnet is the misdirection the reason lines exist to avoid.
+assert_contains "$out" "not reachable off this machine" \
+  "the degraded vessel is told the fact that is true of it"
+assert_not_contains "$out" "no tailnet on this host" \
+  "a vessel whose own parenthetical names its tailnet address must not be told it has none"
+assert_not_contains "$out" "192.0.2.1:" \
+  "a tailnet link must never be emitted when nothing answers on the tailnet"
+n_owner="$HOME_N/state/lavish/fm-owner"
+assert_grep "link_host=127.0.0.1" "$n_owner" \
+  "the link falls back to loopback rather than naming an address nothing serves"
+pass "a vessel with an unbindable address and no proxy is told its board opens only here"
+
+# The same vessel, opened a SECOND time. One open cannot see this: the --check
+# pre-read resolves tailnet-proxied every run, because whether a proxy will
+# publish is unanswerable until a port exists, so a staleness comparison taken
+# from the pre-read never agrees with the record the allocation writes. Deciding
+# it from the pre-read restarts a healthy board on every open, poll and end, and
+# drops the reviewer's connected browser each time.
+n_port=$(printf '%s\n' "$out" | sed -n 's|.*://[^:]*:\([0-9][0-9]*\)/session/.*|\1|p' | head -1)
+[ -n "$n_port" ] || fail "the degraded open should still emit a session link, got: $out"
+n_pid=$(cat "$FM_TEST_SERVERS/$n_port.pid" 2>/dev/null)
+[ -n "$n_pid" ] || fail "the degraded open should have left a board server running on $n_port"
+again=$(FM_TEST_TS_MODE=userspace FM_TEST_TS_SERVE=broken FM_HOME="$HOME_N" \
+  FM_SERVICE_PORT_RANGE=4801-4804 "$ROOT/bin/fm-lavish.sh" "$HOME_N/.lavish/board.html" 2>&1)
+assert_not_contains "$again" "different address configuration" \
+  "a vessel that degrades identically every run has not changed configuration"
+assert_contains "$again" ":$n_port/session" "the second open keeps the same port"
+[ "$(cat "$FM_TEST_SERVERS/$n_port.pid" 2>/dev/null)" = "$n_pid" ] \
+  || fail "the healthy board server was restarted on an unchanged configuration"
+alive=$(node "$ROOT/bin/fm-service-port-probe.mjs" http "http://127.0.0.1:$n_port/health" 2>/dev/null)
+[ "$alive" = 200 ] || fail "the board must still be serving after a second open"
+pass "a degraded vessel reopens onto its own running board instead of restarting it every time"
+
+# --- entry point: a publication does not outlive the board it points at ------
+#
+# lavish-axi stops itself after its idle timeout and immediately when the last
+# session ends with nothing connected, and neither path runs a line of the
+# wrapper. Serve configuration is node-wide and persistent, so it survives all
+# of that and would republish whatever binds that loopback port next under this
+# node's tailnet name.
+
+: > "$FM_TEST_TS_SERVE_STATE"
+: > "$FM_TEST_TS_SERVE_LOG"
+HOME_S=$(make_home "$TMP_ROOT/vessel-s")
+make_serving_lavish "$HOME_S"
+opened=$(FM_TEST_TS_MODE=userspace FM_HOME="$HOME_S" FM_SERVICE_PORT_RANGE=4806-4807 \
+  "$ROOT/bin/fm-lavish.sh" "$HOME_S/.lavish/board.html" 2>/dev/null)
+r_port=$(printf '%s\n' "$opened" | sed -n 's|.*://[^:]*:\([0-9][0-9]*\)/session/.*|\1|p' | head -1)
+[ -n "$r_port" ] || fail "the proxied open should emit a port, got: $opened"
+grep -qx "$r_port" "$FM_TEST_TS_SERVE_STATE" \
+  || fail "the open should have published $r_port: $(cat "$FM_TEST_TS_SERVE_STATE")"
+
+# The negative first: a board that is still answering keeps its publication.
+FM_TEST_TS_MODE=userspace FM_HOME="$HOME_S" FM_SERVICE_PORT_RANGE=4806-4807 \
+  "$ROOT/bin/fm-lavish.sh" "$HOME_S/.lavish/board.html" >/dev/null 2>&1
+grep -qx "$r_port" "$FM_TEST_TS_SERVE_STATE" \
+  || fail "a board that is still answering must keep its publication"
+
+# An unrelated entry, belonging to an account this vessel cannot speak for, with
+# nothing serving behind it either. The reconcile is bounded to this home's own
+# recorded port, so this one has to survive untouched: a node-wide sweep is the
+# same harm as withdrawing a neighbour's port, at a larger blast radius.
+printf '%s\n' 8443 >> "$FM_TEST_TS_SERVE_STATE"
+
+# Killed the way the idle self-stop ends it: without telling the wrapper.
+kill "$(cat "$FM_TEST_SERVERS/$r_port.pid")" 2>/dev/null || true
+rm -f "$FM_TEST_SERVERS/$r_port.pid"
+for _ in $(seq 1 100); do
+  node "$ROOT/bin/fm-service-port-probe.mjs" http "http://127.0.0.1:$r_port/health" \
+    >/dev/null 2>&1 || break
+  sleep 0.05
+done
+
+# A different window on the next run, so nothing republishes the old port and
+# only the reconcile can take it down.
+FM_TEST_TS_MODE=userspace FM_HOME="$HOME_S" FM_SERVICE_PORT_RANGE=4808-4809 \
+  "$ROOT/bin/fm-lavish.sh" "$HOME_S/.lavish/board.html" >/dev/null 2>&1
+! grep -qx "$r_port" "$FM_TEST_TS_SERVE_STATE" \
+  || fail "a publication whose board is gone must not survive the next run: $(cat "$FM_TEST_TS_SERVE_STATE")"
+grep -qx 8443 "$FM_TEST_TS_SERVE_STATE" \
+  || fail "the reconcile must touch this home's own port only, never sweep the node"
+pass "a publication left behind by a board that stopped itself is withdrawn, and only that one"
+
+# --- entry point: moving off a port takes its publication with it ------------
+#
+# A publication made in userspace mode outlives that mode. The container can
+# regain /dev/net/tun, or serve can be briefly unavailable, and the run that
+# moves this vessel off the old port then resolves tailnet or loopback. Deciding
+# whether to withdraw from the CURRENT run's reachability orphans exactly those,
+# and the record is about to stop naming the old port, so the reconcile above
+# can never reach it again - not on the next run, not after a reboot.
+
+: > "$FM_TEST_TS_SERVE_STATE"
+: > "$FM_TEST_TS_SERVE_LOG"
+HOME_X=$(make_home "$TMP_ROOT/vessel-x")
+make_serving_lavish "$HOME_X"
+x_first=$(FM_TEST_TS_MODE=userspace FM_HOME="$HOME_X" FM_SERVICE_PORT_RANGE=4821-4822 \
+  "$ROOT/bin/fm-lavish.sh" "$HOME_X/.lavish/board.html" 2>/dev/null)
+x_old=$(printf '%s\n' "$x_first" | sed -n 's|.*://[^:]*:\([0-9][0-9]*\)/session/.*|\1|p' | head -1)
+[ -n "$x_old" ] || fail "the proxied open should emit a port, got: $x_first"
+grep -qx "$x_old" "$FM_TEST_TS_SERVE_STATE" \
+  || fail "the proxied open should have published $x_old: $(cat "$FM_TEST_TS_SERVE_STATE")"
+
+# Out of scope on both counts, not this home's port and not dead, so it has to
+# survive the withdrawal that follows.
+printf '%s\n' 8443 >> "$FM_TEST_TS_SERVE_STATE"
+
+# This run resolves tailnet - the address binds again - so it never touches the
+# proxy path of its own accord.
+x_moved=$(FM_HOME="$HOME_X" FM_SERVICE_PORT_RANGE=4823-4824 \
+  "$ROOT/bin/fm-lavish.sh" "$HOME_X/.lavish/board.html" 2>&1)
+assert_contains "$x_moved" "moving this vessel's boards from port $x_old" \
+  "the relocation has to actually happen for this to be the orphan case"
+! grep -qx "$x_old" "$FM_TEST_TS_SERVE_STATE" \
+  || fail "the publication on the port this vessel just moved off is now unreachable forever: $(cat "$FM_TEST_TS_SERVE_STATE")"
+grep -qx 8443 "$FM_TEST_TS_SERVE_STATE" \
+  || fail "withdrawing this home's own port must not reach an entry it cannot speak for"
+pass "moving off a port takes its publication with it, whatever the new run resolved"
+
+# --- entry point: a bare stop withdraws nothing it has not proved ------------
+#
+# Serve configuration belongs to the whole node. A co-hosted vessel in userspace
+# mode can walk its own window onto this vessel's seat and publish it, and a
+# bare `stop` here resolves its port to exactly that seat with nothing proved
+# about it. Withdrawing then takes a live board off the tailnet from under an
+# account this vessel cannot speak for.
+
+: > "$FM_TEST_TS_SERVE_STATE"
+: > "$FM_TEST_TS_SERVE_LOG"
+HOME_W=$(make_home "$TMP_ROOT/vessel-w")
+w_seat=$(field seat "$(FM_TEST_TS_MODE=userspace FM_HOME="$HOME_W" \
+  FM_SERVICE_PORT_RANGE=4811-4811 "$ROOT/bin/fm-service-port.sh" lavish --check)")
+[ "$w_seat" = 4811 ] || fail "a single-port window seats this vessel on 4811, got '$w_seat'"
+
+w_ready="$TMP_ROOT/vessel-w.ready"
+rm -f "$w_ready"
+node "$TMP_ROOT/board-server.mjs" "$w_ready" 127.0.0.1 "$w_seat" localhost \
+  </dev/null >"$TMP_ROOT/vessel-w.log" 2>&1 &
+W_PID=$!
+# Registered where the EXIT trap reaps it, so a failing run does not leave this
+# seat held and turn the next run's first assertion into the flake.
+printf '%s\n' "$W_PID" > "$FM_TEST_SERVERS/$w_seat.pid"
+for _ in $(seq 1 100); do [ -s "$w_ready" ] && break; sleep 0.05; done
+[ -s "$w_ready" ] || fail "the co-hosted vessel's board did not come up"
+printf '%s\n' "$w_seat" > "$FM_TEST_TS_SERVE_STATE"
+
+out=$(FM_TEST_TS_MODE=userspace FM_HOME="$HOME_W" FM_SERVICE_PORT_RANGE=4811-4811 \
+  "$ROOT/bin/fm-lavish.sh" stop 2>&1)
+expect_code 0 "$?" "a bare stop with nothing of this vessel's own is not a failure"
+assert_contains "$out" "nothing to stop" "a vessel with no board of its own has nothing to stop"
+grep -qx "$w_seat" "$FM_TEST_TS_SERVE_STATE" \
+  || fail "a live board this vessel cannot prove is its own was taken off the tailnet: $(cat "$FM_TEST_TS_SERVE_LOG")"
+alive=$(node "$ROOT/bin/fm-service-port-probe.mjs" http "http://127.0.0.1:$w_seat/health" 2>/dev/null)
+[ "$alive" = 200 ] || fail "the co-hosted vessel's board must still be serving after the stop"
+kill "$W_PID" 2>/dev/null || true
+wait "$W_PID" 2>/dev/null || true
+rm -f "$FM_TEST_SERVERS/$w_seat.pid"
+for _ in $(seq 1 100); do
+  node "$ROOT/bin/fm-service-port-probe.mjs" http "http://127.0.0.1:$w_seat/health" \
+    >/dev/null 2>&1 || break
+  sleep 0.05
+done
+
+# The other half of the same rule, so the guard is a proof and not a refusal to
+# act: a seat with nothing serving behind it is still withdrawn.
+FM_TEST_TS_MODE=userspace FM_HOME="$HOME_W" FM_SERVICE_PORT_RANGE=4811-4811 \
+  "$ROOT/bin/fm-lavish.sh" stop >/dev/null 2>&1
+[ -z "$(tr -d '[:space:]' < "$FM_TEST_TS_SERVE_STATE")" ] \
+  || fail "a publication with nothing behind it must still be withdrawn: $(cat "$FM_TEST_TS_SERVE_STATE")"
+pass "a bare stop withdraws only a publication with nothing serving behind it"
+
+# --- entry point: the guard asks the listener a publication forwards to ------
+#
+# A publication always forwards to 127.0.0.1:<port>, whatever address this run
+# resolved to bind. Once a node regains kernel-mode networking it binds its own
+# tailnet address instead, so a guard that only asks that address calls a
+# co-hosted vessel's live proxied board silent and takes it off the tailnet.
+
+: > "$FM_TEST_TS_SERVE_STATE"
+: > "$FM_TEST_TS_SERVE_LOG"
+HOME_K=$(make_home "$TMP_ROOT/vessel-k")
+k_check=$(FM_TEST_TS_MODE=kernel FM_HOME="$HOME_K" FM_SERVICE_PORT_RANGE=4836-4836 \
+  "$ROOT/bin/fm-service-port.sh" lavish --check)
+[ "$(field reachability "$k_check")" = tailnet ] \
+  || fail "the kernel-mode fixture must bind its own address, got '$(field reachability "$k_check")'"
+[ "$(field addr "$k_check")" = 127.0.0.2 ] \
+  || fail "this case needs a bind address that is not the proxy's target, got '$(field addr "$k_check")'"
+k_seat=$(field seat "$k_check")
+[ "$k_seat" = 4836 ] || fail "a single-port window seats this vessel on 4836, got '$k_seat'"
+
+# The co-hosted vessel's board is on loopback, which is the only place a
+# publication ever points, and nowhere near the address this vessel now binds.
+k_ready="$TMP_ROOT/vessel-k.ready"
+rm -f "$k_ready"
+node "$TMP_ROOT/board-server.mjs" "$k_ready" 127.0.0.1 "$k_seat" localhost \
+  </dev/null >"$TMP_ROOT/vessel-k.log" 2>&1 &
+K_PID=$!
+printf '%s\n' "$K_PID" > "$FM_TEST_SERVERS/$k_seat.pid"
+for _ in $(seq 1 100); do [ -s "$k_ready" ] && break; sleep 0.05; done
+[ -s "$k_ready" ] || fail "the co-hosted vessel's proxied board did not come up"
+printf '%s\n' "$k_seat" > "$FM_TEST_TS_SERVE_STATE"
+
+out=$(FM_TEST_TS_MODE=kernel FM_HOME="$HOME_K" FM_SERVICE_PORT_RANGE=4836-4836 \
+  "$ROOT/bin/fm-lavish.sh" stop 2>&1)
+expect_code 0 "$?" "a bare stop with nothing of this vessel's own is not a failure"
+assert_contains "$out" "nothing to stop" "this vessel has no board of its own to stop"
+grep -qx "$k_seat" "$FM_TEST_TS_SERVE_STATE" \
+  || fail "a board still serving on the port the publication forwards to was taken off the tailnet: $(cat "$FM_TEST_TS_SERVE_LOG")"
+alive=$(node "$ROOT/bin/fm-service-port-probe.mjs" http "http://127.0.0.1:$k_seat/health" 2>/dev/null)
+[ "$alive" = 200 ] || fail "the co-hosted vessel's board must still be serving"
+kill "$K_PID" 2>/dev/null || true
+wait "$K_PID" 2>/dev/null || true
+rm -f "$FM_TEST_SERVERS/$k_seat.pid"
+pass "a withdrawal guard asks both the bound address and the address a proxy forwards to"
+
+# --- entry point: closing a board never manufactures a route -----------------
+#
+# Publishing on allocation was written for the command that OPENS a board.
+# `poll` leaves the server up and the reviewer able to reach it, so its route
+# stands; `end` closes the last session and lets the server stop itself, and a
+# route published for it would point at nothing and outlive the reboot.
+
+: > "$FM_TEST_TS_SERVE_STATE"
+: > "$FM_TEST_TS_SERVE_LOG"
+HOME_Z=$(make_home "$TMP_ROOT/vessel-z")
+make_serving_lavish "$HOME_Z"
+z_out=$(FM_TEST_TS_MODE=userspace FM_HOME="$HOME_Z" FM_SERVICE_PORT_RANGE=4841-4842 \
+  "$ROOT/bin/fm-lavish.sh" "$HOME_Z/.lavish/board.html" 2>/dev/null)
+z_port=$(printf '%s\n' "$z_out" | sed -n 's|.*://[^:]*:\([0-9][0-9]*\)/session/.*|\1|p' | head -1)
+[ -n "$z_port" ] || fail "the proxied open should emit a port, got: $z_out"
+grep -qx "$z_port" "$FM_TEST_TS_SERVE_STATE" || fail "the open should have published $z_port"
+
+FM_TEST_TS_MODE=userspace FM_HOME="$HOME_Z" FM_SERVICE_PORT_RANGE=4841-4842 \
+  "$ROOT/bin/fm-lavish.sh" poll "$HOME_Z/.lavish/board.html" >/dev/null 2>&1
+grep -qx "$z_port" "$FM_TEST_TS_SERVE_STATE" \
+  || fail "a run that leaves the board serving must keep its route: $(cat "$FM_TEST_TS_SERVE_STATE")"
+
+# Killed the way the idle timeout and the last-session-ends path end it, without
+# telling the wrapper, so `end` is the ordinary next run on a board already gone.
+kill "$(cat "$FM_TEST_SERVERS/$z_port.pid")" 2>/dev/null || true
+rm -f "$FM_TEST_SERVERS/$z_port.pid"
+for _ in $(seq 1 100); do
+  node "$ROOT/bin/fm-service-port-probe.mjs" http "http://127.0.0.1:$z_port/health" \
+    >/dev/null 2>&1 || break
+  sleep 0.05
+done
+
+# Out of scope on both counts, so it has to survive whatever this run does.
+printf '%s\n' 8443 >> "$FM_TEST_TS_SERVE_STATE"
+
+z_end=$(FM_TEST_TS_MODE=userspace FM_HOME="$HOME_Z" FM_SERVICE_PORT_RANGE=4841-4842 \
+  "$ROOT/bin/fm-lavish.sh" end "$HOME_Z/.lavish/board.html" 2>&1)
+[ "$(sort -u "$FM_TEST_TS_SERVE_STATE" | tr -d '[:space:]')" = 8443 ] \
+  || fail "closing a board must not manufacture a route to a port nothing answers on: $(cat "$FM_TEST_TS_SERVE_STATE")"
+
+# Not publishing is this RUN's outcome and must not be restated as a fact about
+# the host. Closing a board cannot make a proxy-capable vessel unreachable, and
+# saying so would send the captain hunting a network fault he does not have.
+assert_not_contains "$z_end" "not reachable off this machine" \
+  "closing a board must not report the host as unreachable"
+assert_not_contains "$z_end" "no tailnet on this host" \
+  "and must not report a tailnet this vessel plainly has as missing"
+assert_not_contains "$z_end" "published onto" \
+  "one run cannot both claim a route and report that none was made"
+z_record="$HOME_Z/state/service-port.lavish"
+assert_grep "reachability=tailnet-proxied" "$z_record" \
+  "the published record keeps describing the host, which is still reachable by proxy"
+assert_grep "route=none" "$z_record" \
+  "and carries this run's own outcome separately"
+assert_not_contains "$z_end" "was not told" \
+  "a deliberate non-serving run must not describe its own choice to the captain"
+pass "closing a board withdraws its route, publishes none, and still calls the host reachable by proxy"
+
+# --- entry point: a run that starts nothing does not rewrite the owner record --
+#
+# state/lavish/fm-owner is what a server was LAUNCHED with, and it is the only
+# input to the restart-on-mismatch comparison. A publication can vanish under a
+# live board - a neighbouring account running `tailscale serve reset`, or
+# tailscaled losing its serve configuration - and `end` then resolves a loopback
+# link host for a server that was started with the tailnet one.
+
+: > "$FM_TEST_TS_SERVE_STATE"
+: > "$FM_TEST_TS_SERVE_LOG"
+HOME_O=$(make_home "$TMP_ROOT/vessel-o")
+make_serving_lavish "$HOME_O"
+o_out=$(FM_TEST_TS_MODE=userspace FM_HOME="$HOME_O" FM_SERVICE_PORT_RANGE=4851-4852 \
+  "$ROOT/bin/fm-lavish.sh" "$HOME_O/.lavish/board.html" 2>/dev/null)
+o_port=$(printf '%s\n' "$o_out" | sed -n 's|.*://[^:]*:\([0-9][0-9]*\)/session/.*|\1|p' | head -1)
+[ -n "$o_port" ] || fail "the proxied open should emit a port, got: $o_out"
+o_owner="$HOME_O/state/lavish/fm-owner"
+assert_grep "link_host=192.0.2.1" "$o_owner" "the open records the link host it launched the server with"
+
+# The route disappears from under the still-running board.
+: > "$FM_TEST_TS_SERVE_STATE"
+FM_TEST_TS_MODE=userspace FM_HOME="$HOME_O" FM_SERVICE_PORT_RANGE=4851-4852 \
+  "$ROOT/bin/fm-lavish.sh" end "$HOME_O/.lavish/board.html" >/dev/null 2>&1
+assert_grep "link_host=192.0.2.1" "$o_owner" \
+  "a run that launched no server must not record a link host no server was started with"
+
+# The proof it matters: the next run that DOES serve republishes, resolves the
+# tailnet link host again, and must find the record it left agreeing with it.
+o_poll=$(FM_TEST_TS_MODE=userspace FM_HOME="$HOME_O" FM_SERVICE_PORT_RANGE=4851-4852 \
+  "$ROOT/bin/fm-lavish.sh" poll "$HOME_O/.lavish/board.html" 2>&1)
+assert_not_contains "$o_poll" "different address configuration" \
+  "a healthy board must not be torn down over a mismatch a non-serving run invented"
+pass "only a run that launches a server records what it was launched with"
+
 # --- entry point: an explicit --port earns no shortcut -----------------------
 #
 # lavish-axi's own stop shuts down whatever answers /health on the address it is
@@ -783,6 +2291,91 @@ out=$(FM_HOME="$HOME_C" FM_SERVICE_PORT_RANGE=4792-4793 \
 expect_code 0 "$?" "an explicit --port on a proven-own server is a normal stop"
 assert_contains "$out" "stopped" "a proven-own port is still stopped when named explicitly"
 
+# The ownership proof has to ask where the board actually IS. On the vessel this
+# whole branch exists for, the --check pre-read names the tailnet address while
+# the allocation binds loopback, so a wrapper that probes the pre-read cannot
+# recognise its own board: it reports nothing to stop, refuses its own port, and
+# every poll drifts to a fresh one while the old route is left standing.
+: > "$FM_TEST_TS_SERVE_STATE"
+: > "$FM_TEST_TS_SERVE_LOG"
+HOME_OW=$(make_home "$TMP_ROOT/vessel-ow")
+make_serving_lavish "$HOME_OW"
+ow_env=(PATH="$NOWALK:$PATH" FM_TEST_TS_MODE=userspace FM_HOME="$HOME_OW"
+  FM_SERVICE_PORT_RANGE=4915-4916)
+ow_preread=$(env "${ow_env[@]}" "$ROOT/bin/fm-service-port.sh" lavish --check)
+[ "$(field addr "$ow_preread")" = 192.0.2.1 ] \
+  || fail "this case only discriminates while the pre-read names another address, got '$(field addr "$ow_preread")'"
+ow_open=$(env "${ow_env[@]}" "$ROOT/bin/fm-lavish.sh" "$HOME_OW/.lavish/board.html" 2>/dev/null)
+ow_port=$(printf '%s\n' "$ow_open" | sed -n 's|.*:\([0-9][0-9]*\)/session.*|\1|p')
+[ -n "$ow_port" ] || fail "the board must open on this vessel, got '$ow_open'"
+assert_grep "addr=127.0.0.1" "$HOME_OW/state/service-port.lavish" \
+  "and the allocation records the loopback address it actually bound"
+ow_stop=$(env "${ow_env[@]}" "$ROOT/bin/fm-lavish.sh" stop 2>&1)
+expect_code 0 "$?" "stopping this vessel's own board succeeds"
+assert_contains "$ow_stop" "stopped" \
+  "and the wrapper recognises the board it opened rather than reporting nothing to stop"
+# Finding it is half the job. lavish-axi reaches its target at LAVISH_AXI_HOST,
+# so a stop still aimed at the pre-read address withdraws the route and then
+# reports the board not running while it keeps serving on the port it holds.
+assert_not_contains "$ow_stop" "not-running" \
+  "the stop must reach the board at the address it was actually bound on"
+ow_alive=$(node "$ROOT/bin/fm-service-port-probe.mjs" \
+  http "http://127.0.0.1:$ow_port/health" 2>/dev/null)
+[ "$ow_alive" != 200 ] \
+  || fail "the board is still serving on 127.0.0.1:$ow_port after it was reported stopped"
+
+# And with the board gone, the sentence must describe the check that was made:
+# every address a board of this vessel could be on was asked, so naming the one
+# the pre-read guessed hands the reader the single address it is not on.
+ow_none=$(env "${ow_env[@]}" "$ROOT/bin/fm-lavish.sh" stop 2>&1)
+expect_code 0 "$?" "a stop with nothing left of this vessel's own is not a failure"
+assert_contains "$ow_none" "nothing to stop" "and reports that nothing was there"
+assert_not_contains "$ow_none" "192.0.2.1" \
+  "without naming the pre-read address as the scope of a check that asked every address"
+: > "$FM_TEST_TS_SERVE_STATE"
+: > "$FM_TEST_TS_SERVE_LOG"
+pass "a board is looked for, and stopped, where the allocation bound it"
+
+# --- entry point: a run that walks nothing rewrites nothing -------------------
+#
+# --mine hands the allocator a port the caller is already listening on, so it
+# deliberately walks no window and tests no address. On a vessel whose address
+# probe answers a port-scoped errno, the pre-read still names the tailnet
+# address while the allocation bound loopback, so a run that re-derives its
+# resolution from that pre-read publishes the tailnet address for a board that
+# is not on it - and the wrapper, seeing its link configuration change,
+# restarts a healthy board onto an address that cannot bind. Every poll on a
+# live board takes this path.
+
+: > "$FM_TEST_TS_SERVE_STATE"
+: > "$FM_TEST_TS_SERVE_LOG"
+HOME_MP=$(make_home "$TMP_ROOT/vessel-mp")
+make_serving_lavish "$HOME_MP"
+mp_env=(FM_TEST_TS_MODE=portscoped FM_HOME="$HOME_MP" FM_SERVICE_PORT_RANGE=4970-4971)
+mp_open=$(env "${mp_env[@]}" "$ROOT/bin/fm-lavish.sh" "$HOME_MP/.lavish/board.html" 2>/dev/null)
+mp_port=$(printf '%s\n' "$mp_open" | sed -n 's|.*:\([0-9][0-9]*\)/session.*|\1|p' | head -1)
+[ -n "$mp_port" ] || fail "the board must open on this vessel, got '$mp_open'"
+mp_record="$HOME_MP/state/service-port.lavish"
+assert_grep "addr=127.0.0.1" "$mp_record" "the open records the loopback address it bound"
+mp_pid=$(cat "$FM_TEST_SERVERS/$mp_port.pid" 2>/dev/null)
+[ -n "$mp_pid" ] || fail "the open should have left a board server running on $mp_port"
+
+mp_poll=$(env "${mp_env[@]}" "$ROOT/bin/fm-lavish.sh" poll "$HOME_MP/.lavish/board.html" 2>&1)
+assert_grep "addr=127.0.0.1" "$mp_record" \
+  "a run that tested nothing must not overwrite the address a run that did establish"
+grep -q '^reachability=untested$' "$mp_record" \
+  && fail "nor the verdict that run established: $(cat "$mp_record")"
+assert_not_contains "$mp_poll" "different address configuration" \
+  "so the poll finds the configuration its own open left and restarts nothing"
+[ "$(cat "$FM_TEST_SERVERS/$mp_port.pid" 2>/dev/null)" = "$mp_pid" ] \
+  || fail "the healthy board server was restarted by a run that established nothing"
+mp_alive=$(node "$ROOT/bin/fm-service-port-probe.mjs" \
+  http "http://127.0.0.1:$mp_port/health" 2>/dev/null)
+[ "$mp_alive" = 200 ] || fail "and the reviewer's board must still be serving after a poll"
+: > "$FM_TEST_TS_SERVE_STATE"
+: > "$FM_TEST_TS_SERVE_LOG"
+pass "a poll on a live board carries the established resolution instead of re-deriving one"
+
 neighbour_ready="$TMP_ROOT/neighbour.ready"
 rm -f "$neighbour_ready"
 node "$TMP_ROOT/board-server.mjs" "$neighbour_ready" 127.0.0.1 4794 localhost \
@@ -795,8 +2388,12 @@ err=$(FM_HOME="$HOME_C" FM_SERVICE_PORT_RANGE=4792-4793 \
   "$ROOT/bin/fm-lavish.sh" stop --port 4794 2>&1 >/dev/null)
 expect_code 7 "$?" "an unproven --port must be refused, not obeyed"
 assert_contains "$err" "4794" "the refusal names the port it declined to touch"
-assert_contains "$err" "not one this vessel can prove is its own" \
+assert_contains "$err" "cannot prove it is its own" \
   "the refusal says plainly why the port was left alone"
+assert_contains "$err" "something is serving on port" \
+  "and names what it actually observed"
+assert_not_contains "$err" "co-hosted" \
+  "without asserting a neighbouring vessel it never identified"
 alive=$(node "$ROOT/bin/fm-service-port-probe.mjs" http http://127.0.0.1:4794/health 2>/dev/null)
 [ "$alive" = 200 ] || fail "a neighbour's board must still be serving after a refused stop"
 kill "$NEIGHBOUR_PID" 2>/dev/null || true
@@ -808,3 +2405,97 @@ expect_code 0 "$?" "a named port with nothing on it is not a failure"
 assert_contains "$out" "nothing to stop" "an empty port is reported as nothing to stop"
 assert_contains "$out" "4795" "the message names the port that was checked"
 pass "stop --port is held to the same ownership proof as a bare stop"
+
+# --- the published proxy really carries the captain's request ----------------
+#
+# Every case above stops at the record: the port was published, the link named
+# the tailnet, the allowlist carried these names. None of them sends a request
+# through the publication, and the one measured claim this whole path rests on
+# is about the request itself - a browser reaching the board through
+# `tailscale serve` carries the tailnet NAME in its Host header, so a board
+# whose allowlist did not accept that name would answer 403 to the only link the
+# captain was handed.
+#
+# So here `tailscale serve` puts up a real reverse proxy. 127.0.0.2 stands in
+# for the socket the tailnet address answers on inside tailscaled's userspace
+# stack: 192.0.2.1 is unbindable by design in this fixture, and reproducing the
+# stack itself needs privileges no vessel account has. Everything on the board
+# side of the proxy is the real thing - the port the allocator bound, the
+# allowlist fm-lavish.sh handed the server, and the Host header the request
+# carries through.
+cat > "$TMP_ROOT/serve-proxy.mjs" <<'JS'
+import http from "node:http";
+import { writeFileSync } from "node:fs";
+const [ready, listenAddr, listenPort, targetPort] = process.argv.slice(2);
+http
+  .createServer((req, res) => {
+    // A serve proxy passes the request through; the Host the browser sent is
+    // what the board behind it sees, which is the whole point of this case.
+    const upstream = http.request(
+      { host: "127.0.0.1", port: Number(targetPort), path: req.url, method: req.method, headers: req.headers },
+      (up) => {
+        res.writeHead(up.statusCode || 502, up.headers);
+        up.pipe(res);
+      },
+    );
+    upstream.on("error", () => res.writeHead(502).end("bad gateway"));
+    req.pipe(upstream);
+  })
+  .listen({ host: listenAddr, port: Number(listenPort) }, () => writeFileSync(ready, "ready\n"));
+JS
+export FM_TEST_TS_SERVE_PROXY="$TMP_ROOT/proxies"
+export FM_TEST_TS_SERVE_PROXY_SCRIPT="$TMP_ROOT/serve-proxy.mjs"
+export FM_TEST_TS_SERVE_PROXY_ADDR=127.0.0.2
+mkdir -p "$FM_TEST_TS_SERVE_PROXY"
+kill_test_proxies() {
+  local p
+  for p in "$FM_TEST_TS_SERVE_PROXY"/*.pid; do
+    [ -e "$p" ] || continue
+    kill "$(cat "$p")" 2>/dev/null || true
+    rm -f "$p"
+  done
+}
+trap 'kill_test_proxies; kill_test_servers; release_ports; fm_test_cleanup' EXIT
+
+: > "$FM_TEST_TS_SERVE_STATE"
+: > "$FM_TEST_TS_SERVE_LOG"
+HOME_PX=$(make_home "$TMP_ROOT/vessel-px")
+make_serving_lavish "$HOME_PX"
+px_out=$(FM_TEST_TS_MODE=userspace FM_HOME="$HOME_PX" FM_SERVICE_PORT_RANGE=4931-4934 \
+  "$ROOT/bin/fm-lavish.sh" "$HOME_PX/.lavish/board.html" 2>&1)
+px_port=$(printf '%s\n' "$px_out" | sed -n 's|.*://[^:]*:\([0-9][0-9]*\)/session/.*|\1|p' | head -1)
+[ -n "$px_port" ] || fail "the proxied open should emit a session link, got: $px_out"
+grep -qx "$px_port" "$FM_TEST_TS_SERVE_STATE" \
+  || fail "this case only means anything while $px_port is genuinely published"
+
+# The Host a browser sends through the proxy by this node's tailnet name. The
+# board must answer it, because that name is the only thing standing between the
+# captain's click and a 403.
+px_named=$(node "$ROOT/bin/fm-service-port-probe.mjs" \
+  http "http://127.0.0.2:$px_port/session/test" "userspace:$px_port" 2>/dev/null)
+[ "$px_named" = 200 ] \
+  || fail "a request through the proxy carrying the tailnet name was answered $px_named, not 200"
+# And by the tailnet address, which is what the emitted link names here.
+px_addressed=$(node "$ROOT/bin/fm-service-port-probe.mjs" \
+  http "http://127.0.0.2:$px_port/session/test" "192.0.2.1:$px_port" 2>/dev/null)
+[ "$px_addressed" = 200 ] \
+  || fail "the link's own hostname was answered $px_addressed through the proxy, not 200"
+# Reaching the board over the proxy must not have opened it to everyone: the
+# allowlist is still closed to a name nobody put in it.
+px_foreign=$(node "$ROOT/bin/fm-service-port-probe.mjs" \
+  http "http://127.0.0.2:$px_port/session/test" "elsewhere.example:$px_port" 2>/dev/null)
+[ "$px_foreign" = 403 ] \
+  || fail "an unlisted host reached the board through the proxy, answered $px_foreign"
+pass "a request through the published proxy reaches the board with the Host the tailnet sends"
+
+# Closing the board takes the endpoint down, so the captain's link stops
+# answering rather than answering nothing.
+FM_TEST_TS_MODE=userspace FM_HOME="$HOME_PX" FM_SERVICE_PORT_RANGE=4931-4934 \
+  "$ROOT/bin/fm-lavish.sh" stop >/dev/null 2>&1
+px_after=$(node "$ROOT/bin/fm-service-port-probe.mjs" \
+  http "http://127.0.0.2:$px_port/session/test" "userspace:$px_port" 2>/dev/null)
+[ "$px_after" != 200 ] \
+  || fail "the tailnet endpoint still answered 200 after the board was stopped"
+pass "a stopped board leaves nothing answering on the endpoint it published"
+: > "$FM_TEST_TS_SERVE_STATE"
+: > "$FM_TEST_TS_SERVE_LOG"

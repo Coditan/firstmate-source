@@ -83,11 +83,15 @@ account: coditan           # UNIX account on that machine
 services:
   - name: lavish
     port: 4413
-    bind: tailnet          # tailnet | loopback
+    bind: tailnet          # the record's own reachability value
     observed: 2026-07-30   # when this vessel last bound it, not a claim about now
 ```
 
 Each vessel reads those values straight out of its own `FM_HOME/state/service-port.<service>`, which `bin/fm-service-port.sh` already writes in exactly this shape.
+That script's header is the one owner of what every field means, including the full `reachability` and `route` vocabularies and which of `addr`, `tailaddr`, and `dnsname` a consumer binds and which it links.
+`reachability` describes the host and `route` describes what one run did, so a vessel reachable by proxy keeps its `bind:` value even on a run that published no route.
+`untested` is one of its values and is not the same as `loopback`, which is a tested negative, so a row must record it as it stands rather than flattening it to loopback-only.
+Read it there rather than inferring the set from the example above, which shows one row and not the contract.
 
 ## Migration, without central guessing
 
