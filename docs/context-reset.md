@@ -231,6 +231,11 @@ A silent non-fire is the defect class this whole line of work exists to remove, 
 ### What firstmate repairs, and what it must not
 
 Only a missing or unreadable `state/.primary-transcript` record, or one whose recorded session pid differs from the lock pid, has no in-session repair: `bin/fm-sessionstart-nudge.sh` re-records it only on a fresh primary session start, so never hand-write that record.
+Two ways that record came to name the wrong session were measured on 2026-09-03, and the nudge now refuses both.
+Claude Code's background-job daemon can start a helper session in the primary's cwd, under the primary's own process, and that helper's session-start hook runs against the same home; the invariant is that only the session whose own nearest harness process is the lock holder writes the record, and a descendant of the holder is not the holder.
+A copy of the nudge run without its harness-pid library, with a live home's `FM_HOME` still in the environment, wrote an error record into that home from inside a test run; the invariant is that a run which cannot name its own harness never replaces a good record whose owner is alive, and a wrapper that cannot load its libraries writes nothing.
+The correlation of all three overwrites with a Skill invocation in the primary was tested and not reproduced: in a scratch Claude Code 2.1.259 session with a logging `SessionStart` hook, a Skill tool invocation fired no hook and started no daemon or helper, so that reading stands as coincidence unless a future measurement says otherwise.
+[docs/sessionstart-nudge.md](sessionstart-nudge.md) owns both proofs.
 A blocked wake means the re-entry hook or its `.claude/settings.json` needs repair, and both are the firstmate repo's shared tracked material: fix them through the `AGENTS.md` section 1 pipeline and PR path, delegating to a worker while the fleet is live, never by editing them in place.
 Either condition is reported to the captain in `AGENTS.md` section 9 language.
 

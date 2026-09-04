@@ -212,6 +212,54 @@ SH
   chmod +x "$fakebin/ps"
 }
 
+# make_fake_ps_descendant_session <fakebin> <holder-pid> <helper-pid>: the
+# process tree Claude Code's background-job daemon builds under a running
+# primary, as measured on 2026-09-03 - hook shell -> `claude --session-id ...`
+# helper -> `claude bg-pty-host` -> `claude daemon run` -> the lock-holding
+# primary. Every hop above the hook is a claude process; the helper is the
+# nearest one and the holder is four hops up.
+make_fake_ps_descendant_session() {
+  local fakebin=$1 holder_pid=$2 helper_pid=$3
+  cat > "$fakebin/ps" <<SH
+#!/usr/bin/env bash
+set -u
+pid=""
+prev=""
+for arg in "\$@"; do
+  [ "\$prev" = "-p" ] && pid="\$arg"
+  prev="\$arg"
+done
+case "\$*" in
+  *"comm="*)
+    case "\$pid" in
+      $holder_pid|$helper_pid|900002|900003) printf '/usr/local/bin/claude\n' ;;
+      *) printf '/bin/bash\n' ;;
+    esac
+    exit 0 ;;
+  *"args="*)
+    case "\$pid" in
+      $holder_pid) printf 'claude\n' ;;
+      900003) printf 'claude daemon run --origin transient\n' ;;
+      900002) printf 'claude bg-pty-host\n' ;;
+      $helper_pid) printf 'claude --session-id 0305caab-aea8-47d8-a112-f6f6c9181202 --agent claude\n' ;;
+      *) printf 'bash\n' ;;
+    esac
+    exit 0 ;;
+  *"ppid="*)
+    case "\$pid" in
+      $holder_pid) printf '1\n' ;;
+      900003) printf '%s\n' "$holder_pid" ;;
+      900002) printf '900003\n' ;;
+      $helper_pid) printf '900002\n' ;;
+      *) printf '%s\n' "$helper_pid" ;;
+    esac
+    exit 0 ;;
+esac
+exit 1
+SH
+  chmod +x "$fakebin/ps"
+}
+
 # make_fake_ps_flaky <fakebin> <holder-pid> <failures>: the first <failures>
 # invocations cannot read the process table at all, and every one after that
 # behaves like make_fake_ps_holder. This is the transient this seat actually hit
@@ -662,14 +710,15 @@ test_same_pid_table_accepts_the_ancestry_fallback() {
   fakebin=$(fm_fakebin "$root")
   make_fake_ps_ancestry_without_harness "$fakebin" "$$"
   record="$root/state/.primary-transcript"
-  printf 'status=ok\nharness_pid=%s\nsession_id=old-session\ntranscript_path=/tmp/old-session.jsonl\nrecorded_at=1\n' \
-    "$$" > "$record"
+  # No record stands to be protected, so the fallback's job is to record what
+  # it can: a session that cannot name its harness but holds the lock in its
+  # ancestry writes the settled failure rather than nothing.
   printf '%s\npidns=%s\n' "$$" "$(fm_pid_namespace_token)" > "$root/state/.lock"
 
   FM_HARNESS_PID_RETRY_DELAYS='' expect_silent_zero "same-table ancestry fallback" \
     run_nudge_with_payload "$root" "$fakebin" "$CLAUDE_PAYLOAD"
   [ "$(record_field "$record" status)" = error ] \
-    || fail "the same-table ancestry fallback did not replace the old record: $(cat "$record")"
+    || fail "the same-table ancestry fallback did not record: $(cat "$record")"
   [ "$(record_field "$record" error)" = no-harness-process ] \
     || fail "the accepted ancestry fallback did not record the settled harness result: $(cat "$record")"
 }
@@ -680,16 +729,136 @@ test_legacy_lock_accepts_the_ancestry_fallback_once() {
   fakebin=$(fm_fakebin "$root")
   make_fake_ps_ancestry_without_harness "$fakebin" "$$"
   record="$root/state/.primary-transcript"
-  printf 'status=ok\nharness_pid=%s\nsession_id=old-session\ntranscript_path=/tmp/old-session.jsonl\nrecorded_at=1\n' \
-    "$$" > "$record"
   printf '%s\n' "$$" > "$root/state/.lock"
 
   FM_HARNESS_PID_RETRY_DELAYS='' expect_silent_zero "legacy ancestry fallback" \
     run_nudge_with_payload "$root" "$fakebin" "$CLAUDE_PAYLOAD"
   [ "$(record_field "$record" status)" = error ] \
-    || fail "the legacy ancestry carve-out did not replace the old record: $(cat "$record")"
+    || fail "the legacy ancestry carve-out did not record: $(cat "$record")"
   [ "$(record_field "$record" error)" = no-harness-process ] \
     || fail "the legacy ancestry carve-out did not record the settled harness result: $(cat "$record")"
+}
+
+# The ancestry proof was written for "the hook is a child of the primary's own
+# harness process", and it cannot tell that apart from "the hook is a
+# descendant of a DIFFERENT harness process that itself descends from the
+# primary". Measured twice on 2026-09-03: Claude Code's background-job daemon
+# started a helper session in the primary's own cwd, four hops under the
+# primary, and its SessionStart hook found the lock pid in its ancestry, took
+# itself for the lock holder, and rewrote the record with its own transcript -
+# so the ceiling then measured a helper that exited within seconds. The exact
+# proof stops the walk at the hook's own nearest harness process: a lock pid
+# past that process belongs to a session this one merely descends from.
+test_a_session_spawned_under_the_lock_holder_leaves_the_record_alone() {
+  local root="$TMP_ROOT/record-descendant-session" fakebin record holder before out status=0
+  make_primary "$root"
+  fakebin=$(fm_fakebin "$root")
+  sleep 30 &
+  holder=$!
+  make_fake_ps_descendant_session "$fakebin" "$holder" 900001
+  record="$root/state/.primary-transcript"
+  printf 'status=ok\nharness_pid=%s\nsession_id=first-session\ntranscript_path=/tmp/first-session.jsonl\nrecorded_at=1\n' \
+    "$holder" > "$record"
+  before=$(cat "$record")
+  printf '%s\npidns=%s\n' "$holder" "$(fm_pid_namespace_token)" > "$root/state/.lock"
+  out=$(FM_HARNESS_PID_RETRY_DELAYS='' run_nudge_with_payload "$root" "$fakebin" "$CLAUDE_PAYLOAD" 2>&1) || status=$?
+  kill "$holder" 2>/dev/null || true
+  wait "$holder" 2>/dev/null || true
+  expect_code 0 "$status" "descendant-session run"
+  [ -z "$out" ] || fail "a helper session under the primary's own process tree was nudged to run session start: $out"
+  [ "$(cat "$record")" = "$before" ] \
+    || fail "a helper session spawned under the lock holder replaced the holder's transcript record: $(cat "$record")"
+  pass "fm-sessionstart-nudge: a session spawned under the lock holder's process tree leaves the holder's record alone"
+}
+
+# The negative control for the exact proof: the same measured tree, but the
+# lock names the hook's OWN nearest harness process. That session is the holder
+# and must still replace its record, or the fix above would have closed the
+# gate on the one session it exists to serve.
+test_the_lock_holder_still_records_under_the_exact_proof() {
+  local root="$TMP_ROOT/record-exact-holder" fakebin record holder helper
+  make_primary "$root"
+  fakebin=$(fm_fakebin "$root")
+  sleep 30 &
+  holder=$!
+  sleep 30 &
+  helper=$!
+  make_fake_ps_descendant_session "$fakebin" "$holder" "$helper"
+  record="$root/state/.primary-transcript"
+  printf 'status=ok\nharness_pid=%s\nsession_id=old-session\ntranscript_path=/tmp/old-session.jsonl\nrecorded_at=1\n' \
+    "$helper" > "$record"
+  printf '%s\npidns=%s\n' "$helper" "$(fm_pid_namespace_token)" > "$root/state/.lock"
+  FM_HARNESS_PID_RETRY_DELAYS='' expect_silent_zero "exact-proof holder" \
+    run_nudge_with_payload "$root" "$fakebin" "$CLAUDE_PAYLOAD"
+  kill "$holder" "$helper" 2>/dev/null || true
+  wait "$holder" "$helper" 2>/dev/null || true
+  [ "$(record_field "$record" status)" = ok ] \
+    || fail "the lock holder was refused its own record under the exact proof: $(cat "$record")"
+  [ "$(record_field "$record" session_id)" = 11111111-2222-3333-4444-555555555555 ] \
+    || fail "the lock holder kept its superseded record under the exact proof: $(cat "$record")"
+  [ "$(record_field "$record" harness_pid)" = "$helper" ] \
+    || fail "the lock holder's record does not name its own harness process: $(cat "$record")"
+  pass "fm-sessionstart-nudge: the session whose own harness process holds the lock still records"
+}
+
+# The no-pid shape, measured twice on 2026-09-03 (18:51:42Z and 22:52:30Z):
+# the record read `status=error error=no-harness-process harness_pid=` while
+# the lock holder was alive and its good record had been there a moment before.
+# A hook run that cannot name its own harness process has nothing better to
+# offer than the good record already standing, so it leaves that record alone
+# while the record's owner is alive - whatever the process table says about
+# the lock, because on 22:52:30Z the table it consulted was a test's fake `ps`.
+test_an_unidentified_session_never_replaces_a_live_owners_good_record() {
+  local root="$TMP_ROOT/record-unidentified-live-owner" fakebin record holder before out status=0
+  make_primary "$root"
+  fakebin=$(fm_fakebin "$root")
+  sleep 30 &
+  holder=$!
+  # No ancestor is a harness and the fake table does not even know the holder,
+  # so every name-based test fails; only the kernel's own liveness answer for
+  # the record's owner is left, and that has to be enough to refuse.
+  make_fake_ps_no_harness "$fakebin"
+  record="$root/state/.primary-transcript"
+  printf 'status=ok\nharness_pid=%s\nsession_id=first-session\ntranscript_path=/tmp/first-session.jsonl\nrecorded_at=1\n' \
+    "$holder" > "$record"
+  before=$(cat "$record")
+  printf '%s\npidns=%s\n' "$holder" "$(fm_pid_namespace_token)" > "$root/state/.lock"
+  out=$(FM_HARNESS_PID_RETRY_DELAYS='' run_nudge_with_payload "$root" "$fakebin" "$CLAUDE_PAYLOAD" 2>&1) || status=$?
+  kill "$holder" 2>/dev/null || true
+  wait "$holder" 2>/dev/null || true
+  expect_code 0 "$status" "unidentified session next to a live owner"
+  [ "$out" = "$NUDGE_LINE" ] || fail "an unidentified session was not told to run session start: $out"
+  [ "$(cat "$record")" = "$before" ] \
+    || fail "a session that could not name its harness replaced a live owner's good record: $(cat "$record")"
+  pass "fm-sessionstart-nudge: a session that cannot name its harness never replaces a live owner's good record"
+}
+
+# How the no-pid shape reached a real home: a test copied the wrapper into a
+# scratch root without bin/fm-harness-pid-lib.sh and ran it with the caller's
+# FM_HOME still in the environment. Every gate function was then undefined, the
+# failed gate call fell through to the write, and the record landed in the
+# caller's home. A wrapper that cannot load a library it gates on can prove
+# nothing, so it must write nothing and print nothing.
+test_a_wrapper_that_cannot_load_its_libraries_writes_nothing() {
+  local root="$TMP_ROOT/record-missing-lib" record holder before
+  make_primary "$root"
+  cp "$ROOT/bin/fm-sessionstart-nudge.sh" "$ROOT/bin/fm-primary-scope-lib.sh" \
+    "$ROOT/bin/fm-gate-refuse-lib.sh" "$ROOT/bin/fm-operational-input.sh" "$root/bin/"
+  chmod +x "$root/bin/fm-sessionstart-nudge.sh"
+  sleep 30 &
+  holder=$!
+  record="$root/state/.primary-transcript"
+  printf 'status=ok\nharness_pid=%s\nsession_id=first-session\ntranscript_path=/tmp/first-session.jsonl\nrecorded_at=1\n' \
+    "$holder" > "$record"
+  before=$(cat "$record")
+  printf '%s\npidns=%s\n' "$holder" "$(fm_pid_namespace_token)" > "$root/state/.lock"
+  expect_silent_zero "wrapper without its harness-pid library" \
+    run_nudge_script_with_home "$root/bin/fm-sessionstart-nudge.sh" "$root" "$root/bin" "$CLAUDE_PAYLOAD"
+  kill "$holder" 2>/dev/null || true
+  wait "$holder" 2>/dev/null || true
+  [ "$(cat "$record")" = "$before" ] \
+    || fail "a wrapper that could not load its gate library replaced the record: $(cat "$record")"
+  pass "fm-sessionstart-nudge: a wrapper that cannot load its libraries leaves the record alone and says nothing"
 }
 
 # The second door: the harness process could not be resolved at the instant the
@@ -799,9 +968,13 @@ test_opencode_plugin_delivers_exact_nudge_once() {
   local root="$TMP_ROOT/opencode-primary" out status=0
   make_primary "$root"
   cp "$ROOT/bin/fm-sessionstart-nudge.sh" "$ROOT/bin/fm-primary-scope-lib.sh" \
-    "$ROOT/bin/fm-gate-refuse-lib.sh" "$ROOT/bin/fm-operational-input.sh" "$root/bin/"
+    "$ROOT/bin/fm-gate-refuse-lib.sh" "$ROOT/bin/fm-operational-input.sh" \
+    "$ROOT/bin/fm-harness-pid-lib.sh" "$root/bin/"
   chmod +x "$root/bin/fm-sessionstart-nudge.sh"
-  out=$(PLUGIN="$ROOT/.opencode/plugins/fm-primary-sessionstart-nudge.js" \
+  # FM_HOME is pinned to the scratch root: the wrapper the plugin spawns
+  # inherits this environment, and on 2026-09-03 this test ran under a worker
+  # whose FM_HOME named a live home, so its record landed there.
+  out=$(PLUGIN="$ROOT/.opencode/plugins/fm-primary-sessionstart-nudge.js" FM_HOME="$root" \
     WORKTREE="$root" EXPECTED="$NUDGE_LINE" node --input-type=module 2>&1 <<'EOF'
 import { pathToFileURL } from "node:url";
 
@@ -896,6 +1069,10 @@ test_the_lock_holder_still_records_after_a_clear
 test_foreign_pid_table_rejects_an_ancestry_pid_collision
 test_same_pid_table_accepts_the_ancestry_fallback
 test_legacy_lock_accepts_the_ancestry_fallback_once
+test_a_session_spawned_under_the_lock_holder_leaves_the_record_alone
+test_the_lock_holder_still_records_under_the_exact_proof
+test_an_unidentified_session_never_replaces_a_live_owners_good_record
+test_a_wrapper_that_cannot_load_its_libraries_writes_nothing
 test_a_transient_lookup_failure_is_retried
 test_a_settled_lookup_failure_is_recorded_with_its_cause
 test_each_process_table_probe_failure_is_recorded_as_unknown
