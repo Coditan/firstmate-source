@@ -79,6 +79,14 @@ set -eu
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT" || exit 1
 
+# Every selected script builds its own throwaway home, so the runner owns the
+# invariant that no ambient home pointer survives into any of them - serial and
+# --jobs alike. A run started inside a firstmate worker inherits FM_STATE_OVERRIDE
+# and FM_CONFIG_OVERRIDE from the seat service environment, and those outrank a
+# test's own FM_HOME, which would silently point suites at the live fleet.
+unset FM_HOME FM_STATE_OVERRIDE FM_DATA_OVERRIDE FM_ROOT_OVERRIDE \
+  FM_PROJECTS_OVERRIDE FM_CONFIG_OVERRIDE FM_BACKEND 2>/dev/null || true
+
 MODE=
 LIST_ONLY=0
 LIST_FAMILIES=0
@@ -1761,8 +1769,6 @@ else
       set +e
       export TMPDIR="$work/tmp"
       export TMP="$work/tmp"
-      unset FM_HOME FM_STATE_OVERRIDE FM_DATA_OVERRIDE FM_ROOT_OVERRIDE \
-        FM_PROJECTS_OVERRIDE FM_CONFIG_OVERRIDE FM_BACKEND 2>/dev/null || true
       cd "$ROOT" || exit 1
       begin_ms=$(now_ms)
       bash "$script" >"$work/output" 2>&1
