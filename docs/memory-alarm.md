@@ -384,8 +384,9 @@ Where the floor came from, and what share of this machine it is, is the derivati
 Every crossing, on every shape, states where its own floor came from.
 A `SwapTotal` that could not be read is reported as unread, never as a machine with no swap; those are opposite findings and collapsing them would be the substituted zero this alarm exists to refuse.
 
-**No threshold moved, and no condition changed when it fires.**
+**Reading the shape moves no threshold, and no condition changed when it fires.**
 `test_reading_the_shape_moves_no_threshold` in `tests/fm-memory-alarm.test.sh` holds that: the same headroom, growth and stall figures must produce the same crossing and the same silence on both shapes.
+The floor does move with the machine, but with its total RAM and never with its swap shape - the "Floor" section above owns that derivation, and `test_the_floor_is_derived_from_the_machine_rather_than_shipped` and `test_the_derived_floor_is_never_raised_above_the_figure_that_was_measured` in the same file hold it against a fabricated total.
 
 **A swapless-specific floor is still not invented, because the evidence still does not support one.**
 The floor now derives from total RAM on every machine, whatever its shape.
