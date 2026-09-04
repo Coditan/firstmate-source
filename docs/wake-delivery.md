@@ -24,7 +24,7 @@ The reason to keep it separate is fault isolation in both directions: a listener
 | Piece | Owns |
 | --- | --- |
 | `bin/fm-delivery.sh` | the per-home listener loop: observe, submit, retry until drained |
-| `bin/fm-delivery-lib.sh` | the records, the health predicate, the endpoint, and the one-line verdict |
+| `bin/fm-delivery-lib.sh` | the records, the health predicate, the endpoint, the one-line verdict, and the stable key for the condition that verdict names |
 | `bin/fm-delivery-service.sh` | install, converge, restart, publish the endpoint, report status |
 | `bin/fm-delivery-keeper.sh` | the tmux keeper tier for a home whose systemd user manager is unusable |
 | `systemd/fm-delivery@.service` | the unit template, one instance per home, `Restart=always` |

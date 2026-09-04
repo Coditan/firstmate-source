@@ -1032,6 +1032,7 @@ FM_SEAT_RESPAWNER_BACKOFF=30 # seconds before the second attempt for one unreach
 FM_SEAT_RESPAWNER_MAX_BACKOFF=900 # maximum seconds between respawn attempts for one episode
 FM_SEAT_RESPAWNER_MAX_ATTEMPTS=5 # attempts before the respawner emits a finding and stops retrying that episode
 FM_SEAT_LAUNCH_COMMAND=      # test or specialized override for config/seat-launch-command; must be a fresh start, not resume-style
+# FM_SEAT_KEEPER_* tune the hand-started container stopgap instead (bin/fm-seat-keeper.sh); its own header owns that list, and docs/seat-respawner.md owns what the keeper is for
 FM_TG_RECV_ATTACH_POLL=0.5  # seconds between checks while fm-tg-recv-arm is attached to an existing receiver
 FM_TG_RECV_ATTACH_CONFIRM_TIMEOUT=2  # seconds fm-tg-recv-arm waits for a competing arm to publish receiver metadata
 FM_TG_RECV_TERM_WAIT_CYCLES=30  # termination polling cycles before fm-tg-recv-arm preserves a live receiver lock after wrapper shutdown

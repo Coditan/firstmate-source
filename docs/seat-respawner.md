@@ -34,6 +34,7 @@ Attempts back off from `FM_SEAT_RESPAWNER_BACKOFF`, default `30` seconds, up to 
 When the attempt bound is reached for the same delivery condition, the respawner stops retrying that episode and emits a high-severity evidence record through `bin/fm-finding.sh`.
 The rules of that episode, the attempt record, the doubling backoff, and the single give-up finding, live once in `bin/fm-retry-episode-lib.sh` and are sourced by both supervisors, so neither can drift from the other.
 Where each episode's record lives, and how long it outlives its process, stays with the supervisor that owns it.
+`tests/fm-retry-episode.test.sh` covers those shared rules where they live, so a change to them fails there rather than in one supervisor's tests alone.
 
 ## Limits
 
@@ -86,7 +87,7 @@ The log goes quiet after that until the keeper is hand-started again, so this co
 
 Its arguments and environment are owned by the script's own header, which states the launch-command limit again where someone reading the script meets it and points here for the base-index one.
 `tests/fm-seat-keeper.test.sh` covers the behaviour: that a named dead-seat verdict restores the seat, that one reading is not enough, that a wake count changing between two readings is still one condition, that a healthy verdict and a listener restart both leave the seat alone, that an unrecognised verdict is refused and logged, that a declared stay-down is honoured and released, that the attempt bound gives up with a finding, that a state directory which is not the home's own is refused, and that a second keeper refuses to run.
-It covers the rest of this account too: that the delivery verdict is read for the home the keeper was given rather than the environment's, that a keeper started on the target socket's own server is refused while any other start is untouched, that the composer-unknown verdict kills and relaunches over a dead shell but is refused over a live pane and over a pane that could not be read, that the refusal is logged again on a second onset after a healthy reading between them, that a hand-start lifts an exhausted bound and an exhausted-but-unfiled one while carrying a mid-episode record, and that a dead keeper's lock is taken over rather than refusing every later keeper.
+It covers the rest of this account too: that the delivery verdict is read for the home the keeper was given rather than the environment's, that a keeper started on the target socket's own server is refused while any other start is untouched, that the composer-unknown verdict kills and relaunches over a dead shell but is refused over a live pane and over a pane that could not be read, that the refusal is announced again on a second onset whether a healthy verdict, another death condition, or an unrecognised one ended the first, that a hand-start lifts an exhausted bound and an exhausted-but-unfiled one while carrying a mid-episode record, and that a dead keeper's lock is taken over rather than refusing every later keeper.
 
 This is a stopgap, not a replacement for the respawner.
 A home that gains a working per-user service manager should install the unit above and stop hand-starting the keeper.
