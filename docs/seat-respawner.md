@@ -67,6 +67,8 @@ The condition a restore episode counts is the delivery verdict's stable key, own
 One keeper runs per state directory: a second hand-started keeper finds the live one's identity-matched lock record and refuses rather than racing it.
 The state directory it is given must be the state directory of the home it is given, and it refuses to start otherwise; the script header owns that rule and the reason for it.
 Restarting the keeper by hand lifts an exhausted bound: at startup it clears a give-up episode left in its state directory and logs which condition it lifted, because a hand-start is an operator deciding to try again.
+What makes an episode exhausted is its attempt count reaching the bound, not the give-up marker existing, so an episode whose finding could never be filed because the findings surface was unreachable is lifted too, and its log line names it exhausted but unfiled so the operator learns of a give-up that never reached him.
+An episode still below the bound is mid-episode and survives the hand-start with its count and its backoff spacing intact, because lifting it would hand an unattended loop a fresh set of attempts every time the keeper is started.
 The respawner does not lift its own bound that way, because a unit restarting itself is not that decision.
 
 Two limits of this stopgap are known, deliberate, and not fixed here.

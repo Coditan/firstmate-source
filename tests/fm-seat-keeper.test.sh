@@ -272,6 +272,60 @@ test_a_hand_start_lifts_an_exhausted_bound() {
   pass "a hand-start lifts an exhausted bound and names the condition it lifted"
 }
 
+# The give-up marker is written only after the finding is filed, so a keeper that
+# reached its bound against an unreachable findings surface leaves an episode
+# that is exhausted and unfiled. A hand-start must lift that one too, and say so.
+test_a_hand_start_lifts_an_exhausted_but_unfiled_bound() {
+  local dir key
+  dir=$(make_case restart-clears-unfiled-giveup)
+  : > "$dir/not-a-surface"
+  FM_FINDINGS_DIR="$dir/not-a-surface" \
+  FM_SEAT_KEEPER_MAX_ATTEMPTS=1 \
+    run_keeper "$dir" "$DEAD_PANE" 4 || fail "keeper exited non-zero when the findings surface was unreachable"
+  [ "$(session_creations "$dir")" = 1 ] || fail "the first run did not restore exactly once"
+  assert_grep "give-up finding failed" "$dir/home/state/.seat-keeper.log" \
+    "the unreachable findings surface did not fail the give-up finding"
+  [ ! -f "$dir/home/state/.seat-keeper-giveup" ] \
+    || fail "a give-up marker was recorded although the finding was never filed"
+  key=$(sed -n 's/^key=//p' "$dir/home/state/.seat-keeper-attempts")
+  [ -n "$key" ] || fail "the exhausted attempts record named no condition"
+
+  FM_FINDINGS_DIR="$dir/home/data/findings" \
+  FM_SEAT_KEEPER_MAX_ATTEMPTS=1 \
+    run_keeper "$dir" "$DEAD_PANE" 3 || fail "keeper exited non-zero on the restart"
+  [ "$(session_creations "$dir")" = 2 ] \
+    || fail "the restart inherited the exhausted-but-unfiled bound and restored nothing"
+  assert_grep "cleared the exhausted retry episode for condition $key, exhausted but unfiled" \
+    "$dir/home/state/.seat-keeper.log" \
+    "the restart did not name the unfiled condition it lifted"
+  pass "a hand-start lifts an exhausted-but-unfiled bound and names it as unfiled"
+}
+
+# A mid-episode record is not exhausted, so a hand-start must leave its count
+# alone rather than handing an unattended loop a fresh set of attempts.
+test_a_hand_start_leaves_a_mid_episode_record_alone() {
+  local dir key
+  dir=$(make_case restart-keeps-mid-episode)
+  FM_FINDINGS_DIR="$dir/home/data/findings" \
+  FM_SEAT_KEEPER_MAX_ATTEMPTS=5 \
+    run_keeper "$dir" "$DEAD_PANE" 2 || fail "keeper exited non-zero mid-episode"
+  [ "$(sed -n 's/^count=//p' "$dir/home/state/.seat-keeper-attempts")" = 1 ] \
+    || fail "the first run did not leave a mid-episode record with one attempt"
+  key=$(sed -n 's/^key=//p' "$dir/home/state/.seat-keeper-attempts")
+
+  FM_FINDINGS_DIR="$dir/home/data/findings" \
+  FM_SEAT_KEEPER_MAX_ATTEMPTS=5 \
+    run_keeper "$dir" "$DEAD_PANE" 2 || fail "keeper exited non-zero on the restart"
+  [ "$(sed -n 's/^count=//p' "$dir/home/state/.seat-keeper-attempts")" = 2 ] \
+    || fail "the hand-start reset a mid-episode record instead of carrying its count"
+  [ "$(sed -n 's/^key=//p' "$dir/home/state/.seat-keeper-attempts")" = "$key" ] \
+    || fail "the carried mid-episode record named a different condition"
+  assert_no_grep "cleared the exhausted retry episode" \
+    "$dir/home/state/.seat-keeper.log" \
+    "the hand-start lifted a bound that was never reached"
+  pass "a hand-start carries a mid-episode record rather than lifting it"
+}
+
 test_a_dead_keepers_lock_is_taken_over() {
   local dir first_pid waited=0
   dir=$(make_case dead-lock)
@@ -356,5 +410,7 @@ test_the_state_dir_argument_wins_over_the_environment
 test_a_state_dir_that_is_not_the_homes_own_is_refused
 test_the_delivery_verdict_is_read_for_the_home_given
 test_a_hand_start_lifts_an_exhausted_bound
+test_a_hand_start_lifts_an_exhausted_but_unfiled_bound
+test_a_hand_start_leaves_a_mid_episode_record_alone
 test_a_second_keeper_refuses_to_run
 test_a_dead_keepers_lock_is_taken_over

@@ -396,7 +396,7 @@ attempt_restore() {  # <condition-key> <delivery-status-line>
 }
 
 main() {
-  local status verdict_rc verdict_key last_verdict='' seen=0 cycles=0 lock_rc=0 cleared
+  local status verdict_rc verdict_key last_verdict='' seen=0 cycles=0 lock_rc=0 cleared clear_rc
   take_lock || lock_rc=$?
   if [ "$lock_rc" -eq 2 ]; then
     echo "fm-seat-keeper.sh: another keeper already holds $LOCKDIR for this state dir" >&2
@@ -405,8 +405,12 @@ main() {
   [ "$lock_rc" -eq 0 ] || { echo "fm-seat-keeper.sh: could not take the keeper lock" >&2; return 1; }
   write_records || { echo "fm-seat-keeper.sh: could not publish keeper records" >&2; return 1; }
   log "keeper started for socket=$TARGET_SOCKET session=$TARGET_SESSION"
-  cleared=$(fm_retry_clear_exhausted_episode "$ATTEMPTS" "$GIVEUP") \
-    && log "cleared the exhausted retry episode for condition $cleared; a hand-start is the operator deciding to try again"
+  clear_rc=0
+  cleared=$(fm_retry_clear_exhausted_episode "$ATTEMPTS" "$GIVEUP" "$MAX_ATTEMPTS") || clear_rc=$?
+  case "$clear_rc" in
+    0) log "cleared the exhausted retry episode for condition $cleared; a hand-start is the operator deciding to try again" ;;
+    2) log "cleared the exhausted retry episode for condition $cleared, exhausted but unfiled: its give-up finding never reached the findings surface; a hand-start is the operator deciding to try again" ;;
+  esac
   while :; do
     if stay_down; then
       clear_episode

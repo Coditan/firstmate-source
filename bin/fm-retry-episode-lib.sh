@@ -90,15 +90,37 @@ fm_retry_clear_episode() {  # <record-file> <giveup-file>
 # and calls it once at startup; bin/fm-seat-respawner.sh runs as a unit that
 # restarts itself, which is nobody's decision, so it deliberately never calls
 # this and carries its episode across a restart. Prints the condition key whose
-# bound was lifted, so the caller can name it where its operator looks, and
-# returns 1 when there was no exhausted episode to lift.
-fm_retry_clear_exhausted_episode() {  # <record-file> <giveup-file>
-  local record=$1 giveup=$2 key
-  [ -f "$giveup" ] || return 1
-  key=$(fm_retry_kv_get "$giveup" key 2>/dev/null || true)
+# bound was lifted, so the caller can name it where its operator looks.
+#
+# An episode is exhausted by its attempt count reaching the caller's bound, not
+# by the give-up marker existing: fm_retry_giveup_emit writes that marker only
+# after the finding is filed, so a surface that could not be reached leaves an
+# episode that is exhausted and unfiled. Both are lifted, and the caller is told
+# which it lifted through the exit status, because an operator reading the log
+# has to know a bound was reached whose finding never reached him. An attempts
+# record still below the bound is mid-episode and is deliberately left alone,
+# count and backoff spacing intact.
+#
+# Returns 0 when a filed episode was lifted, 2 when an exhausted-but-unfiled one
+# was, and 1 when there was no exhausted episode to lift.
+fm_retry_clear_exhausted_episode() {  # <record-file> <giveup-file> <max-attempts>
+  local record=$1 giveup=$2 max=$3 key count
+  if [ -f "$giveup" ]; then
+    key=$(fm_retry_kv_get "$giveup" key 2>/dev/null || true)
+    [ -n "$key" ] || key=unknown
+    fm_retry_clear_episode "$record" "$giveup"
+    printf '%s\n' "$key"
+    return 0
+  fi
+  case "$max" in ''|*[!0-9]*) return 1 ;; esac
+  count=$(fm_retry_kv_get "$record" count 2>/dev/null || true)
+  case "$count" in ''|*[!0-9]*) return 1 ;; esac
+  [ "$count" -ge "$max" ] || return 1
+  key=$(fm_retry_kv_get "$record" key 2>/dev/null || true)
   [ -n "$key" ] || key=unknown
   fm_retry_clear_episode "$record" "$giveup"
   printf '%s\n' "$key"
+  return 2
 }
 
 fm_retry_backoff() {  # <count-after-attempt> <base> <max>
