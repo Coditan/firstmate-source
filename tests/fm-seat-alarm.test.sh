@@ -418,8 +418,8 @@ test_a_restarter_that_stopped_cycling_is_never_called_running() {
 
   run_alarm "$home" >/dev/null
   kill "$restarter" 2>/dev/null || true
-  assert_no_grep "An automatic restart is running" "$home/outbox" \
-    "a restarter that never cycled was reported to the captain as a restart that is running"
+  assert_no_grep "automatic restarter is running" "$home/outbox" \
+    "a restarter that never cycled was reported to the captain as one that is running"
   assert_grep "Whether anything is trying to bring it back could not be read" "$home/outbox" \
     "an unreadable restarter state was not reported as unreadable"
   pass "a restarter that has stopped cycling is never reported as running"
@@ -505,8 +505,8 @@ test_a_vessel_that_is_not_a_secondmate_home_is_armed_and_nagged() {
 
 # The restarter reading the captain acts on. A respawner that is cycling
 # normally while the seat it started never finished starting is NOT a recovery
-# under way, and reporting it as one puts "an automatic restart is running on
-# this vessel" on the captain's phone every repeat of an absence that will not
+# under way, and reporting it as one puts "this vessel's automatic restarter is
+# running" on the captain's phone every repeat of an absence that will not
 # resolve without him, with the open pane he could act on left out of it.
 test_a_restarter_holding_a_seat_that_never_started_is_not_called_running() {
   local home restarter
@@ -531,8 +531,8 @@ test_a_restarter_holding_a_seat_that_never_started_is_not_called_running() {
 
   run_alarm "$home" >/dev/null
   kill "$restarter" 2>/dev/null || true
-  assert_no_grep "An automatic restart is running" "$home/outbox" \
-    "a restarter holding a seat that never started was reported as a plain restart in progress"
+  assert_no_grep "automatic restarter is running" "$home/outbox" \
+    "a restarter holding a seat that never started was reported as a plain running restarter"
   assert_no_grep "Nothing on this vessel is currently trying to bring it back" "$home/outbox" \
     "a restarter that had already started a seat was reported as nothing trying"
   assert_grep "never finished starting" "$home/outbox" \
@@ -542,16 +542,19 @@ test_a_restarter_holding_a_seat_that_never_started_is_not_called_running() {
   pass "a restarter holding a seat that never finished starting is reported honestly"
 }
 
-# THE ONE SENTENCE THIS CLAUSE MAY CARRY IS THE ONE THAT WAS MEASURED.
+# THE ONE SENTENCE THIS CLAUSE MAY CARRY IS THE ONE THAT WAS MEASURED, AND ITS
+# SUBJECT IS THE PROCESS.
 #
-# A cycling respawner is a fact this alarm can read: its own lock, this home, a
-# live pid, a fresh beacon. Whether it will bring the seat back is not - the
-# episode is bounded, its bound can be spent while the process keeps beating
-# exactly as it does here, and this alarm reads nothing that would tell it
-# which. So the clause states the restart is running and stops there. The
-# outcome half it used to carry - that it "should bring it back on its own" -
-# was the captain being told to go back to bed by an instrument with no reading
-# behind the advice.
+# What this alarm reads for that state is a restarter PROCESS: this home's own
+# respawner lock, a live pid, and a beacon inside the grace. That a RESTART is
+# under way is a different fact and is not read at all - the episode is bounded,
+# and past its bound the loop keeps beating exactly as it does here while never
+# launching again. So the sentence says the restarter is running and stops
+# there: no restart in progress, no retry to come, no retrying that has stopped.
+# The two halves it has carried and lost - "should bring it back on its own",
+# and then a restart rather than the restarter as its subject - were both the
+# captain being told what would happen by an instrument with no reading behind
+# it.
 test_a_running_restarter_is_reported_without_promising_an_outcome() {
   local home restarter
   home=$(make_home running-restarter)
@@ -567,15 +570,17 @@ test_a_running_restarter_is_reported_without_promising_an_outcome() {
 
   run_alarm "$home" >/dev/null
   kill "$restarter" 2>/dev/null || true
-  assert_grep "An automatic restart is running" "$home/outbox" \
-    "the captain was not told that an automatic restart is running here"
-  assert_no_grep "bring it back on its own" "$home/outbox" \
-    "the captain was promised an outcome this alarm never measured"
+  assert_grep "automatic restarter is running" "$home/outbox" \
+    "the captain was not told that this vessel's automatic restarter is running"
+  assert_no_grep "restart is running" "$home/outbox" \
+    "a running restarter was reported to the captain as a restart under way"
+  assert_no_grep "bring it back" "$home/outbox" \
+    "the captain was told something about an outcome this alarm never measured"
   assert_no_grep "should" "$home/outbox" \
     "the restarter clause predicted what will happen rather than reporting what is"
-  assert_no_grep "Nothing on this vessel is currently trying to bring it back" "$home/outbox" \
-    "a running restarter was reported as nothing trying"
-  pass "a running restarter is reported as running and promises nothing"
+  assert_no_grep "stopped retrying" "$home/outbox" \
+    "a running restarter was reported as one that had stopped retrying"
+  pass "a running restarter is reported as a running restarter and promises nothing"
 }
 
 test_a_failed_send_is_retried_rather_than_counted() {

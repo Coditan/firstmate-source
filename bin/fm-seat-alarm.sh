@@ -526,7 +526,7 @@ waiting_clause() {
 
 restarter_clause() {
   case "$RESTARTER" in
-    up) printf 'An automatic restart is running on this vessel.' ;;
+    up) printf "This vessel's automatic restarter is running." ;;
     holding) printf 'A restart already started a first mate here and it never finished starting, so this vessel is waiting on that one and will not start another by itself.' ;;
     down) printf 'Nothing on this vessel is currently trying to bring it back.' ;;
     *) printf 'Whether anything is trying to bring it back could not be read.' ;;

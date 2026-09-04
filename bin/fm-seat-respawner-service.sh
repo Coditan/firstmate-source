@@ -420,8 +420,8 @@ first_turn_held() {
 }
 
 # `up:` is composed into a sentence the captain reads on his phone during an
-# outage - bin/fm-seat-alarm.sh's restarter_clause turns it into "an automatic
-# restart is running on this vessel" - so it may only be printed for the same
+# outage - bin/fm-seat-alarm.sh's restarter_clause turns it into "this vessel's
+# automatic restarter is running" - so it may only be printed for the same
 # reading healthy_respawner takes, beacon and home included. A live pid that has stopped cycling gets its own `stalled:` prefix,
 # as bin/fm-delivery-lib.sh already gives the listener; every reader that is not
 # looking for `up:` or `down:` reads it as unknown, which is the honest answer.
@@ -430,8 +430,8 @@ first_turn_held() {
 # first turn gets its own `holding:` prefix beside those.  The respawner is
 # beating normally, which is what makes `up:` true of the process and false of
 # the vessel: a seat was started, it never finished starting, and this half will
-# not open another beside it.  Reporting that as `up:` would put "an automatic
-# restart is running on this vessel" on the captain's phone every repeat of an
+# not open another beside it.  Reporting that as `up:` would put "this vessel's
+# automatic restarter is running" on the captain's phone every repeat of an
 # absence that will not resolve without him, and drop the open pane he could act
 # on - an instrument reading healthy while the thing it watches is broken, which
 # is the shape this whole area exists to remove.
