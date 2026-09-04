@@ -47,6 +47,9 @@
 #   (t) unreadable pool ownership refuses without mutation
 #   (u) Orca stale-lock cleanup never consults treehouse
 #   (v) a held secondmate home refuses before child cleanup
+#   (w) either spelling of one slot is returned under the pool's own spelling
+#   (x) a second spelling never talks the guard out of refusing unlanded work
+#   (y) a lease on a "~/"-abbreviated pool line is still seen
 set -u
 
 # shellcheck source=tests/lib.sh disable=SC1091
@@ -78,6 +81,9 @@ make_case() {
   : > "$case_dir/lock-return-once"
   : > "$case_dir/change-lease-on-return"
   : > "$case_dir/status-fails"
+  : > "$case_dir/pool-paths"
+  : > "$case_dir/abbrev-home"
+  : > "$case_dir/status-lines"
   printf '0\n' > "$case_dir/status-count"
   printf '0\n' > "$case_dir/return-count"
   : > "$case_dir/returned"
@@ -90,6 +96,18 @@ make_case() {
 #!/usr/bin/env bash
 LEASES="${FM_TEST_CASE_DIR:?}/leases"
 RETURNED="${FM_TEST_CASE_DIR:?}/returned"
+# `treehouse status` abbreviates the pool root as "~/". Reproduce that whenever
+# the case asks for it, so a reader that takes the field verbatim sees a path it
+# cannot compare against an absolute one.
+as_printed() {
+  local p=$1
+  if [ -s "${FM_TEST_CASE_DIR:?}/abbrev-home" ] && [ -n "${HOME:-}" ]; then
+    case "$p" in
+      "$HOME"/*) printf '~/%s\n' "${p#"$HOME"/}"; return 0 ;;
+    esac
+  fi
+  printf '%s\n' "$p"
+}
 case "${1:-}" in
   status)
     count=$(cat "${FM_TEST_CASE_DIR:?}/status-count")
@@ -100,12 +118,20 @@ case "${1:-}" in
       [ "$at" = "$count" ] || continue
       printf '%s\t%s\n' "$p" "$h" >> "$LEASES"
     done < "${FM_TEST_CASE_DIR:?}/lease-on-status"
-    n=0
-    while IFS=$'\t' read -r p h; do
-      [ -n "$p" ] || continue
-      n=$((n + 1))
-      printf '%-5s %-12s %s  (held by %s)\n' "$n" leased "$p" "$h"
-    done < "$LEASES"
+    {
+      n=0
+      while IFS=$'\t' read -r p h; do
+        [ -n "$p" ] || continue
+        n=$((n + 1))
+        printf '%-5s %-12s %s  (held by %s)\n' "$n" leased "$(as_printed "$p")" "$h"
+      done < "$LEASES"
+      while IFS= read -r p; do
+        [ -n "$p" ] || continue
+        awk -F'\t' -v q="$p" '$1 == q {found=1} END {exit !found}' "$LEASES" && continue
+        n=$((n + 1))
+        printf '%-5s %-12s %s\n' "$n" available "$(as_printed "$p")"
+      done < "${FM_TEST_CASE_DIR:?}/pool-paths"
+    } | tee -a "${FM_TEST_CASE_DIR:?}/status-lines"
     exit 0 ;;
   return)
     shift
@@ -121,6 +147,11 @@ case "${1:-}" in
       esac
       shift
     done
+    POOL="${FM_TEST_CASE_DIR:?}/pool-paths"
+    if [ -s "$POOL" ] && ! grep -qxF "$path" "$POOL"; then
+      echo "worktree $path is not managed by treehouse" >&2
+      exit 1
+    fi
     if [ "$count" = 1 ] && [ -s "${FM_TEST_CASE_DIR:?}/lock-return-once" ]; then
       lock=$(/usr/bin/git -C "$path" rev-parse --git-path index.lock)
       mkdir -p "$(dirname "$lock")"
@@ -255,6 +286,19 @@ change_lease_on_return() {  # <case> <holder>
   printf '%s\n' "$2" > "$1/change-lease-on-return"
 }
 
+# Give the pool a slot under exactly this spelling. Once any pool path is
+# registered, the treehouse mock refuses every other spelling of it, as the real
+# tool was measured to on 2026-09-04.
+register_pool_path() {  # <case> <path>
+  printf '%s\n' "$2" >> "$1/pool-paths"
+}
+
+# Make the treehouse mock print pool paths the way the real tool does under a
+# home-rooted pool: "~/" instead of the expanded home directory.
+abbreviate_pool_paths_under_home() {  # <case>
+  printf 'yes\n' > "$1/abbrev-home"
+}
+
 fail_pool_status() {  # <case>
   printf 'yes\n' > "$1/status-fails"
 }
@@ -292,6 +336,7 @@ SH
 run_teardown() {  # <case> <id> [args...]
   local case_dir=$1 id=$2; shift 2
   FM_TEST_CASE_DIR="$case_dir" \
+  HOME="${FM_TEST_HOME:-$HOME}" \
   FM_ROOT_OVERRIDE="$ROOT" \
   FM_STATE_OVERRIDE="$case_dir/state" \
   FM_DATA_OVERRIDE="$case_dir/data" \
@@ -929,6 +974,135 @@ test_unreadable_pool_refuses_without_mutation() {
   pass "(t) unreadable pool ownership refuses without mutation"
 }
 
+# --- (w) one slot, two spellings, one pool ----------------------------------
+#
+# ~/.treehouse is a symlink to /var/lib/vessel/work/worktrees on this vessel, so
+# one slot has two names and a task record can carry either. `treehouse return`
+# compares its argument as a string, so the spelling the pool does not know
+# aborted cleanup with "is not managed by treehouse" for work that was merged and
+# a copy that was clean. Both directions must land on the pool's own spelling.
+#
+# pool-is-alias is the measured vessel shape end to end: the pool's own name for
+# the slot is the HOME-rooted symlink, which `treehouse status` prints abbreviated
+# as "~/", while the task record carries the physical name. Resolving the pool's
+# spelling therefore has to expand that tilde before it can recognise the
+# directory at all - a reader that took the path field verbatim would compare a
+# literal tilde against an absolute path, match no line, and hand the same
+# unknown spelling back to the pool a second time.
+test_either_spelling_returns_under_pool_spelling() {
+  local case_dir rc alias FM_TEST_HOME
+  for direction in pool-is-alias pool-is-real; do
+    case_dir=$(make_case "spelling-$direction")
+    alias="$case_dir/alias"
+    ln -s "$case_dir/slot" "$alias"
+    if [ "$direction" = pool-is-alias ]; then
+      FM_TEST_HOME="$case_dir"
+      abbreviate_pool_paths_under_home "$case_dir"
+      register_pool_path "$case_dir" "$alias"
+      write_task "$case_dir" finished-task dead "$case_dir/slot"
+    else
+      FM_TEST_HOME=
+      register_pool_path "$case_dir" "$case_dir/slot"
+      write_task "$case_dir" finished-task dead "$alias"
+    fi
+
+    set +e
+    run_teardown "$case_dir" finished-task > "$case_dir/stdout" 2> "$case_dir/stderr"
+    rc=$?
+    set -e
+
+    expect_code 0 "$rc" "spelling-$direction: teardown should succeed for either spelling"
+    assert_no_grep "is not managed by treehouse" "$case_dir/stderr" \
+      "spelling-$direction: the pool was handed a spelling it does not know"
+    if [ "$direction" = pool-is-alias ]; then
+      # Precondition on the fixture's own emitted listing: the pool really did
+      # name this slot with an abbreviated root, so the expansion below it is
+      # what made the retry able to recognise the directory.
+      # shellcheck disable=SC2088  # the literal leading tilde is exactly what the pool prints
+      assert_grep "~/alias" "$case_dir/status-lines" \
+        "spelling-$direction: the pool should have listed the slot with an abbreviated root"
+      grep -qxF "$alias" "$case_dir/returned" \
+        || fail "spelling-$direction: the pool's own spelling should have been returned"
+    else
+      grep -qxF "$case_dir/slot" "$case_dir/returned" \
+        || fail "spelling-$direction: the pool's own spelling should have been returned"
+    fi
+  done
+  pass "(w) either spelling of one slot is returned under the pool's own spelling"
+}
+
+# --- (x) the unlanded-work refusal is untouched by the spelling fix ----------
+#
+# The spelling fix must stop the guard firing on a question it was not asked,
+# never soften the question it WAS asked. A commit that exists nowhere else:
+# teardown must still refuse and return nothing.
+#
+# This is a guard-still-refuses regression test, not a retry-interaction test.
+# validate_worktree_teardown_safety runs before teardown_treehouse_return is ever
+# reached, so `treehouse return` is never invoked here and the registered pool
+# alias and the second spelling cannot influence the outcome. They are set up
+# anyway so the case is the same shape as (w), differing only in the unlanded
+# commit - which is what makes the refusal attributable to the guard.
+test_second_spelling_still_refuses_unlanded_work() {
+  local case_dir rc alias
+  # The case name deliberately carries no word this test greps for: every REFUSED
+  # line prints $WT, so a token that also appears in the path would match a
+  # path-naming abort just as happily as the guard this test is about.
+  case_dir=$(make_case spelling-second)
+  alias="$case_dir/alias"
+  ln -s "$case_dir/slot" "$alias"
+  register_pool_path "$case_dir" "$alias"
+  write_task "$case_dir" finished-task dead "$case_dir/slot"
+  git -C "$case_dir/slot" switch -q -c fm/kept-work
+  printf 'never pushed\n' > "$case_dir/slot/kept.txt"
+  git -C "$case_dir/slot" add kept.txt
+  git -C "$case_dir/slot" -c user.email=t@t -c user.name=t commit -q -m "work that landed nowhere"
+
+  set +e
+  run_teardown "$case_dir" finished-task > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  [ "$rc" -ne 0 ] || fail "spelling-second: teardown should refuse genuinely unlanded work"
+  assert_grep "has work not on a remote this project publishes to and not landed" \
+    "$case_dir/stderr" "spelling-second: the refusal must be the unlanded-work guard's own"
+  assert_no_grep "is not managed by treehouse" "$case_dir/stderr" \
+    "spelling-second: the refusal must not be a path-naming abort"
+  [ -s "$case_dir/returned" ] && fail "spelling-second: nothing should have been returned"
+  [ -f "$case_dir/state/finished-task.meta" ] || fail "spelling-second: the task record should survive a refusal"
+  git -C "$case_dir/slot" cat-file -e HEAD:kept.txt 2>/dev/null \
+    || fail "spelling-second: the unlanded commit should still be in the worktree"
+  pass "(x) a second spelling never talks the guard out of refusing unlanded work"
+}
+
+# --- (y) the lease witness reads a home-abbreviated pool line ----------------
+#
+# `treehouse status` prints the pool root as "~/", so a reader that took the
+# path field verbatim compared an unexpanded tilde against an absolute path and
+# matched nothing - the lease witness was blind on a home-rooted pool. Same
+# setup as (g), with the slot under HOME and the pool printing it abbreviated:
+# the lease must still be seen, so the held-slot refusal still fires.
+test_lease_on_abbreviated_pool_line_is_seen() {
+  local case_dir rc FM_TEST_HOME
+  case_dir=$(make_case lease-abbreviated)
+  FM_TEST_HOME="$case_dir"
+  abbreviate_pool_paths_under_home "$case_dir"
+  register_pool_path "$case_dir" "$case_dir/slot"
+  write_task "$case_dir" finished-task dead
+  lease_slot "$case_dir" "$case_dir/slot" "fm:someone-elses-task"
+
+  set +e
+  run_teardown "$case_dir" finished-task > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  [ "$rc" -ne 0 ] || fail "lease-abbreviated: a slot leased to another task was returned"
+  assert_grep "someone-elses-task" "$case_dir/stderr" \
+    "lease-abbreviated: the tilde-abbreviated lease line must still name the holder"
+  [ -s "$case_dir/returned" ] && fail "lease-abbreviated: nothing should have been returned"
+  pass "(y) a lease on a home-abbreviated pool line is still seen"
+}
+
 test_orca_stale_lock_does_not_consult_treehouse() {
   local case_dir rc
   case_dir=$(make_case orca-stale-lock)
@@ -1022,5 +1196,8 @@ test_child_pool_lease_refusal_is_terminal
 test_unreadable_pool_refuses_without_mutation
 test_orca_stale_lock_does_not_consult_treehouse
 test_held_secondmate_home_refuses_before_child_cleanup
+test_either_spelling_returns_under_pool_spelling
+test_second_spelling_still_refuses_unlanded_work
+test_lease_on_abbreviated_pool_line_is_seen
 
 printf '\nall fm-slot-guard tests passed\n'

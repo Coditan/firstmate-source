@@ -83,7 +83,18 @@
 #      attempts. Retries key off the error text, not whether the lock file still
 #      exists after the failed attempt - a lock that self-clears mid-check still
 #      deserves a retry of the return.
-#   2. Other treehouse return failures still abort immediately and loudly (no retry).
+#   2. Other treehouse return failures abort immediately and loudly, with one
+#      exception: the "worktree <path> is not managed by treehouse" signature.
+#      One directory can be reachable under two names (measured 2026-09-04: this
+#      vessel's ~/.treehouse is a symlink to /var/lib/vessel/work/worktrees) and
+#      treehouse compares the returned path as a STRING against the name the slot
+#      was created under. On that signature only, teardown performs ONE extra
+#      `treehouse status` read to ask the pool for its own name for this
+#      directory (fm_slot_pool_path, matching on physically-resolved directory
+#      identity, never on a list of accepted prefixes) and issues at most ONE
+#      more `treehouse return` under that spelling. An unreadable pool, or a
+#      directory the pool does not list, yields the input path unchanged and the
+#      failure is reported as before. Every other signature is still one attempt.
 #   3. If every retry still hits the lock signature and the lock remains, it is removed
 #      and the return tried once more ONLY when the lock is provably stale per
 #      bin/fm-lock-lib.sh's fm_lock_is_provably_stale, passing the worktree dir as the
@@ -685,6 +696,14 @@ treehouse_return_is_index_lock_error() {
   printf '%s\n' "$text" | grep -Eq "Unable to create ['\"].*index\\.lock['\"]: File exists"
 }
 
+# True when treehouse rejected the path itself: the argument does not match any
+# name the pool knows, which on a vessel with a symlinked pool root means a second
+# spelling of a slot the pool does very much manage.
+treehouse_return_is_unmanaged_error() {
+  case "$1" in *"is not managed by treehouse"*) return 0 ;; esac
+  return 1
+}
+
 treehouse_return_is_lease_precondition_error() {
   local text=$1
   printf '%s\n' "$text" | grep -Eq "lease precondition failed: .*([Ll]ease holder does not match|is not leased)"
@@ -830,8 +849,10 @@ current_worktree_uses_treehouse() {
 # stale git index.lock left by a killed crew process. See the script header.
 teardown_treehouse_return() {
   local dir=$1 cd_dir=$2 label=$3 post_cleanup_check=${4:-} self=${5:-$ID} state_dir=${6:-$STATE} pre_return_cleanup=${7:-}
-  local out lock attempt=0 max_retries lock_desc holder_rc
+  local out lock attempt=0 max_retries lock_desc holder_rc return_path pool_path
   local -a lease_args=()
+
+  return_path=$dir
 
   if refresh_teardown_return_ownership "$dir" "$cd_dir" "$label" "$self" "$state_dir"; then
     :
@@ -843,9 +864,31 @@ teardown_treehouse_return() {
   # Capture stdout+stderr so non-lock failures stay visible and lock failures can
   # be matched by signature even when the lock file is already gone mid-check.
   [ -z "$pre_return_cleanup" ] || "$pre_return_cleanup" "$dir" || return 1
-  if out=$( ( cd "$cd_dir" && treehouse return --force ${lease_args[@]+"${lease_args[@]}"} "$dir" ) 2>&1 ); then
+  if out=$( ( cd "$cd_dir" && treehouse return --force ${lease_args[@]+"${lease_args[@]}"} "$return_path" ) 2>&1 ); then
     [ -n "$out" ] && printf '%s\n' "$out"
     return 0
+  fi
+  # One directory, two names. On this vessel ~/.treehouse is a symlink to
+  # /var/lib/vessel/work/worktrees, so a slot is reachable under either prefix
+  # and a task record can carry either. `treehouse return` compares its argument
+  # as a STRING against the name the worktree was created under, so the other
+  # spelling of a perfectly ordinary slot was measured on 2026-09-04 to abort
+  # cleanup with "is not managed by treehouse" for work that was merged and a
+  # copy that was clean. firstmate cannot change that comparison, so it owns the
+  # spelling it hands over: ask the pool for its OWN name for this directory and
+  # try once more. Derived from the pool's listing, never from a list of accepted
+  # prefixes, so a third path form needs no change here. Only on this signature,
+  # so the ordinary path still reads the pool exactly once.
+  if treehouse_return_is_unmanaged_error "$out"; then
+    pool_path=$(fm_slot_pool_path "$dir" "$cd_dir") || pool_path=$return_path
+    if [ -n "$pool_path" ] && [ "$pool_path" != "$return_path" ]; then
+      echo "teardown: the pool does not know $label as $return_path; retrying under its own spelling $pool_path" >&2
+      return_path=$pool_path
+      if out=$( ( cd "$cd_dir" && treehouse return --force ${lease_args[@]+"${lease_args[@]}"} "$return_path" ) 2>&1 ); then
+        [ -n "$out" ] && printf '%s\n' "$out"
+        return 0
+      fi
+    fi
   fi
   [ -n "$out" ] && printf '%s\n' "$out" >&2
 
@@ -879,7 +922,7 @@ teardown_treehouse_return() {
     fi
 
     [ -z "$pre_return_cleanup" ] || "$pre_return_cleanup" "$dir" || return 1
-    if out=$( ( cd "$cd_dir" && treehouse return --force ${lease_args[@]+"${lease_args[@]}"} "$dir" ) 2>&1 ); then
+    if out=$( ( cd "$cd_dir" && treehouse return --force ${lease_args[@]+"${lease_args[@]}"} "$return_path" ) 2>&1 ); then
       [ -n "$out" ] && printf '%s\n' "$out"
       echo "teardown: $label return succeeded on retry; lock cleared on its own" >&2
       return 0
@@ -922,7 +965,7 @@ teardown_treehouse_return() {
         return "$holder_rc"
       fi
       [ -z "$pre_return_cleanup" ] || "$pre_return_cleanup" "$dir" || return 1
-      if out=$( ( cd "$cd_dir" && treehouse return --force ${lease_args[@]+"${lease_args[@]}"} "$dir" ) 2>&1 ); then
+      if out=$( ( cd "$cd_dir" && treehouse return --force ${lease_args[@]+"${lease_args[@]}"} "$return_path" ) 2>&1 ); then
         [ -n "$out" ] && printf '%s\n' "$out"
         echo "teardown: $label return succeeded after stale-lock cleanup" >&2
         return 0

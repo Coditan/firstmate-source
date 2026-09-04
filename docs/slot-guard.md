@@ -1,7 +1,7 @@
 # The pooled-worktree ownership guard
 
 Evidence record for `bin/fm-slot-lib.sh`, `bin/fm-slot-guard.sh`, and the refusal they give `bin/fm-teardown.sh`.
-Everything below was measured on 2026-08-17 with treehouse v2.1.0 on Linux 6.8.0-137-generic; the exact commands and their exact output are reproduced so a later reader can re-run them rather than trust this page.
+The incident evidence was measured on 2026-08-17 with treehouse v2.1.0 on Linux 6.8.0-137-generic, and any later section states its own measurement date; the exact commands and their exact output are reproduced so a later reader can re-run them rather than trust this page.
 
 ## The incident
 
@@ -143,6 +143,27 @@ When the slot is leased to the task being torn down it also passes `--if-lease-h
 The refusal holds under `--force` deliberately.
 The captain's authority to discard work is authority over *this* task's work; it is never authority to destroy a third party's work he was never told was there.
 `FM_TEARDOWN_SLOT_OVERRIDE=<holder>` is the deliberate escape hatch, and it is harder to give than `--force` precisely because it cannot be given without first learning who is being displaced.
+
+## One directory, two names (measured 2026-09-04)
+
+A pooled slot can be reachable under two names: on this vessel `~/.treehouse` is a symlink to `/var/lib/vessel/work/worktrees`, and a task record carries whichever name was physical when it was written.
+treehouse keys its pool on the name the slot was created under and compares the argument to `treehouse return` as a plain STRING, so the spelling the pool does not know aborted cleanup with `worktree <path> is not managed by treehouse` for a task whose work was merged and whose local copy was clean.
+Measured non-destructively with a lease precondition that cannot fire: the `/var/lib` spelling gives that refusal, while the `~/.treehouse` spelling of the same directory reaches the lease check normally.
+
+firstmate cannot change the comparison inside that tool, so it owns the only thing it can - which spelling it hands over.
+`fm_slot_pool_path` asks the pool for its own name for a directory, matching on physically-resolved directory identity, so the accepted spelling is DERIVED from the pool's own listing and never enumerated as a list of accepted path forms; a third path form needs no change.
+It fails soft: an unreadable pool, or a directory the pool does not list, yields the input path unchanged, so every pre-existing path behaves as before.
+`bin/fm-teardown.sh` applies it only on that measured failure signature, as a single retry, so an ordinary teardown still reads the pool exactly once; that script's header owns the retry procedure.
+
+`treehouse status` abbreviates the pool root as `~/`, so a reader that takes the path field verbatim compares an unexpanded tilde against an absolute path and silently matches nothing - which left the lease witness above blind on any home-rooted pool.
+Both readers in `bin/fm-slot-lib.sh` now expand that field through one shared helper.
+
+The writer was investigated and deliberately not changed: `bin/fm-spawn.sh` records `worktree=` from the backend's current-path probe - on herdr, `pane.foreground_cwd`, which reports the OS-level PHYSICAL cwd - and three live panes were measured, including two whose records carry the `~/.treehouse` spelling, all returning the `/var/lib` name.
+The spawn script never chooses a spelling; it records the directory's true physical name, and `~/.treehouse` stopped being that name when it became a symlink, so the stale spelling is the pool's.
+One exposure is knowingly left standing: `bin/fm-home-seed.sh`'s warn-only rollback return still passes a recorded path straight through, because that script sources no libraries today.
+
+None of this relaxes a refusal - it only stops a guard firing on a question it was not asked.
+The ownership guard and the unlanded-work checks are unchanged, and case (x) in `tests/fm-slot-guard.test.sh` proves that unlanded work behind a second spelling is still refused with nothing returned, while case (w) proves both spellings of one slot are returned under the pool's own.
 
 ## Where a watcher genuinely cannot hold the property, and why
 
