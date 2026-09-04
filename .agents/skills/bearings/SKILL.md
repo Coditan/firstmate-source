@@ -35,6 +35,11 @@ It never tears down a task, merges a PR, dispatches new work, or mutates any tas
    The report uses the same four complete sections as the chat (see the chat-response contract below), in the same order, each always present, and adds the detail the chat omits:
    - **Title** - `# Bearings - <day> <YYYY-MM-DD>` (use "Morning status" only when the captain specifically asks for a morning brief), followed by two or three sentences framing where things stand.
    - **Captain's Call** - every open decision summarized with its options from the structured decision record, plus each PR ready to merge and each needed credential or login, every PR with the full `https://...` URL, never a bare `#number`.
+     Render the snapshot's `captain holds withheld from decisions_open` disclosure beside those decisions, its count and its reasons together.
+     `decisions_open` is the captain-actionable set, not the open set: a decision already settled as Done was never a candidate and is never counted as withheld, so the number means decisions this surface is not showing him rather than decisions that exist.
+     Read it with its reasons: a record he has already answered whose close is unfinished is counted under `answered_pending_close`, so the reasons beside the number are what separate the decisions still waiting on him from the ones he has already made.
+     Bearings is what makes that count fleet-wide, summing this home's disclosure with the same disclosure from every registered secondmate home, so a decision routed away from this home is counted no differently from one kept here.
+     Print the count and its reasons rather than only the caveat, because a count of two looked complete for nineteen days on one vessel purely because nothing beside it said what it was not counting.
    - **Recently Landed** - the bounded current recent-completions baseline from structured state across the main fleet and every registered secondmate home, rendered in full on every run.
    - **Underway** - each live direct report making progress, with its current state, and the plans / main pickup pointers worth reopening (`data/<id>/report.md` files, `.lavish/*.html` boards).
    - **Charted Next** - queued or gated work, including any main-inventory integrity warning and any `integrity`-array item shown as ready with its dangling-edge caution, with each item's blocker, date, or integrity reason.
@@ -52,6 +57,8 @@ This skill is the one owner of the `/bearings` chat-response format; the snapsho
 Every `/bearings` chat response renders EXACTLY these four sections, in THIS order, and nothing else structural (there is no At Anchor section):
 
 1. **Captain's Call** - ONLY items that need the captain's own action now: a decision to make, a PR to approve or merge, a credential or login to provide, or a blocker only the captain can clear.
+   The fleet-wide `captain holds withheld from decisions_open` disclosure renders here too, count and reasons together, on the terms the report-file section above states.
+   The chat digest is this skill's declared required minimum and is usually all the captain reads, so a disclosure printed only in the dated report file sits where he is not looking - which is the failure this count exists against.
    Empty-state: "Nothing needs your action right now."
 2. **Recently Landed** - the bounded current recent-completions baseline: merged PRs, completed scouts, and finished local-only merges across the main fleet and every registered secondmate home.
    Empty-state: "No recent completions are in the current baseline."
