@@ -306,12 +306,40 @@ The leak ran about 22 hours of a 22.9-hour boot, post-repair windowed readings a
 That ordinary work finishes and a starvation does not is measured on this seat and observed once on `tugboat`'s.
 A deliberate swap-thrash reproduction, held long enough to produce a windowed curve, is still outstanding and is what would turn the loud end from an after-the-fact counter into a measurement.
 
-### Floor: 2,400 MiB
+### Floor: 10.232% of total RAM
 
-10.2% of this machine's RAM, and **6.1 times below** the lowest headroom ordinary busy operation reached.
+**What ships is the share, not the number.**
+The floor was measured at 2,400 MiB on the 23,456 MiB calibration host, which is 10.232% of that machine's RAM and **6.1 times below** the lowest headroom ordinary busy operation reached there.
+The alarm reads `MemTotal` on every poll already, so it derives the floor as that same share of whatever machine it is actually on: 2,400 MiB on the calibration host, 793 MiB on a 7,746 MiB one.
+The share is stated to three decimals wherever the alarm prints it, because that is the precision at which a reader multiplying it by their own `MemTotal` lands back on the floor the same line reports - at 10.2% they would be three MiB out on a 7,746 MiB host and twenty out on a 64 GiB one.
 
-**What would have to happen to cross it:** from that busy low, something would have to take a further **12,256 MiB** without the horizon condition having fired first - which is why the floor is a backstop rather than the primary trigger.
+**The share only carries downward, and the cap is deliberately one-directional.**
+Applied to a machine smaller than the calibration host the share claims *less* headroom than a measurement already supports, which is honest.
+Applied upward it would claim more - 10.232% of a 64 GiB host is 6,706 MiB, a backstop a busy machine of that size could sit under during ordinary work, asserting an ordinary-headroom baseline at a size this fleet has never measured.
+That is the defect this derivation replaced, mirrored.
+So the derived floor is capped at the 2,400 MiB that was actually measured, and a machine above the calibration host says on its crossing line that its floor was capped and names the share it declined, rather than reporting a share it is not using.
+
+**What would have to happen to cross it on the calibration host:** from that busy low, something would have to take a further **12,256 MiB** without the horizon condition having fired first - which is why the floor is a backstop rather than the primary trigger.
 It exists for the shapes the horizon cannot see: memory taken by processes below the tracking floor, by many small processes at once, or by something that arrives and consumes it entirely between two samples.
+
+**Why the share rather than the poll-cadence distance.**
+The record holds two candidate derivations and only one of them is measured.
+The distance a poll cadence must cover is the better argument, but the number it needs - how much memory ordinary work takes between two 300-second polls - has never been measured in this fleet on any host, so a floor derived from it would be a preference wearing a derivation's clothes.
+The share is measured: it is exactly the relationship the 2,400 MiB stood in to its own host, carried across unchanged.
+
+**What the share does not establish**, and the crossing line says so rather than leaving it to be assumed: that this fleet's ordinary busy headroom is itself proportional to machine size.
+Only one host has an ordinary-operation baseline.
+The share transfers the calibration honestly; it does not verify it anywhere else.
+
+**`FM_MEMORY_ALARM_FLOOR_MIB` still wins.**
+A home that sets it gets that floor, and the crossing line says the floor was configured rather than derived and names what the derivation would have given - as does `--status`, on both the crossed and the calm verdict.
+That note rides the same places the derivation's own does: it is what a reader has in front of them when the floor is what fired, and it is not repeated on a recovery, a quiet poll, or a verdict that could not be reached, which would cost noise on every sweep to restate a number that did not decide anything.
+A value that is not a positive number of MiB is a typo rather than a choice, so it falls back to the derivation and every verdict says that too - the same way an unusable stall gate does.
+An **empty** value counts as one of those and is reported rather than passed off as unset: the stall gate treats empty as its documented off switch, but this floor has no off switch, so an empty one is a `$(...)` that produced nothing rather than a floor a home chose.
+
+**When the total cannot be read**, the floor cannot be derived from it, and the alarm falls back to the 2,400 MiB calibration figure and names it as **inherited here rather than derived** - because a margin nobody restates after a host move is the exact failure this derivation replaced.
+That fallback is **defensive rather than reachable today**: `bin/fm-memory-reading.sh` clears `MemTotal` and `MemAvailable` together, so a reading with no total has no available either and the alarm has already reported itself blind before the floor is settled.
+It is kept because the reader's coupling is that component's contract rather than the alarm's, and it costs nothing if that contract ever moves.
 
 ### Recovery margin: 1.25
 
@@ -335,38 +363,46 @@ The machine runs, and then the kernel kills something.
 Headroom is honest there and the distance to the floor is the entire warning, because there is no thrashing stretch for the stall condition to see and nothing left to extrapolate once the kill lands.
 
 So one set of numbers cannot be right for both shapes, and the floor is where that bites.
-The floor was derived twice over as a property of **its** host: 2,400 MiB is 10.2% of that machine's 23,456 MiB, and 6.1 times below the lowest RAM headroom ordinary busy work reached there.
-Neither figure travels.
+The floor was derived twice over as a property of **its** host: 2,400 MiB is 10.232% of that machine's 23,456 MiB, and 6.1 times below the lowest RAM headroom ordinary busy work reached there.
+The absolute figure does not travel.
 The same 2,400 MiB is **31.0%** of a 7,746 MiB host, where it stops being a backstop below ordinary operation and becomes a line ordinary operation may sit near.
-This is live rather than theoretical: this vessel is moving from a 23,456 MiB machine with 32 GiB of swap onto a 7,746 MiB host with none, so the alarm that is an early warning here would sit on the edge there with no thrashing phase to warn during.
+
+This was measured happening rather than predicted.
+On 2026-09-04, across roughly four hours on a 7,746 MiB seat with 12 GiB of swap, the headroom condition crossed and self-recovered six times - shortages of 33m8s, 5m15s, 12m4s, 5m19s and 5m6s among them - while `memory.events` reported `oom_kill 0` throughout, every lane kept working, and every crossing cleared on its own.
+A single code check on this repository routinely takes 1-3 GB and was measured at 3,860 MiB, half that machine in one process, so ordinary validation lanes cross a 31% floor as a matter of course.
+The condition this document calls a backstop had become the one that fired most.
+
+**The share is what travels, so that is what ships**, and the "Floor" section above owns the derivation.
+The margin also has to be *stated* on every machine, not only the swapless one: the inherited 2,400 MiB sat unremarked on this host precisely because the note that would have named it fired only where there was no swap.
 
 ### What ships, and what deliberately does not
 
 The alarm now reads `MemTotal` and `SwapTotal` from the same reading it already takes, and states in its own voice what its margin is worth on the machine it is on.
 On a machine with swap it says that healthy RAM headroom is not evidence the machine is healthy and that the stall condition is the one that answers that.
-On a machine with no swap it says there is no degrading stretch below the floor, gives the floor's share of **this** machine's RAM beside the 10.2% it was derived at, and says plainly that the margin is inherited here rather than verified.
+On a machine with no swap it says there is no degrading stretch below the floor and that what the floor's distance buys where nothing degrades below it is unverified.
+Where the floor came from, and what share of this machine it is, is the derivation note's job and is stated on every shape rather than only this one, so the two notes do not restate each other.
+Every crossing, on every shape, states where its own floor came from.
 A `SwapTotal` that could not be read is reported as unread, never as a machine with no swap; those are opposite findings and collapsing them would be the substituted zero this alarm exists to refuse.
 
-**No threshold moved, and no condition changed when it fires.**
+**Reading the shape moves no threshold, and no condition changed when it fires.**
 `test_reading_the_shape_moves_no_threshold` in `tests/fm-memory-alarm.test.sh` holds that: the same headroom, growth and stall figures must produce the same crossing and the same silence on both shapes.
+The floor does move with the machine, but with its total RAM and never with its swap shape - the "Floor" section above owns that derivation, and `test_the_floor_is_derived_from_the_machine_rather_than_shipped` and `test_the_derived_floor_is_never_raised_above_the_figure_that_was_measured` in the same file hold it against a fabricated total.
 
-**A swapless floor was not invented, because the evidence does not support one.**
-Two candidate derivations were tried against the record and both fail:
+**A swapless-specific floor is still not invented, because the evidence still does not support one.**
+The floor now derives from total RAM on every machine, whatever its shape.
+That was originally set aside on the grounds that 10.232% of 7,746 MiB is 793 MiB, which is *looser in absolute terms* on the machine with the least warning.
+What the four hours above settled is that the alternative is not a tighter warning but a permanent one: a floor that sits inside ordinary operation fires during ordinary work and stops being read at all, which is less warning rather than more.
 
-- **The floor as a share of RAM.**
-  10.2% of 7,746 MiB is 790 MiB.
-  That is *looser in absolute terms* on the machine with no shock absorber and the least warning, which is the wrong direction, and it would also be a change to `headroom` that this branch is constrained not to make.
-- **The floor as a distance the poll cadence must cover.**
-  This is the right shape of argument, and the number it needs is how much memory ordinary work on a small swapless host consumes between two 300-second polls.
-  That has never been measured on such a host in this fleet.
+The other derivation, **the floor as a distance the poll cadence must cover**, remains the better argument and remains unmeasured: the number it needs is how much memory ordinary work on a small host consumes between two 300-second polls, and that has never been measured on such a host in this fleet.
+A floor derived from it today would be a preference wearing a derivation's clothes.
 
 What the record does hold is one reading from a 7,746 MiB host: `MemAvailable` sat at 3,575 to 3,578 MiB throughout the 2026-08-27 incident, while that machine was unusable.
-That is 1.49 times the floor, against the 6.1 times the floor sits below ordinary busy headroom on the calibration host.
+That is 4.5 times the 793 MiB the share derives there - and it was 1.49 times the 2,400 MiB that used to be applied there, against the 6.1 times the floor sits below ordinary busy headroom on the calibration host.
 It is a single reading from a degraded machine and not an ordinary-operation baseline, so it does not set a floor either - but it is enough to say the floor's stated safety property is unverified at that host size rather than merely untested.
 
-**What would settle it** is the same measurement the floor already rests on, taken again on the destination: `MemAvailable` sampled every 60 seconds through a deliberately driven busy period of this fleet's own work on the 7,746 MiB swapless host, giving the minimum and median ordinary headroom there.
-The floor then follows from the same rule that produced 2,400 MiB, rather than from a preference.
-Until that exists, the alarm reports the shape and states the gap.
+**What would settle it** is the same measurement the floor already rests on, taken again on the destination: `MemAvailable` sampled every 60 seconds through a deliberately driven busy period of this fleet's own work on the 7,746 MiB host, giving the minimum and median ordinary headroom there.
+The floor then follows from the same rule that produced 2,400 MiB, rather than from a share carried across.
+Until that exists, the alarm derives the share, reports the shape, and states the gap in its own crossing line.
 
 ### The container's own cap, which is not in this branch
 
@@ -422,9 +458,11 @@ Stated because a limit nobody wrote down is one somebody will later assume away.
   A host that was suspended or frozen for hours comes back, replaces the stored sample it could no longer use, and reads healthy.
   Nothing in the alarm says it was away, because while it was away there was no seat to say it to.
   `--armed` is the instrument for that and it answers only at session start.
-- **Its floor is calibrated for one host size, and it says so rather than adjusting.**
-  See "What these numbers are worth on a different machine" above.
-  On a small host with no swap the floor is a much larger share of RAM than the share it was derived at, no ordinary-headroom baseline has been measured at that size, and the alarm reports that gap instead of inventing a number to close it.
+- **Its floor derives from a share measured on one host size, and it says so on every crossing.**
+  See "Floor: 10.232% of total RAM" and "What these numbers are worth on a different machine" above.
+  The 10.232% is the relationship one measured floor stood in to one measured host, and nothing establishes that this fleet's ordinary busy headroom is itself proportional to machine size - only that host has an ordinary-operation baseline.
+  So the share is carried DOWN onto a smaller machine and never up: above the calibration host the floor is capped at the 2,400 MiB somebody measured, because deriving upward would assert a baseline at a size nobody has measured, which is the same defect mirrored.
+  Every crossing names which of the three it was - derived, capped, or configured - instead of leaving the margin to be assumed.
 - **It measures the host, not this container's own cap.**
   A seat can exhaust its own cgroup limit while the host reads healthy, and no condition here sees that.
 - **It is a call for a decision, not a decision taken.**
@@ -521,8 +559,8 @@ Readings during the incident: load 18.20/18.52/18.92 on 4 cores, iowait 56-71%, 
 
 **The alarm was armed, running, and correct not to fire**, and the reason is worth stating exactly because it is a property of the two conditions rather than a bug in either:
 
-- `headroom` compares `MemAvailable` against the 2,400 MiB floor.
-  It read **3,575-3,578 MiB throughout** - comfortably above it.
+- `headroom` compares `MemAvailable` against the floor, which was the shipped 2,400 MiB at the time and would be 793 MiB on that 7,746 MiB host today.
+  It read **3,575-3,578 MiB throughout** - comfortably above either.
 - `horizon` extrapolates growth across tracked processes.
   The runaway had finished growing 21 hours earlier and was stable, so there was **no growth to extrapolate**.
 
