@@ -542,6 +542,53 @@ test_a_restarter_holding_a_seat_that_never_started_is_not_called_running() {
   pass "a restarter holding a seat that never finished starting is reported honestly"
 }
 
+# The same reading one step further on. A respawner that has spent its attempt
+# bound will never launch again for the absence standing now, while its process
+# keeps beating exactly as it did before, so every repeat to the captain would
+# otherwise carry "an automatic restart is running and should bring it back on
+# its own" for something nothing is retrying. He acts on that sentence by going
+# back to bed.
+test_a_restarter_that_stopped_retrying_is_never_called_running() {
+  local home restarter key
+  home=$(make_home gave-up-restarter)
+  record_seat "$home" 999999
+  record_endpoint "$home"
+  restarter=$(start_harness_shaped_process "$home" claude)
+  mkdir -p "$home/state/.seat-respawner.lock"
+  {
+    printf 'pid=%s\n' "$restarter"
+    printf 'fm-home=%s\n' "$home"
+  } > "$home/state/.seat-respawner.lock/record"
+  # Cycling normally: a beacon this respawner just wrote.
+  : > "$home/state/.last-seat-respawner-beat"
+  # The episode it is spending cycles against, and its give-up recorded against
+  # that same condition. These are the respawner's own persisted records.
+  key=$(printf 'no session has published where the model turn lives' | cksum | awk '{print $1 ":" $2}')
+  printf 'key=%s\ncount=5\nnext=0\nholds=0\n' "$key" > "$home/state/.seat-respawn-attempts"
+  printf 'key=%s\nfinding=f-gave-up\n' "$key" > "$home/state/.seat-respawn-giveup"
+
+  run_alarm "$home" >/dev/null
+  assert_no_grep "on its own" "$home/outbox" \
+    "a restarter that stopped retrying was reported as bringing the seat back on its own"
+  assert_no_grep "Nothing on this vessel is currently trying to bring it back" "$home/outbox" \
+    "a restarter that had tried and stopped was reported as nothing having tried"
+  assert_grep "stopped retrying" "$home/outbox" \
+    "the captain was not told the automatic restart has stopped retrying"
+  assert_grep "without you" "$home/outbox" \
+    "the captain was not told nothing further starts without him"
+
+  # A give-up against a condition that no longer stands says nothing about the
+  # one that does, so the ordinary reading comes back.
+  : > "$home/outbox"
+  printf 'key=0:0\nfinding=f-stale\n' > "$home/state/.seat-respawn-giveup"
+  rm -f "$home/data/seat-alarm.state"
+  run_alarm "$home" >/dev/null
+  kill "$restarter" 2>/dev/null || true
+  assert_no_grep "stopped retrying" "$home/outbox" \
+    "a give-up against a superseded condition was reported for the absence standing now"
+  pass "a restarter that stopped retrying is never reported as one that is still trying"
+}
+
 test_a_failed_send_is_retried_rather_than_counted() {
   local home now
   home=$(make_home send-failure)
@@ -676,4 +723,5 @@ test_a_restarter_that_stopped_cycling_is_never_called_running
 test_a_secondmate_home_is_never_armed_and_is_disarmed_if_it_was
 test_a_vessel_that_is_not_a_secondmate_home_is_armed_and_nagged
 test_a_restarter_holding_a_seat_that_never_started_is_not_called_running
+test_a_restarter_that_stopped_retrying_is_never_called_running
 test_the_watcher_runs_the_armed_alarm_and_pages_the_captain_itself

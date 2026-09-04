@@ -535,6 +535,102 @@ test_a_giveup_reached_without_holds_still_names_the_open_pane() {
   pass "a give-up reached without holds still names the pane still open"
 }
 
+# WHAT REFUTES A SENTENCE IS NOT WHAT ENDS THE EPISODE, AND THE FINDING MAY NOT
+# CONFLATE THEM.
+#
+# The give-up finding is read on a phone by someone deciding whether to walk to
+# a machine, and its refuted-by line is where he learns what would change the
+# picture. Saying the pane closing "ends this episode" tells him to close the
+# pane and wait for a relaunch that cannot come: past the bound the attempt
+# record still holds launches+holds at MAX_ATTEMPTS for the same condition key,
+# so one_cycle returns at the bound test on every later cycle. The pane closing
+# refutes the still-open-pane sentence and nothing more. Both halves are checked
+# here against what the respawner actually does afterwards.
+test_the_giveup_says_what_ends_the_episode_and_what_only_refutes_a_sentence() {
+  local home delivery tmux log status findings refuted pane_sentence launches
+
+  home=$(make_home giveup-episode-end)
+  status="$home/status.txt"
+  delivery="$home/fake-delivery"
+  tmux="$home/fake-tmux"
+  log="$home/tmux.log"
+  printf 'undeliverable: listener pid 1 is up with 1 wake(s) pending, but no session has published where the model turn lives\n' > "$status"
+  write_fake_delivery "$delivery"
+  write_confirming_fake_tmux "$tmux" "$log"
+
+  FM_SEAT_FIRST_TURN_DEADLINE=600 FM_SEAT_RESPAWNER_MAX_ATTEMPTS=1 \
+    FM_FAKE_DELIVERY_STATUS="$status" run_respawner_once "$home" "$delivery" "$tmux" \
+    || fail "respawner refused the first unreachable check"
+  FM_SEAT_FIRST_TURN_DEADLINE=600 FM_SEAT_RESPAWNER_MAX_ATTEMPTS=1 \
+    FM_FAKE_DELIVERY_STATUS="$status" run_respawner_once "$home" "$delivery" "$tmux" \
+    || fail "respawner refused the give-up check"
+
+  findings=$(find "$home/data/findings" -maxdepth 1 -type f -name '*.json' | wc -l | tr -d ' ')
+  [ "$findings" = 1 ] \
+    || fail "the episode never reached its bound; got $findings give-up findings"
+  assert_grep "is still open in pane %9" "$home/data/findings/"*.json \
+    "the fixture did not reach the open-pane claim this case is about"
+
+  # The finding record is this component's own emitted output; refuted_by is
+  # read as the field it is rather than as text in a file.
+  refuted=$(jq -r '.refuted_by' "$home/data/findings/"*.json) \
+    || fail "the give-up finding carried no readable refuted_by"
+  pane_sentence=$(printf '%s\n' "$refuted" | tr '.' '\n' | grep -i 'pane above closing' | head -1)
+  [ -n "$pane_sentence" ] \
+    || fail "the refuted-by line never says what closing the open pane would mean: $refuted"
+  case "$pane_sentence" in
+    *refutes*) : ;;
+    *) fail "the pane sentence does not scope itself to the claim it refutes: $pane_sentence" ;;
+  esac
+  case "$pane_sentence" in
+    *"ends this episode"*) fail "the refuted-by line still says closing the pane ends the episode: $pane_sentence" ;;
+  esac
+  case "$refuted" in
+    *"delivery status"*) : ;;
+    *) fail "the refuted-by line never names a changed delivery status as what clears the episode: $refuted" ;;
+  esac
+  case "$refuted" in
+    *lock*) : ;;
+    *) fail "the refuted-by line never names a seat taking this home's lock as what clears the episode: $refuted" ;;
+  esac
+  case "$refuted" in
+    *stay-down*) : ;;
+    *) fail "the refuted-by line never names the stay-down marker as what clears the episode: $refuted" ;;
+  esac
+
+  # The pane closes, so the record it left is retired exactly as
+  # deliver_first_turn retires it on a confident absence. The episode is
+  # untouched by that: nothing launches again.
+  rm -f "$home/state/.seat-first-turn"
+  FM_SEAT_FIRST_TURN_DEADLINE=600 FM_SEAT_RESPAWNER_MAX_ATTEMPTS=1 \
+    FM_FAKE_DELIVERY_STATUS="$status" run_respawner_once "$home" "$delivery" "$tmux" \
+    || fail "respawner refused the cycle after the pane closed"
+  launches=$(grep -c new-window "$log" 2>/dev/null || printf 0)
+  [ "$launches" = 1 ] \
+    || fail "closing the pane restarted the episode; got $launches launches"
+  [ -f "$home/state/.seat-respawn-attempts" ] \
+    || fail "closing the pane cleared the episode record, so the refuted-by line would be right and the fixture wrong"
+
+  # A changed delivery status is one of the three things that does clear it, and
+  # only after that does this home get another seat.
+  printf 'listener pid 1 is up with 0 wake(s) pending\n' > "$status"
+  FM_SEAT_FIRST_TURN_DEADLINE=600 FM_SEAT_RESPAWNER_MAX_ATTEMPTS=1 \
+    FM_FAKE_DELIVERY_STATUS="$status" run_respawner_once "$home" "$delivery" "$tmux" \
+    || fail "respawner refused the cycle on a deliverable status"
+  [ ! -e "$home/state/.seat-respawn-attempts" ] \
+    || fail "a changed delivery status did not clear the episode"
+  [ ! -e "$home/state/.seat-respawn-giveup" ] \
+    || fail "a changed delivery status left the give-up standing"
+  printf 'undeliverable: listener pid 1 is up with 1 wake(s) pending, but no session has published where the model turn lives\n' > "$status"
+  FM_SEAT_FIRST_TURN_DEADLINE=600 FM_SEAT_RESPAWNER_MAX_ATTEMPTS=1 \
+    FM_FAKE_DELIVERY_STATUS="$status" run_respawner_once "$home" "$delivery" "$tmux" \
+    || fail "respawner refused the check after the episode was cleared"
+  launches=$(grep -c new-window "$log" 2>/dev/null || printf 0)
+  [ "$launches" = 2 ] \
+    || fail "the cleared episode never launched again; got $launches launches"
+  pass "the give-up names what clears the episode and what only refutes a sentence"
+}
+
 # THE READING NOBODY COULD TAKE, WHICH IS THE PRODUCTION CASE.
 #
 # An endpoint whose tmux server has exited - a container restart, or the last
@@ -762,6 +858,108 @@ test_a_held_first_turn_is_reported_as_holding_rather_than_up() {
   assert_contains "$out" "has not finished starting" \
     "the holding verdict did not say what it is waiting on"
   pass "a respawner holding a seat that never finished starting answers holding rather than up"
+}
+
+# THE RESTARTER THAT HAS STOPPED RETRYING, REPORTED AS ONE THAT IS STILL TRYING.
+#
+# The give-up is not the end of the process, only of the episode: past the bound
+# one_cycle returns at the bound test every cycle while the loop keeps beating
+# normally, so every reading that keys on the process alone still says `up:` and
+# the alarm turns that into "an automatic restart is running and should bring it
+# back on its own" on every repeat to the captain, for an absence nothing will
+# retry.
+#
+# The path exercised here is the one that has no first-turn record at all, so
+# `holding:` cannot cover it either: the endpoint's tmux server has exited, its
+# recorded server pid answers no liveness test, and launch_in_tmux refuses
+# before a window is opened. Each cycle still spends a launch, the bound is
+# still reached, and the give-up is still recorded - against a condition key,
+# which is what makes the reading below specific to the absence standing now.
+test_a_respawner_that_gave_up_is_not_reported_as_a_running_restart() {
+  local home delivery tmux log status findings out key i
+
+  home=$(make_home giveup-status)
+  status="$home/status.txt"
+  delivery="$home/fake-delivery"
+  tmux="$home/fake-tmux"
+  log="$home/tmux.log"
+  printf 'undeliverable: listener pid 1 is up with 1 wake(s) pending, but no session has published where the model turn lives\n' > "$status"
+  write_fake_delivery "$delivery"
+  write_pane_fake_tmux "$tmux" "$log"
+
+  # An endpoint whose tmux server is gone: the pid it names is not live, so the
+  # socket is refused and no window is ever opened.
+  {
+    printf 'backend=tmux\n'
+    printf 'target=%%9\n'
+    printf 'harness=claude\n'
+    printf 'session-lock-pid=999999\n'
+    printf 'tmux-server=%s,999999\n' "$home/tmux.sock"
+  } > "$home/state/.primary-endpoint"
+
+  run_status() {
+    env FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" FM_STATE_OVERRIDE="$home/state" \
+      FM_CONFIG_OVERRIDE="$home/config" FM_SEAT_RESPAWNER_FORCE_BACKEND=keeper \
+      "$SERVICE" status
+  }
+
+  i=0
+  while [ "$i" -lt 3 ]; do
+    FM_SEAT_RESPAWNER_MAX_ATTEMPTS=2 \
+      FM_FAKE_DELIVERY_STATUS="$status" run_respawner_once "$home" "$delivery" "$tmux" \
+      || fail "respawner refused cycle $i"
+    i=$((i + 1))
+    sleep 2
+  done
+
+  [ ! -e "$log" ] \
+    || fail "the launch was not refused, so this is not the no-record path"
+  [ ! -e "$home/state/.seat-first-turn" ] \
+    || fail "a first turn was recorded, so this is not the no-record path"
+  findings=$(find "$home/data/findings" -maxdepth 1 -type f -name '*.json' | wc -l | tr -d ' ')
+  [ "$findings" = 1 ] \
+    || fail "the episode never reached its bound; got $findings give-up findings"
+  key=$(sed -n 's/^key=//p' "$home/state/.seat-respawn-attempts" | head -1)
+  [ -n "$key" ] || fail "the episode recorded no condition key to report against"
+
+  # The process is untouched by all of that: its own lock, this home, a live
+  # pid, a beacon it just wrote. Everything that makes a respawner healthy is
+  # true, and it will still never launch again for this condition.
+  mkdir -p "$home/state/.seat-respawner.lock"
+  {
+    printf 'pid=%s\n' "$$"
+    printf 'fm-home=%s\n' "$home"
+  } > "$home/state/.seat-respawner.lock/record"
+  : > "$home/state/.last-seat-respawner-beat"
+
+  out=$(run_status)
+  case "$out" in
+    gave-up:*) : ;;
+    *) fail "a respawner that stopped retrying did not answer gave-up: $out" ;;
+  esac
+  assert_contains "$out" "stopped retrying" \
+    "the gave-up verdict did not say that retrying has stopped"
+
+  # A give-up recorded against a condition that no longer stands says nothing
+  # about the one that does: the respawner starts a fresh count under the new
+  # key without clearing the old record.
+  printf 'key=0:0\nfinding=stale\n' > "$home/state/.seat-respawn-giveup"
+  out=$(run_status)
+  case "$out" in
+    up:*) : ;;
+    *) fail "a give-up against a superseded condition coloured the standing report: $out" ;;
+  esac
+
+  # And a record that could not be read is not a give-up either - two absent
+  # keys are not a match.
+  printf 'key=%s\nfinding=stale\n' "$key" > "$home/state/.seat-respawn-giveup"
+  rm -f "$home/state/.seat-respawn-attempts"
+  out=$(run_status)
+  case "$out" in
+    up:*) : ;;
+    *) fail "an unreadable episode record was turned into a give-up: $out" ;;
+  esac
+  pass "a respawner that gave up on the standing condition is never reported as up"
 }
 
 # The state this whole area exists to remove is a restarter that is in the tree
@@ -1077,9 +1275,11 @@ test_a_held_episode_is_bounded_and_the_giveup_counts_launches_as_launches
 test_a_giveup_with_no_standing_record_never_claims_an_open_pane
 test_a_giveup_reached_without_holds_still_names_the_open_pane
 test_a_giveup_whose_pane_could_not_be_read_claims_neither_way
+test_the_giveup_says_what_ends_the_episode_and_what_only_refutes_a_sentence
 test_a_stale_confirmation_never_claims_the_pane_is_still_open
 test_an_inherited_confirmation_never_claims_the_pane_is_still_open
 test_a_held_first_turn_is_reported_as_holding_rather_than_up
+test_a_respawner_that_gave_up_is_not_reported_as_a_running_restart
 test_an_armed_restart_that_never_ran_is_reported
 test_launch_does_not_pin_the_respawners_path
 test_resume_style_launch_command_is_refused

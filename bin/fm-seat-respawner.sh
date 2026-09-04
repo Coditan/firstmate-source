@@ -476,6 +476,18 @@ clear_episode() {
 # where it belongs; the durable mark is still reported in the measurement, so
 # nothing is lost by not letting it speak in the present tense.
 #
+# REFUTING A SENTENCE IS NOT ENDING THE EPISODE, AND THE REFUTED-BY LINE SAYS
+# WHICH IT MEANS. Past the bound, one_cycle returns at the bound test on every
+# later cycle: the attempt record still holds launches+holds at MAX_ATTEMPTS for
+# this key, so an observation that only disproves a sentence above - the pane
+# closing, or a probe of it finally being answered - retires the first-turn
+# record and changes nothing about whether another seat is started. Exactly
+# three things clear the episode: a changed delivery status for the queued work
+# (a new condition key, or work that is deliverable again), presence turning
+# `present` when a seat takes this home's lock, and the stay-down marker. They
+# are named, because a captain reading this on a phone must not wait for a
+# relaunch that cannot come.
+#
 # The once-per-episode marker, the emit, and the log line are the shared
 # library's, because both seat supervisors owe those the same way. Only the
 # sentences are this file's, because only this file held a pane.
@@ -486,13 +498,13 @@ emit_giveup_finding() {  # <key> <status-line> <launches> <holds> <pane> <ever-c
   [ -z "$confirmed" ] || seen=yes
   [ -n "$pane" ] || seen=none
   measurement="$status_line | launches=$launches holds=$holds pane=${pane:-none} pane-confirmed=$seen pane-probe=${probe:-none}"
-  refuted="A fresh delivery status for the same queued work becomes deliverable after a launch attempt, or the stay-down marker is set deliberately."
+  refuted="This episode is cleared by exactly three things: the delivery status for the queued work changes, a seat takes this home's lock, or the stay-down marker is set deliberately. Until one of them happens nothing here launches again."
   if [ -n "$pane" ] && [ "$probe" = 0 ]; then
     claim="The primary firstmate seat respawner stopped retrying this episode at its $MAX_ATTEMPTS-cycle bound after $launches launch attempt(s) and $holds held cycle(s). A seat it started is still open in pane $pane and has not taken this home's lock, so it is deliberately not opening another beside it; this home has an agent and no first mate."
-    refuted="$refuted The pane above closing, or a seat taking this home's lock, also ends this episode."
+    refuted="The pane above closing refutes the still-open-pane sentence and nothing else: it does not end this episode. $refuted"
   elif [ -n "$pane" ]; then
     claim="The primary firstmate seat respawner stopped retrying this episode at its $MAX_ATTEMPTS-cycle bound after $launches launch attempt(s) and $holds held cycle(s). It started a seat in pane $pane and cannot tell whether that pane is still there: the last probe of it could not be answered, which is what an endpoint whose tmux server has exited looks like. That is not a report that a seat is open and not a report that it is gone; either way this home has no first mate."
-    refuted="$refuted A probe of the pane above being answered either way, or a seat taking this home's lock, also ends this episode."
+    refuted="A probe of the pane above being answered either way refutes the could-not-read sentence and nothing else: it does not end this episode. $refuted"
   else
     claim="The primary firstmate seat respawner exhausted $launches launch attempt(s) for this home and stopped retrying this episode at its $MAX_ATTEMPTS-cycle bound after $holds held cycle(s). No seat it started is still on record, so nothing is being held and no pane is being refused."
   fi

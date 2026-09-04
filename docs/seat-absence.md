@@ -94,6 +94,7 @@ The delivery verdict stays undeliverable until the fresh seat finishes session s
 While the record stands the launch is withheld, but the wait is not free: each cycle that is otherwise due spends a hold, holds count toward the same bound as launches, and so a first turn that never lands reaches that bound, gives up, and says so rather than waiting forever in silence.
 A hold is never counted as a launch, because an episode whose first turn never lands makes exactly one window call and reporting five would send the captain to a machine whose real state is an open pane with an agent that never reached session start.
 Past the deadline the record is retired unless the turn was submitted *and* the pane is confidently still there - only a confident yes holds a launch, an unreachable backend still abandons - and a hold in that state is published by `bin/fm-seat-respawner-service.sh status` as its own `holding:` verdict, which the alarm renders as a seat that was started and never finished starting rather than as a restart under way.
+Once the bound is spent the episode is over for that condition and the respawner returns at the bound test on every later cycle while its process keeps beating, so `status` answers `gave-up:` for as long as `state/.seat-respawn-giveup` names the condition key `state/.seat-respawn-attempts` is still counting against; the episode itself is cleared only by a changed delivery status, a seat taking this home's lock, or the stay-down marker.
 A stand-down declared while a turn is pending settles that turn instead of racing it: `state/.seat-stay-down` is read first, and it drops the pending record rather than letting the next cycle type into the pane.
 
 **The success test moved with it.**
@@ -313,6 +314,7 @@ bin/fm-seat-respawner-service.sh status
 `up:` is the whole reading and not merely a live pid: it requires this home's own respawner lock, a beacon inside `FM_SEAT_RESPAWNER_GRACE`, and the process alive.
 A respawner whose process is alive but has stopped cycling answers `stalled:` instead, and the alarm turns that into "whether anything is trying to bring it back could not be read" rather than into an assurance - so `stalled:` is a failed arm for this runbook's purposes, not a pass.
 A respawner that is cycling normally but is holding a first turn that never landed answers `holding:`, which the alarm renders as waiting on a seat that never finished starting and will not start another by itself; that is also not a pass for this runbook.
+A respawner that has spent its attempt bound for the absence standing now answers `gave-up:`, which the alarm renders as a restart that has stopped retrying and will not start another without the captain; that is not a pass either.
 Then, and only with the captain watching, the real end-to-end: note the seat's recorded pid from `bin/fm-lock.sh status`, close the seat, and confirm a message arrives on the captain's channel and that `bin/fm-lock.sh status` afterwards names a **different** live pid.
 
 **Expect that message on the SECOND watcher sweep, not the first.**
