@@ -84,17 +84,15 @@ Firstmate is free to take it or overwrite it: clear it, confirm the standing ord
 ## The record every invocation must leave
 
 An invocation is a captain decision given in chat, and `decision-hold-lifecycle` requires that such a decision is recorded when it is given or it is lost.
-Before acting on any grant, record it through `bin/fm-decision-hold.sh record --door chat` with a decision file that carries all of the following, and read that script's `--help` for the exact arguments:
+Before acting on any grant, record it through `bin/fm-decision-hold.sh record --door chat` with a decision file that carries only the following, and read that script's `--help` for the exact arguments:
 
 - His invoking words, verbatim, including the sentence that names the protocol.
 - The named task the window is opened for, in his words where he gave them.
-- The window's start, which is the moment his `/afk` landed, and its end once he has returned.
 
-A window whose end is not yet known is recorded with its start and the note that it is open; the end is added when he returns, through the same record rather than a second one.
 Every seat firstmate typed at under the grant and every confirmation it answered belongs in the report below, not in the decision record.
 
 ## At the window's end
 
 The moment his return message arrives, the standing rules resume before that message is acted on, alongside the `/afk` return sequence.
-Then report to him, in `AGENTS.md` section 9 language, what was done under the grant: which seats were typed at, which confirmations were answered on his behalf, which steps were added to reach completion, and where the named task stands.
+Then report to him, in `AGENTS.md` section 9 language, when the window began and ended and what was done under the grant: which seats were typed at, which confirmations were answered on his behalf, which steps were added to reach completion, and where the named task stands.
 Anything begun under the grant that is not finished is named as such and waits for his word, because the grant that would have finished it has ended.
