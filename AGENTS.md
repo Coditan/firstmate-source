@@ -158,7 +158,7 @@ A missing dependency, authentication failure, unsupported backend, or version re
 
 After the one session-start digest, reconcile reality with durable records before taking new work.
 Honor lock-refused read-only mode exactly as section 3 requires.
-Treat digest status tails as wake-event history, and its per-task endpoint reading as only what that line states it measured about the endpoint and the agent behind it, never as a read of what run step a crew is on, and use targeted current-state reconciliation through `bin/fm-crew-state.sh` when the live state matters.
+Treat digest status tails as wake-event history and its per-task endpoint reading as a presence check only, never a state read, and use targeted current-state reconciliation through `bin/fm-crew-state.sh` when the live state matters.
 
 Reconcile only this home's recorded direct reports and their recorded backend inventory; never sweep a shared endpoint namespace for matching names or claim another home's work.
 For an ordinary direct report whose endpoint is dead or metadata has no window, load `stuck-crewmate-recovery` and preserve the recorded worktree and unlanded work while reconciling ownership.
