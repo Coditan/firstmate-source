@@ -64,6 +64,7 @@ A keeper started outside a terminal server, or on any other one, is unaffected b
 It restores a session and its windows on a target server that survived, and it deliberately refuses to create a new target server: total server loss is not what this stopgap covers.
 Restoring is otherwise additive, with one exception an operator can lose work to: on the composer-unknown verdict the keeper kills the existing window named `firstmate` before relaunching it, because that verdict says the seat's own composer row is a bare prompt rather than an agent.
 It kills that window only when an independent reading of the pane confirms a dead shell, `#{pane_dead}` or a shell as `#{pane_current_command}`, and refuses otherwise, because the same verdict is also emitted for a pane that could not be read, and a live agent must not be killed on an inconclusive reading.
+That reading goes through `fm_tmux_resolve_pane`, the fleet's one gate for a target this script did not resolve itself, so the window name is turned into a pane that provably belongs to it before it is read; a name that resolves to nothing reads as a pane that could not be read, which is a refusal rather than some other pane's answer.
 The refusal is logged once per onset, naming what was read, and the delivery verdict remains the seat-death detector: that reading only corroborates the kill and never triggers one.
 
 The keeper obeys the same declarations the respawner obeys, because a home running it as the stand-in for the unit must not lose them.

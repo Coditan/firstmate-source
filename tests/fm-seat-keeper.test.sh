@@ -9,10 +9,16 @@ STAY_DOWN="$ROOT/bin/fm-seat-stay-down.sh"
 
 fm_test_tmproot TMP_ROOT fm-seat-keeper
 
-# The fake tmux records every invocation and answers the three readings the
-# keeper makes: list-sessions proves the target server survived, has-session
-# answers session presence, and list-windows answers topology. The case dir's
+# The fake tmux records every invocation and answers the readings the keeper
+# makes: list-sessions proves the target server survived, has-session answers
+# session presence, and list-windows answers topology. The case dir's
 # has-session-rc and windows files drive those two answers per test.
+#
+# The corroborating pane read is resolved first, so this fake answers that
+# resolution the way a real tmux does: list-panes and a #{pane_id} read both name
+# the same pane %1 when the window has a readable pane, and both refuse when it
+# does not. The case dir's pane-reading file is what makes that pane exist, so a
+# case that removes it presents a target no read can resolve.
 write_fake_tmux() {
   local path=$1 log=$2 dirvar=$3
   cat > "$path" <<SH
@@ -23,7 +29,15 @@ for arg do
     list-sessions) exit 0 ;;
     has-session) exit "\$(cat "$dirvar/has-session-rc")" ;;
     list-windows) cat "$dirvar/windows"; exit 0 ;;
-    display-message) [ -f "$dirvar/pane-reading" ] || exit 1; cat "$dirvar/pane-reading"; exit 0 ;;
+    list-panes) [ -f "$dirvar/pane-reading" ] || exit 1; printf '%s\n' '%1'; exit 0 ;;
+    display-message)
+      [ -f "$dirvar/pane-reading" ] || exit 1
+      case "\$*" in
+        *'#{pane_id}'*) printf '%s\n' '%1' ;;
+        *) cat "$dirvar/pane-reading" ;;
+      esac
+      exit 0
+      ;;
   esac
 done
 exit 0

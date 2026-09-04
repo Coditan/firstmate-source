@@ -98,6 +98,11 @@ FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 # both supervisors bound their relaunches by one rule.
 # shellcheck source=bin/fm-retry-episode-lib.sh
 . "$SCRIPT_DIR/fm-retry-episode-lib.sh"
+# fm_tmux_resolve_pane is the fleet's one sanctioned gate for reading a target
+# this script did not itself resolve; the corroborating pane read below goes
+# through it rather than trusting tmux to pick a pane for a session:window name.
+# shellcheck source=bin/fm-tmux-lib.sh
+. "$SCRIPT_DIR/fm-tmux-lib.sh"
 
 # The arguments own this keeper's home and state directory. Both libraries above
 # define FM_HOME, and derive a STATE, from the environment for their own use, so
@@ -289,6 +294,11 @@ seat_death_verdict() {  # <delivery-status-line>
   esac
 }
 
+# The target server's tmux as one word, because fm_tmux_resolve_pane takes the
+# tmux to talk to as a single command name and this keeper always talks to a
+# server other than its own.
+target_tmux() { "$TMUX_CMD" -S "$TARGET_SOCKET" "$@"; }
+
 window_name() {  # <index>
   local want=$1 line index name
   while IFS= read -r line; do
@@ -308,8 +318,16 @@ window_name() {  # <index>
 # only death when an independent session reading agrees. The composer-unknown
 # verdict names two different worlds - a dead shell prompt and a pane that could
 # not be read - and only the first of them may be killed.
+#
+# The window index names a window, not a pane, so tmux is free to answer for
+# whichever pane it decides that name means. fm_tmux_resolve_pane turns the name
+# into one pane id that provably belongs to it, or refuses; an unresolvable
+# target then reads as unreadable, which is a refusal to kill rather than a
+# reading of some other pane.
 pane_reading() {  # <window-index>
-  "$TMUX_CMD" -S "$TARGET_SOCKET" display-message -p -t "$TARGET_SESSION:$1" \
+  local pane
+  pane=$(fm_tmux_resolve_pane "$TARGET_SESSION:$1" target_tmux) || return 1
+  target_tmux display-message -p -t "$pane" \
     '#{pane_dead}:#{pane_current_command}' 2>/dev/null
 }
 
