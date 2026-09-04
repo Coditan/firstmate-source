@@ -115,10 +115,10 @@
 #              4311s - and 33x the longest stretch any ordinary work was
 #              measured holding the gate at all. docs/memory-alarm.md owns
 #              both measurements.
-#   floor      a SHARE of total RAM, not a number of megabytes: 10.2%, which is
-#              where the 2,400 MiB measured on the 23,456 MiB calibration host
-#              sat, well below the lowest headroom measured across a real busy
-#              period there. On that host, something would have to consume
+#   floor      a SHARE of total RAM, not a number of megabytes: 10.232%, which
+#              is where the 2,400 MiB measured on the 23,456 MiB calibration
+#              host sat, well below the lowest headroom measured across a real
+#              busy period there. On that host, something would have to consume
 #              roughly ten further gigabytes from the busy low to cross it, and
 #              the horizon condition fires long before that. The share is what
 #              transfers, and only downward: it is capped at the 2,400 MiB that
@@ -271,7 +271,11 @@
 #                                than derived. A value that is not a positive
 #                                number of MiB is a typo rather than a choice,
 #                                so it falls back to the derivation and every
-#                                verdict says that instead.
+#                                verdict says that instead. Empty counts as
+#                                such a value and is reported: unlike the stall
+#                                gate, this floor has no off switch, so an
+#                                empty one is a command substitution that
+#                                produced nothing rather than a home's choice.
 #   FM_MEMORY_ALARM_HORIZON_MIN  RAM-headroom horizon in minutes (default 15)
 #   FM_MEMORY_ALARM_STALL        host memory pressure-stall `full avg60` at or
 #                                above which this machine counts as stalling at
@@ -341,7 +345,15 @@ NOW=${FM_MEMORY_ALARM_NOW:-$(date +%s)}
 # the only place that knows.
 FLOOR_NOTE_PENDING=
 case "$FLOOR_OVERRIDE_MIB" in
-  '') ;;
+  '')
+    # Unset and set-but-empty are different facts, and this floor has no off
+    # switch, so an empty value is never a choice the way an empty stall gate
+    # is. The realistic way it happens is FM_MEMORY_ALARM_FLOOR_MIB=$(...) from
+    # a command that produced nothing, which would otherwise discard a home's
+    # configuration in silence.
+    if [ -n "${FM_MEMORY_ALARM_FLOOR_MIB+set}" ]; then
+      FLOOR_NOTE_PENDING="the FM_MEMORY_ALARM_FLOOR_MIB configured for this home arrived empty, which is what a command that produced no value leaves behind rather than a floor anyone chose, so this alarm's own headroom floor is in force instead of it"
+    fi ;;
   *[!0-9]*)
     FLOOR_NOTE_PENDING="the FM_MEMORY_ALARM_FLOOR_MIB configured for this home was not a number of MiB, so this alarm's own headroom floor is in force instead of it"
     FLOOR_OVERRIDE_MIB= ;;
@@ -392,8 +404,8 @@ fi
 
 # --- the floor --------------------------------------------------------------
 #
-# The floor's calibration, which docs/memory-alarm.md "Floor: 10.2% of total
-# RAM" owns: the 2,400 MiB measured on 2026-08-13 was 10.2% of the 23,456 MiB
+# The floor's calibration, which docs/memory-alarm.md "Floor: 10.232% of total
+# RAM" owns: the 2,400 MiB measured on 2026-08-13 was 10.232% of the 23,456 MiB
 # host it was measured on, and 6.1 times below the lowest RAM headroom ordinary
 # busy work reached there. Both figures are properties of THAT host.
 #
@@ -424,7 +436,7 @@ fi
 # only ever claims less than a measurement already supports, which is honest.
 # Carried UP onto a larger one it would claim MORE - it would assert an
 # ordinary-headroom baseline at a host size this fleet has never measured, which
-# is exactly the defect this change exists to fix, mirrored: 10.2% of a 64 GiB
+# is exactly the defect this change exists to fix, mirrored: 10.232% of a 64 GiB
 # host is 6,706 MiB, a "backstop" a busy machine of that size could sit under
 # during ordinary work with nothing here to say it should not. So above the
 # calibration host the floor is the 2,400 MiB somebody measured, and the crossing
@@ -927,7 +939,7 @@ derived_floor_mib() {  # from TOTAL_MIB; prints "<floor_mib> <uncapped_share_mib
 derive_floor() {  # sets FLOOR_MIB and FLOOR_NOTE, from TOTAL_MIB
   local share pair derived uncapped
   share=$(awk -v f="$CALIBRATION_FLOOR_MIB" -v t="$CALIBRATION_TOTAL_MIB" \
-    'BEGIN { printf "%.1f", f * 100 / t }')
+    'BEGIN { printf "%.3f", f * 100 / t }')
   if [ -n "$FLOOR_OVERRIDE_MIB" ]; then
     FLOOR_MIB=$FLOOR_OVERRIDE_MIB
     FLOOR_NOTE="The $FLOOR_MIB MiB floor is the one this home configures, which wins over the floor this alarm would otherwise derive from the machine"

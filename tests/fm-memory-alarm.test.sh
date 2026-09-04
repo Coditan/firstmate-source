@@ -1864,7 +1864,7 @@ test_every_crossing_states_where_its_floor_came_from() {
   out=$(derived_floor_alarm)
   assert_contains "$out" "MiB of swap configured" "the fixture stopped describing a machine with swap"
   assert_contains "$out" "derived from this machine, not shipped" "a machine WITH swap did not state its floor's derivation"
-  assert_contains "$out" "10.2% of its 23456 MiB" "the crossing did not state the share the floor was derived at"
+  assert_contains "$out" "10.232% of its 23456 MiB" "the crossing did not state the share the floor was derived at"
 
   reset_home
   FM_TEST_TOTAL_KB=7931904
@@ -1872,14 +1872,14 @@ test_every_crossing_states_where_its_floor_came_from() {
   reading 700 true 0
   out=$(derived_floor_alarm)
   assert_contains "$out" "derived from this machine, not shipped" "a machine with NO swap did not state its floor's derivation"
-  assert_contains "$out" "10.2% of its 7746 MiB" "the swapless crossing did not state the share of ITS own machine"
+  assert_contains "$out" "10.232% of its 7746 MiB" "the swapless crossing did not state the share of ITS own machine"
   assert_contains "$out" "ordinary-headroom baseline on that one host only" "the crossing claimed a baseline this fleet does not have"
   pass "every crossing states the derivation of the floor it crossed"
 }
 
 test_the_derived_floor_is_never_raised_above_the_figure_that_was_measured() {
   # The share carries a measurement DOWN honestly and must never carry one UP:
-  # 10.2% of a 64 GiB host is 6,706 MiB, a backstop no measurement at that host
+  # 10.232% of a 64 GiB host is 6,706 MiB, a backstop no measurement at that host
   # size supports, and asserting one would be this same defect mirrored upward.
   # Driven with a fabricated total, like both halves above.
   local out
@@ -1914,7 +1914,7 @@ test_a_configured_floor_wins_over_the_derived_one() {
 
   # Above the calibration host the derivation is the CAP, not the share, and the
   # note has to name the figure it actually would have used. A reader who checks
-  # the multiplication must find it true: 10.2% of 65,536 MiB is 6,706 MiB, and
+  # the multiplication must find it true: 10.232% of 65,536 MiB is 6,706 MiB, and
   # 2,400 MiB is what the cap leaves, so neither may be printed under the other's
   # label.
   reset_home
@@ -1948,6 +1948,19 @@ test_a_configured_floor_wins_over_the_derived_one() {
   unset FM_TEST_FLOOR
   assert_contains "$out" "below the 793 MiB floor" "a malformed floor did not fall back to the derived one"
   assert_contains "$out" "was not a number of MiB" "a malformed floor was not reported as unusable"
+
+  # An empty value is the shape a command substitution that produced nothing
+  # leaves behind. This floor has no off switch, so it is a mistake rather than a
+  # choice, and discarding a home's configuration in silence is the one thing
+  # this alarm does not do with a threshold it could not use.
+  reset_home
+  FM_TEST_TOTAL_KB=7931904
+  FM_TEST_FLOOR=
+  reading 700 true 0
+  out=$(derived_floor_alarm)
+  unset FM_TEST_FLOOR
+  assert_contains "$out" "below the 793 MiB floor" "an empty floor did not fall back to the derived one"
+  assert_contains "$out" "arrived empty" "an empty floor was discarded without saying so"
   pass "a configured floor wins, and an unusable one falls back to the derivation and says so"
 }
 
