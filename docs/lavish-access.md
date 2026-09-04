@@ -10,9 +10,11 @@ Each script's header owns its exact flags and mechanics; this document owns the 
 ## Read this first: one acceptance criterion is not proven
 
 The second acceptance criterion - an HTTP 200 for a board fetched from a *different* device on the tailnet - is **not proven**.
-It could not be proven from the machine this was built on: the other Linux nodes reject `tailscale ssh` with no known host key, and the captain's PC and phone cannot be driven by an agent.
+It could not be proven from either machine this was built on - not on `crew-hlr`, and not on the userspace-mode vessel where the proxied path was added: every peer rejects SSH and advertises no `tailscale ssh` host key, and the captain's PC and phone cannot be driven by an agent.
 
-What is proven is everything on this side of the wire: the server binds only the tailnet address and loopback is not served, the emitted hostname resolves to that address, a request carrying the tailnet name is accepted by the Host allowlist and returns 200, and the tailnet peer path to the captain's PC answers.
+What is proven is everything on this side of the wire, on both kinds of vessel.
+Where the tailnet address can be bound, the server binds only that address and loopback is not served; where it cannot, the loopback port is published over `tailscale serve` and the proxy path is what carries the request - shown by the `X-Forwarded-Host` reading rather than by an on-host 200, which proves nothing there.
+In both, the emitted hostname resolves to this node's tailnet address, a request carrying the tailnet name is accepted by the Host allowlist and returns 200, and the tailnet peer path to the captain's PC answers.
 So the mechanism is demonstrated up to the last hop, and the last hop is the part nobody here can perform.
 
 One fetch of a wrapper-emitted link, from the captain's own PC or phone, closes it.
@@ -252,9 +254,11 @@ The asymmetry is the point rather than an inconsistency - the guard fails safe b
 
 ## The startup regression check
 
-`bin/fm-bootstrap.sh`'s `lavish_access_check` prints `LAVISH_ACCESS:` when this vessel has a tailnet but open board links still point at loopback.
+`bin/fm-bootstrap.sh`'s `lavish_access_check` prints `LAVISH_ACCESS:` when this vessel has reach to offer but open board links still point at loopback.
 It reads the wrapper's own session store and the default `~/.lavish-axi/state.json`, which is where a bare invocation writes.
-It is detect-only, ordered so the cheap file reads run before the address resolver, and silent on a host with no tailnet.
+It is detect-only, ordered so the cheap file reads run first, and it never resolves an address itself: the verdict comes from the resolution the last allocation recorded in `state/service-port.lavish`, for the same reason the wrapper takes its own answer from the allocation rather than from a `--check` pre-read.
+A vessel served through a published proxy has as much reach to offer as one binding its own address, so `reachability=tailnet-proxied` fires the notice alongside `tailnet`.
+Every other value stays silent, `untested` included: with nothing established, telling the captain to reopen a board would promise an outcome no run here has seen, and with no readable record there is no authoritative resolution to stand on at all.
 `bootstrap-diagnostics` owns the response.
 
 This check is the reason the fix cannot regress unnoticed, which matters because it already did regress once while the fix sat queued.
@@ -274,7 +278,7 @@ This check is the reason the fix cannot regress unnoticed, which matters because
   No backend touches service ports or the AXI prefix, and the allocator runs inside an already-spawned worker's shell.
 - **Secondmate homes** - covered by construction: the seat key includes the realpath of `FM_HOME`, and `LAVISH_AXI_STATE_DIR` is per home, so a secondmate and its parent never share a seat or a session store despite sharing a UNIX account.
 - **Hosts without tailscale** - covered by the loopback degradation path, the only branch where behaviour matches today's, apart from the honest warning.
-- **Hosts without `jq`** - the allocator degrades to `reachability=loopback` with a reason, and the startup check stays silent.
+- **Hosts without `jq`** - `tailscale status` cannot be read at all, which tests nothing about reach, so the allocator reports `reachability=untested` with a reason rather than a tested no-reach, and the startup check stays silent.
 
 ## Validation record
 
@@ -520,7 +524,8 @@ Acceptance asked for an HTTP 200 fetched from a different device on the tailnet.
 That was not completed from this task's worktree, and it was not completed from `coditan-vessel` either when the proxied path was added on 2026-08-27.
 Every peer refuses SSH from this seat - `tailscale ssh` reports no advertised SSH host key for `crew-hlr`, `aurora`, `coditan`, `crew-allesknut`, `tugboat-cloud`, or `timbook-wsl`, and plain `ssh` answers `Permission denied (publickey)` for each - so no command can be run on another node to make the request.
 
-What was proved instead is everything on this side of the wire: the server binds only the tailnet address (loopback is refused), the emitted hostname resolves to that address, a request carrying the tailnet name is accepted by the Host allowlist and returns 200, and `tailscale ping timbook` answers directly.
+What was proved instead is everything on this side of the wire: on `crew-hlr` the server binds only the tailnet address (loopback is refused), the emitted hostname resolves to that address, a request carrying the tailnet name is accepted by the Host allowlist and returns 200, and `tailscale ping timbook` answers directly.
+The matching on-this-side proof for a vessel that cannot bind its address is in "The userspace-mode vessel" above, where what carries the request is the published proxy rather than a bound tailnet address.
 The remaining check is one request from the captain's PC or phone against a link the wrapper emits.
 The phone is the one worth doing specifically: the MagicDNS name carries both an A and an AAAA record while Lavish binds one address, so a v6-preferring client reaches a closed port first and has to recover through Happy Eyeballs.
 

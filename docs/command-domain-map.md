@@ -6,7 +6,7 @@ It is an evidence map for reviewing a possible later `bin/` reorganization, not 
 
 ## Summary
 
-- Command count: 176 top-level files in `bin/`.
+- Command count: 179 top-level files in `bin/`.
 - Domain count: 18 domains currently used.
 - Ambiguous command count: 6.
 - Unplaced command count: 0.
@@ -27,7 +27,7 @@ It is an evidence map for reviewing a possible later `bin/` reorganization, not 
 - `external-currency`: Checks that compare this home, its tools, or external services against upstream state on a cadence or on demand. (7 commands.)
 - `memory-context`: Memory readings and alarms, context-ceiling reset mechanics, stow receipts, and transcript archive/search tooling. (10 commands.)
 - `knowledge-review`: Research/review quality measurement, model panels, PDF production, Lavish boards, AGENTS.md maintenance, and generated command maps. (9 commands.)
-- `service-access`: Vessel-local service address resolution, reachable-link publication, and bind-proven port selection. (2 commands.)
+- `service-access`: Vessel-local service address resolution, reachable-link publication, and bind-proven port selection. (4 commands.)
 - `policy-hooks`: PreToolUse transports and semantic command-policy parsers for arm, cd, continuity, Lavish, and subagent guards. (10 commands.)
 - `tests-tooling`: Test runner, isolation proof, shell lint, pinned tool installers, AXI suite checks, and validation-daemon integration. (9 commands.)
 - `fleet-snapshot`: Read-only fleet snapshots, human fleet views, bearings projections, and blocker projection helpers. (4 commands.)
@@ -269,8 +269,10 @@ Every command has at least one tracked caller or reference.
 
 | Command | Purpose from header | Domain evidence | Callers and references |
 | --- | --- | --- | --- |
-| `fm-service-port-probe.mjs` | Network oracle for bin/fm-service-port.sh: the two questions a shell cannot answer portably and must not answer by guessing | name:fm-service-port-probe.mjs, text:\bport\b, text:\bbind\b, text:\btailnet\b, text:\bloopback\b | documentation: docs/configuration.md, docs/lavish-access.md; scripts: bin/fm-lavish.sh, bin/fm-service-port.sh; tests: tests/fm-lavish-access.test.sh |
-| `fm-service-port.sh` | Resolve one vessel-local service's reachable address and a port it can actually bind, on a machine that may carry several vessels as separate UNIX accounts | name:fm-service-port.sh, text:\bvessel-local service\b, text:\breachable address\b, text:\bport\b, text:\bbind\b | documentation: docs/configuration.md, docs/fleet-service-port-registry.md, docs/lavish-access.md; scripts: bin/fm-bootstrap.sh, bin/fm-lavish.sh, bin/fm-service-port-probe.mjs; tests: tests/fm-lavish-access.test.sh |
+| `fm-reachability-lib.sh` | The one owner of a service's reachability verdict and of how that verdict was established | text:\bport\b, text:\bbind\b, text:\breachability\b, text:\btailnet\b, text:\bloopback\b | documentation: docs/lavish-access.md; scripts: bin/fm-service-port.sh; tests: tests/fm-lavish-access.test.sh |
+| `fm-service-port-probe.mjs` | Network oracle for bin/fm-service-port.sh: the two questions a shell cannot answer portably and must not answer by guessing | name:fm-service-port-probe.mjs, text:\bport\b, text:\bbind\b, text:\btailnet\b, text:\bloopback\b | documentation: docs/configuration.md, docs/lavish-access.md; scripts: bin/fm-lavish.sh, bin/fm-service-port.sh; tests: tests/fm-bootstrap.test.sh, tests/fm-lavish-access.test.sh |
+| `fm-service-port.sh` | Resolve one vessel-local service's reachable address and a port it can actually bind, on a machine that may carry several vessels as separate UNIX accounts | name:fm-service-port.sh, text:\bvessel-local service\b, text:\breachable address\b, text:\bport\b, text:\bbind\b | documentation: docs/configuration.md, docs/fleet-service-port-registry.md, docs/lavish-access.md; scripts: bin/fm-lavish.sh, bin/fm-reachability-lib.sh, bin/fm-service-port-probe.mjs; tests: tests/fm-bootstrap.test.sh, tests/fm-lavish-access.test.sh |
+| `fm-tailnet-serve-lib.sh` | The one owner of publishing a loopback port onto this node's tailnet address with `tailscale serve`, and of withdrawing it again | text:\bport\b, text:\bbind\b, text:\btailnet\b, text:\bloopback\b, text:\bservice-port\b | documentation: docs/lavish-access.md; scripts: bin/fm-lavish.sh, bin/fm-service-port.sh; tests: tests/fm-lavish-access.test.sh |
 
 ## Command policy hooks
 

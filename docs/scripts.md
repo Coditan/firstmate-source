@@ -77,7 +77,7 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-subagent-pretool-check.sh` | Primary-home delegation-shape PreToolUse guard (docs/subagent-guard.md) |
 | `fm-lavish-pretool-check.sh` | Stable PreToolUse transport for the lavish-guard command policy (docs/lavish-access.md) |
 | `fm-lavish-command-policy.mjs` | Semantic owner of the bare-`lavish-axi` PreToolUse policy (docs/lavish-access.md) |
-| `fm-lavish.sh`           | Open review boards on this vessel's own tailnet address and port (docs/lavish-access.md) |
+| `fm-lavish.sh`           | Open review boards on a checked link that reaches this vessel off this machine, binding its tailnet address or publishing a proxy onto it (docs/lavish-access.md) |
 | `fm-board.sh`            | Build a review board on the shared standard layout and refuse one that reaches the network (docs/board-layout.md) |
 | `fm-service-port.sh`     | Resolve one vessel-local service's reachable address and a port it actually bound     |
 | `fm-service-port-probe.mjs` | Bind, address, DNS, and readiness oracle for the service-port allocator          |
