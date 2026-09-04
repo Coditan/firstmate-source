@@ -62,6 +62,7 @@ The instrument is stow-then-clear, and `docs/context-reset.md` owns why it is ne
    - Captain preferences and fleet-local operational facts: hand-write directly to the destination selected by AGENTS.md's knowledge-routing table, using inspect-then-update every time.
      Before writing, inspect the destination, find the existing bullet or section the finding duplicates or supersedes, and rewrite it in place rather than adding a new trailing entry.
      `data/learnings.md` may not exist yet; create it on first local learning, in the same dated, evidence-backed, curated style as the captain-preference files.
+     For a fleet-local learning, "Which knowledge file a fleet-local learning goes to" below decides which half it is written to before you write it.
    - Project-intrinsic knowledge: never hand-write a project's `AGENTS.md`.
      Route it through a normal ship task so a crewmate records it via `bin/fm-ensure-agents-md.sh` and commits it through that project's delivery pipeline, exactly as section 6 describes.
      If the fleet is live, delegate this to a crewmate rather than doing it inline.
@@ -87,6 +88,67 @@ The instrument is stow-then-clear, and `docs/context-reset.md` owns why it is ne
    This step is for a `/stow` the captain invoked; the context-ceiling reset caller ends its turn in the reset with no captain-facing message, as the ceiling section above and section 8 both require.
    For an interactive `/stow`, summarize in plain outcome language (section 9): what was stowed and where, what was filed to the backlog, and whether the session is now safe to reset or destroy - i.e. whether every durable finding from this sweep now lives on disk rather than only in this conversation.
    If something could not be captured yet (for example, project-intrinsic knowledge waiting on a crewmate to land it), say so explicitly rather than reporting the session fully safe.
+
+## Which knowledge file a fleet-local learning goes to
+
+A vessel's fleet-local knowledge is two files, and they cost different things.
+`data/learnings.md` is read in full at every session start, on every session, whether or not that session ever needs a word of it.
+`data/learnings-reference.md` is read only when someone searches it, so an entry there costs nothing until it is wanted.
+`data/learnings-archive.md` holds what has stopped being true and is never a destination for a new learning.
+
+This section decides which of the first two a new learning goes to, and it runs only after step 2 has routed the finding to fleet-local knowledge in the first place.
+A fact whose real owner is shared tracked material or a project's own `AGENTS.md` is not made fleet-local by being written down here first.
+It is guidance a writer follows, not a check that refuses a write: the captain ruled on 2026-09-04 that the split is held by a measurement printed at startup rather than by a mechanism that blocks writing.
+
+**The default is the reference file, and taking the default needs no reason.**
+Write the learning there first.
+The loaded file is not where a fact starts; it is somewhere a fact has to be moved to, by passing the test below.
+
+**The test, applied to one fact and never to a whole entry: name the moment a reader would go looking for this.**
+If you can name that moment - an error string, a command that misbehaves, a named tool, a symptom, a kind of task anyone would recognise - then the trigger arrives together with the problem, and a search delivers the fact exactly when it is needed.
+That fact belongs in the reference file however painful it was to learn.
+The moment has to be one a reader reaches while they still believe something is wrong: if the search would only begin after they had already acted on a confident wrong conclusion, they never had a reason to search, and the fact is the second reason below rather than a reference entry.
+
+A fact stays in the loaded file only when you cannot name that moment, and there are exactly three reasons you cannot.
+
+1. **By the time the situation announces itself the damage is already done, and undoing it is not yours.**
+   The harm lands on shared machinery, another vessel, or unlanded work someone else owns.
+   Never restart the shared validation daemon; never sweep watchers broadly.
+2. **Nothing announces itself, because the reading looks correct.**
+   A fact whose whole value is that it makes a reader distrust a reading they would otherwise accept cannot be searched for, because nobody searches while the answer looks fine.
+3. **It is standing identity rather than an incident** - who this vessel is, whose work it may touch, what it may not do on another party's behalf.
+   This class is closed, and a new incident is never a new identity fact.
+
+Nothing else earns the loaded file.
+How much the fact cost to learn, how recently it was learned, how likely it looks to recur, and how much it would have saved this session are not on the list, and each of them is what a tired writer reaches for at the moment of writing.
+
+**Even a fact that passes the test brings no narrative with it.**
+The loaded entry is the instruction and its pointer: one or two sentences, plus the heading its body carries in the reference file.
+Every measurement, date, incident, transcript line and piece of "measured on this seat" evidence goes to the reference body without exception.
+An entry that argues for itself has already failed this rule - a reader being warned does not need convincing, and the evidence is one search away.
+This clause, not the routing above, is what holds the byte count, because entries are large for their narrative and a narrative never passes the test.
+
+**A recurrence is an edit, never a new entry.**
+A second or third instance of a class already loaded rewrites the existing line in place under step 4's inspect-then-update, and its narrative joins the reference body.
+The loaded file grows only when a genuinely new prohibition, a new blind reading, or a change in this vessel's identity is discovered.
+
+**Classify per fact, never per heading.**
+A bundled entry is classified fact by fact; if one fact inside it earns the loaded file, that one sentence is loaded and the rest of the bundle stays in reference.
+
+### What this rule cannot do
+
+Say this plainly wherever the split is reported, rather than letting a smaller startup file read as a solved problem.
+
+- It governs new writing only.
+  It re-classifies nothing already loaded and shrinks nothing by itself.
+- Nothing refuses a write.
+  A writer who answers the test dishonestly, or who simply does not load this skill before writing, passes unimpeded; the startup measurement catches that one session later, never in the moment.
+- It cuts what startup costs, not what exists.
+  The reference file grows at exactly the rate the loaded file used to, and the saving is real only for as long as that file stays reachable by search.
+- It cannot make a fact reachable that nobody would search for.
+  That is why the second reason above exists, and it is where a misclassification is most expensive: a doubt-your-reading fact filed to reference is deleted in every way that matters.
+
+`docs/startup-knowledge-split-evidence.md` carries the growth measurements behind this rule, the routing test run against real entries before it landed, and the baseline any later byte reading must be compared against.
 
 ## Scope exclusion: no skill storage
 

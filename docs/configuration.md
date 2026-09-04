@@ -226,6 +226,7 @@ Shared captain preferences that apply across secondmate domains live only in the
 Fleet-local operational facts and gotchas live locally in `data/learnings.md`; it is gitignored and printed after the captain-preference files in the session-start context digest.
 The file is created lazily on first learning and follows the same dated, evidence-backed, curated style as `data/captain.md`: inspect the current file first, then rewrite or prune stale entries instead of appending forever.
 There is no shared learnings file by captain decision.
+The same home also carries `data/learnings-reference.md`, read only when searched, and `data/learnings-archive.md` for entries kept for the record; the [`stow` skill](../.agents/skills/stow/SKILL.md) owns which of them a new learning is written to.
 
 ## Secondmate routes (data/secondmates.md)
 

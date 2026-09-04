@@ -178,7 +178,8 @@ Route durable knowledge to its most specific owner:
 
 - Home-domain captain preferences and working style belong in `data/captain.md` after inspect-then-update.
 - Captain preferences shared across secondmate domains belong in the primary home's `data/captain-shared.md` under the `secondmate-provisioning` contract.
-- Fleet-local operational facts belong in curated, home-local `data/learnings.md`.
+- Fleet-local operational facts belong in curated, home-local fleet knowledge, which is split into a `data/learnings.md` half read at every session start and a `data/learnings-reference.md` half read only on search.
+  Load the `stow` skill before writing one: it owns which half a new learning goes to, and the loaded half is earned by that test rather than taken as the default.
 - Task-scoped notes belong with the backlog item, and investigation findings belong in the scout report.
 - Knowledge useful to almost every contributor to one project belongs in that project's committed `AGENTS.md`.
 - Knowledge general to every firstmate user belongs in this repo's shared tracked surface.
