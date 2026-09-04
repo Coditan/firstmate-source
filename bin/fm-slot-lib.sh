@@ -66,6 +66,22 @@ fm_slot_canonical() {  # <path>
   printf '%s\n' "${p%/}"
 }
 
+# The worktree path a `treehouse status` line names, or empty when the line names
+# none. `treehouse status` abbreviates the pool root as "~/", so a reader that
+# takes the field verbatim compares an unexpanded tilde against an absolute path
+# and silently matches nothing. One reader, so both callers expand it the same way.
+fm_slot_status_line_path() {  # <status-line>
+  local line=$1 body lpath
+  body=${line%%"(held by "*}
+  lpath=$(printf '%s\n' "$body" | awk '{print $3}')
+  # shellcheck disable=SC2088  # the literal leading tilde is exactly what treehouse prints
+  case "$lpath" in
+    '~/'*) printf '%s\n' "$HOME/${lpath#'~/'}" ;;
+    /*) printf '%s\n' "$lpath" ;;
+    *) return 1 ;;
+  esac
+}
+
 # The lease holder label the pool records for a slot, or empty when the slot is
 # not leased. Runs treehouse from <project> because treehouse resolves the pool
 # from the working directory. Never fabricates an answer: an unreadable pool
@@ -83,12 +99,10 @@ fm_slot_lease_holder() {  # <path> <project>
     esac
     # "<name>  leased  <path>  (held by <label>)" - take the path field by
     # stripping the trailing "(held by ...)" and the leading name+state.
-    local body label lpath
+    local label lpath
     label=${line##*"(held by "}
     label=${label%%")"*}
-    body=${line%%"(held by "*}
-    lpath=$(printf '%s\n' "$body" | awk '{print $3}')
-    [ -n "$lpath" ] || continue
+    lpath=$(fm_slot_status_line_path "$line") || continue
     lpath=$(fm_slot_canonical "$lpath") || continue
     if [ "$lpath" = "$canon" ]; then
       printf '%s\n' "$label"
@@ -208,4 +222,56 @@ $(fm_slot_live_meta_claimants "$path" "$state")
 EOF
 
   return "$found"
+}
+
+# The spelling the POOL uses for a slot, given any spelling of the same
+# directory. Prints its input unchanged when the pool cannot be read or lists no
+# slot that resolves to the same directory.
+#
+# WHY - measured 2026-09-04
+#
+# One directory can be reachable under two names: on this vessel ~/.treehouse is
+# a symlink to /var/lib/vessel/work/worktrees, so one slot is reachable as both
+# ~/.treehouse/<pool>/<n>/<repo> and
+# /var/lib/vessel/work/worktrees/<pool>/<n>/<repo>. treehouse keys its pool on
+# the name the worktree was created under and compares the argument to
+# `treehouse return` as a STRING. Handing it the other spelling of the same
+# directory was measured to give "worktree <path> is not managed by treehouse"
+# and change nothing, while the pool's own spelling of that same directory
+# reached the lease check normally. firstmate cannot change the comparison inside
+# that tool, so it owns the spelling it hands over.
+#
+# The answer is DERIVED, never enumerated: the pool's own listing supplies the
+# accepted spelling, so a third path form arriving later needs no change here.
+# Never fabricates: an unreadable pool or an unlisted directory yields the input
+# path, so the caller behaves exactly as it did before this existed.
+fm_slot_pool_path() {  # <path> <project>
+  local path=$1 project=$2 canon status_out line lpath lcanon
+  if [ -z "$path" ] || [ -z "$project" ] || [ ! -d "$project" ]; then
+    printf '%s\n' "$path"
+    return 0
+  fi
+  if ! command -v treehouse >/dev/null 2>&1; then
+    printf '%s\n' "$path"
+    return 0
+  fi
+  if ! canon=$(fm_slot_canonical "$path"); then
+    printf '%s\n' "$path"
+    return 0
+  fi
+  if ! status_out=$( ( cd "$project" && treehouse status ) 2>/dev/null ); then
+    printf '%s\n' "$path"
+    return 0
+  fi
+  while IFS= read -r line; do
+    lpath=$(fm_slot_status_line_path "$line") || continue
+    lcanon=$(fm_slot_canonical "$lpath") || continue
+    if [ "$lcanon" = "$canon" ]; then
+      printf '%s\n' "$lpath"
+      return 0
+    fi
+  done <<POOLPATH
+$status_out
+POOLPATH
+  printf '%s\n' "$path"
 }
