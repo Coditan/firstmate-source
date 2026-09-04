@@ -826,9 +826,8 @@ EOF
   out=$(run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
   assert_not_contains "$out" "endpoint: alive (backend=herdr window=sess:p-husk)" \
     "a herdr pane whose agent is gone was reported alive"
-  assert_contains "$out" "endpoint: NO AGENT" \
+  assert_contains "$out" "endpoint: NO AGENT - the window exists but nothing is running in it (backend=herdr window=sess:p-husk)" \
     "a herdr pane whose agent is gone was not reported as having no agent"
-  assert_contains "$out" "sess:p-husk" "the agentless endpoint line did not name its window"
   assert_contains "$out" "endpoint: alive (backend=herdr window=sess:p-live)" \
     "a herdr pane with a registered agent stopped being reported alive"
 
