@@ -335,11 +335,12 @@ EOF
     "a blocked record must still name what is holding it"
   # The renderer reads the skill, not the script, so a phase cause left standing in
   # the prose would keep telling a reader that work under way explains the absence
-  # long after the script stopped producing that cause.
-  # Grep the CAUSE SPELLING, never the word: both files discuss the removed clause
+  # long after the script stopped producing that cause. The script's side is
+  # asserted behaviourally above: voy-worked is on the decision list with no
+  # withheld cause at all.
+  # Grep the CAUSE SPELLING, never the word: the skill discusses the removed clause
   # in prose on purpose, and a guard that forbade the word would forbid the record
   # of why it went.
-  assert_no_grep 'cause: "in-flight"' "$CHART" "the script must not name a phase as a withheld cause"
   # shellcheck disable=SC2016 # Backticks are literal Markdown in the expected text.
   assert_no_grep '`in-flight`' "$ROOT/.agents/skills/sea-chart/SKILL.md" \
     "the sea-chart skill must not document a phase as a withheld cause"

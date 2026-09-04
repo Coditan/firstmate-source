@@ -2218,9 +2218,8 @@ test_chat_contract_four_sections() {
   # a secondmate home on its RUNNING CHILDREN and reports whatever state the
   # snapshot reached, so a rule saying such a row appears only for
   # `active_child_work` would have the renderer drop a row the projection emitted -
-  # exactly the running work this surface was widened to stop losing.
-  grep -Fq 'select((.active_children | length) > 0)' "$ROOT/bin/fm-bearings-snapshot.sh" \
-    || fail "the in_flight selector no longer selects a secondmate home on its running children"
+  # exactly the running work this surface was widened to stop losing. The
+  # projection side of that is pinned behaviourally by the mixed-domain test.
   # shellcheck disable=SC2016 # Backticks are literal Markdown in the expected text.
   assert_no_grep 'appears Underway only for `active_child_work`' "$skill" \
     "the bearings skill must not restrict an Underway secondmate row to one state the projection no longer gates on"
