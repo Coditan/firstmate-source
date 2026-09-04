@@ -1465,6 +1465,110 @@ test_an_empty_record_model_never_reads_as_no_records() {
   pass "an empty record model never reads as no records"
 }
 
+# THE PARSE HAS THE SAME HOLE ONE STEP EARLIER. The record set the walk builds is
+# validated by parsing it, and a parse alone cannot tell a record set from the two
+# shapes a stubbed, truncated or half-run awk leaves behind: no output at all, and a
+# bare `null`. Both parse - an empty input parses vacuously, and `null` is a valid
+# JSON document - so the validation waved both through, and what a reader then held
+# was a value that is not a record set at all.
+#
+# awk is stubbed rather than the backlog corrupted, because a corrupted backlog is
+# caught by the parse itself: this is the failure that only asking what KIND of value
+# came back can catch. The stub answers only the record-parsing program, so the
+# digest and key work either side of it are untouched.
+stub_parse_awk() {  # <home> <payload>; an awk that answers <payload> to the record parse
+  local home=$1 payload=$2 real
+  real=$(command -v awk) || fail "this suite needs a real awk to stub around"
+  cat > "$home/fakebin/awk" <<SH
+#!/usr/bin/env bash
+for a in "\$@"; do
+  case "\$a" in *cur_hold_kind*) printf '%s' '$payload'; exit 0 ;; esac
+done
+exec $real "\$@"
+SH
+  chmod +x "$home/fakebin/awk"
+}
+
+assert_parse_refuses() {  # <home-name> <payload> <expected cause> <what the payload is>
+  local home out rc=0
+  home=$(make_home "$1")
+  printf 'the only answer\n' > "$home/d.txt"
+  run_hold "$home" record probe key --door chat --decision-file "$home/d.txt" \
+    --title "A question" --repo firstmate >/dev/null 2>&1 || fail "recording failed"
+
+  stub_parse_awk "$home" "$2"
+  out=$(run_ledger "$home" --records 2>&1) || rc=$?
+  rm -f "$home/fakebin/awk"
+
+  [ "$rc" -ne 0 ] \
+    || fail "$4 must not be reported as a home holding no decisions: $out"
+  assert_contains "$out" "$3" \
+    "the refusal must name the parse as what could not be read, not a later step: $out"
+  case "$out" in
+    *probe-decision-key*) fail "$4 must print no record lines: $out" ;;
+  esac
+}
+
+test_a_parse_that_produced_nothing_never_reads_as_no_records() {
+  assert_parse_refuses parse-silent '' \
+    "backlog parse produced no records at all" \
+    "a parse that printed nothing"
+  pass "a parse that produced nothing never reads as no records"
+}
+
+test_a_parse_that_produced_a_bare_null_never_reads_as_no_records() {
+  assert_parse_refuses parse-null 'null' \
+    "backlog parse produced invalid records" \
+    "a parse that answered a bare null"
+  pass "a parse that produced a bare null never reads as no records"
+}
+
+# The same guard must still let the genuine empty answer through: a home whose
+# records parse to an empty list holds no decisions, and that is a reading, not a
+# refusal.
+test_a_parse_that_produced_an_empty_list_is_still_a_clean_read() {
+  local home out rc=0
+  home=$(make_home parse-empty-list)
+  stub_parse_awk "$home" '[]'
+  out=$(run_ledger "$home" --records 2>&1) || rc=$?
+  rm -f "$home/fakebin/awk"
+
+  [ "$rc" -eq 0 ] || fail "a home whose records parse to an empty list must read cleanly (exit $rc): $out"
+  [ -z "$out" ] || fail "a home holding no captain records must print nothing: $out"
+  pass "a parse that produced an empty list is still a clean read"
+}
+
+# THE CALLER MAY NOT DISCARD IT EITHER. bin/fm-bootstrap.sh runs this reader's audit
+# at every session start and kept only exit 1, so every refusal above - each one a
+# read that could not be taken - reached the session start as silence, which is
+# exactly the shape a home with nothing unfinished produces. The one thing the
+# session start must never do is present an unreadable home as a clean one.
+test_bootstrap_surfaces_an_audit_that_could_not_read_the_records() {
+  local home out archive
+  home=$(make_home bootstrap-unreadable-records)
+
+  archive="$home/data/done-archive.md"
+  printf '## Done\n' > "$archive"
+  chmod 000 "$archive" || fail "could not make the archive unreadable"
+  # A root-run suite can still read it, and a test that cannot arrange its own
+  # premise says so instead of passing.
+  if head -c 1 "$archive" >/dev/null 2>&1; then
+    chmod 644 "$archive"
+    echo "skip: this environment can still read a mode-000 file (running as root?)"
+    return 0
+  fi
+
+  out=$(PATH="$home/fakebin:$PATH" FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" \
+    "$ROOT/bin/fm-bootstrap.sh" 2>/dev/null)
+  chmod 644 "$archive"
+
+  assert_contains "$out" "DECISION_LEDGER: STUCK:" \
+    "the session start must say the decision records could not be read: $out"
+  assert_contains "$out" "could not read $home/data" \
+    "the relayed line must carry the reader's own named cause: $out"
+  pass "bootstrap surfaces an audit that could not read the records"
+}
+
 # The reuse must be a cost decision and nothing else: turning it off must not change
 # a single byte of what a reader is shown.
 test_turning_the_reuse_off_changes_no_output() {
@@ -1525,3 +1629,7 @@ test_a_reuse_that_does_not_parse_never_reads_as_no_records
 test_the_intake_gate_refuses_when_the_records_cannot_be_read
 test_a_classify_that_failed_never_reads_as_no_records
 test_an_empty_record_model_never_reads_as_no_records
+test_a_parse_that_produced_nothing_never_reads_as_no_records
+test_a_parse_that_produced_a_bare_null_never_reads_as_no_records
+test_a_parse_that_produced_an_empty_list_is_still_a_clean_read
+test_bootstrap_surfaces_an_audit_that_could_not_read_the_records

@@ -383,7 +383,14 @@ make_fake_toolchain_no_tmux() {  # <case-dir> <extra-cli...>
   shift
   fakebin=$(make_fake_toolchain "$dir")
   rm -f "$fakebin/tmux"
-  fm_fake_exit0 "$fakebin" jq "$@"
+  # The REAL jq, not an exit-0 stub. What these cases assert is that jq is present
+  # as a genuine dependency, and a stub that answers nothing is not a present jq -
+  # it is a broken one. Bootstrap's readers now say so: the decision-record audit
+  # refuses rather than reporting a home it could not read as holding nothing, and
+  # that refusal reaches the session start. Handing them a working jq keeps these
+  # cases about the tool list they are actually about.
+  add_real_jq "$fakebin"
+  [ "$#" -eq 0 ] || fm_fake_exit0 "$fakebin" "$@"
   printf '%s\n' "$fakebin"
 }
 

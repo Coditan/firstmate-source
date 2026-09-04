@@ -635,7 +635,15 @@ else
   RECORDS=$(parse_records $FILES) || die "could not read $DATA"
 fi
 
-printf '%s' "$RECORDS" | jq empty >/dev/null 2>&1 \
+# A PARSE THAT PRODUCED NOTHING IS NOT AN EMPTY RECORD SET, AND NEITHER IS A BARE
+# `null`. Both are what a stubbed, truncated or half-run awk leaves behind, and both
+# are exits `jq empty` returns 0 on - it answers "this input parsed", and no input at
+# all parses vacuously. The record set this reader may act on is an ARRAY, so that is
+# what is asked. It is the same single parse: the only thing emitted is one boolean,
+# so the megabyte is never re-serialised and the cost the memo note measures stands.
+[ -n "$RECORDS" ] \
+  || die "backlog parse produced no records at all: an empty value is not a record set - a home with no backlog records still parses to an empty list; inspect $BACKLOG"
+printf '%s' "$RECORDS" | jq -e 'type == "array"' >/dev/null 2>&1 \
   || die "backlog parse produced invalid records; inspect $BACKLOG"
 
 # Classify. `acted-but-open` needs the state of every task in the home, not just the

@@ -6,7 +6,7 @@ It is an evidence map for reviewing a possible later `bin/` reorganization, not 
 
 ## Summary
 
-- Command count: 175 top-level files in `bin/`.
+- Command count: 176 top-level files in `bin/`.
 - Domain count: 18 domains currently used.
 - Ambiguous command count: 6.
 - Unplaced command count: 0.

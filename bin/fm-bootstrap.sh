@@ -19,6 +19,7 @@
 #                 "DECISION_LEDGER: <class> <id> - <what is unfinished about that captain decision record>",
 #                 "DECISION_LEDGER: baseline recorded|absent|rejected - <what the adoption baseline covers or refuses>",
 #                 "DECISION_LEDGER: and <n> more not shown here; run bin/fm-decision-ledger.sh --audit for the full list",
+#                 "DECISION_LEDGER: STUCK: this home's captain decision records could not be read: <the reader's own named cause>",
 #                 "FLEET_SYNC: <repo>: skipped|recovered|STUCK: <detail>",
 #                 "FLEET_SYNC: fleet: STUCK: cannot read the project registry <path>: <cause> ...",
 #                 "FLEET_SYNC: fleet: STUCK: cannot list the projects directory <path>: <cause> ...",
@@ -1472,10 +1473,31 @@ fi
 # to skip are the fleet-mutating sweeps, not a private cache this home rewrites
 # from its own records.
 if command -v jq >/dev/null 2>&1; then
-  # Exit 1 means findings; 0 is clean and stays silent, and anything else is an
+  # Exit 1 means findings; 0 is clean and stays silent. A REFUSAL IS NOT A CLEAN
+  # HOME. That reader now stops with a named cause on stderr rather than reporting
+  # that a home whose records it could not read holds none, and discarding that
+  # status would put the refusal back where it started: a session start that looks
+  # exactly like a home with nothing unfinished. So a stderr line the reader itself
+  # spoke - its own `fm-decision-ledger.sh: <cause>` prefix - is relayed with the
+  # cause it names. Anything else, including a crash that named nothing, stays an
   # environment fault this step declines to turn into a false alarm.
   decision_rc=0
-  decision_audit=$("$SCRIPT_DIR/fm-decision-ledger.sh" --audit 2>/dev/null) || decision_rc=$?
+  decision_err=$(mktemp "${TMPDIR:-/tmp}/fm-decision-ledger-err.XXXXXX" 2>/dev/null) || decision_err=""
+  if [ -n "$decision_err" ]; then
+    decision_audit=$("$SCRIPT_DIR/fm-decision-ledger.sh" --audit 2>"$decision_err") || decision_rc=$?
+  else
+    decision_audit=$("$SCRIPT_DIR/fm-decision-ledger.sh" --audit 2>/dev/null) || decision_rc=$?
+  fi
+  if [ "$decision_rc" -ne 0 ] && [ "$decision_rc" -ne 1 ]; then
+    decision_cause=""
+    [ -z "$decision_err" ] \
+      || decision_cause=$(sed -n 's/^fm-decision-ledger\.sh: //p' "$decision_err" 2>/dev/null | head -n 1)
+    [ -z "$decision_cause" ] \
+      || echo "DECISION_LEDGER: STUCK: this home's captain decision records could not be read: $decision_cause"
+    unset decision_cause
+  fi
+  [ -z "$decision_err" ] || rm -f "$decision_err"
+  unset decision_err
   if [ "$decision_rc" -eq 1 ] && [ -n "$decision_audit" ]; then
     # BOUNDED, AND THE REMAINDER IS STATED. This home's audit stood at 58 findings
     # the day the check was written, and a startup digest that opens with dozens of
