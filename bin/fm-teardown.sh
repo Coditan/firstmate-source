@@ -83,7 +83,18 @@
 #      attempts. Retries key off the error text, not whether the lock file still
 #      exists after the failed attempt - a lock that self-clears mid-check still
 #      deserves a retry of the return.
-#   2. Other treehouse return failures still abort immediately and loudly (no retry).
+#   2. Other treehouse return failures abort immediately and loudly, with one
+#      exception: the "worktree <path> is not managed by treehouse" signature.
+#      One directory can be reachable under two names (measured 2026-09-04: this
+#      vessel's ~/.treehouse is a symlink to /var/lib/vessel/work/worktrees) and
+#      treehouse compares the returned path as a STRING against the name the slot
+#      was created under. On that signature only, teardown performs ONE extra
+#      `treehouse status` read to ask the pool for its own name for this
+#      directory (fm_slot_pool_path, matching on physically-resolved directory
+#      identity, never on a list of accepted prefixes) and issues at most ONE
+#      more `treehouse return` under that spelling. An unreadable pool, or a
+#      directory the pool does not list, yields the input path unchanged and the
+#      failure is reported as before. Every other signature is still one attempt.
 #   3. If every retry still hits the lock signature and the lock remains, it is removed
 #      and the return tried once more ONLY when the lock is provably stale per
 #      bin/fm-lock-lib.sh's fm_lock_is_provably_stale, passing the worktree dir as the

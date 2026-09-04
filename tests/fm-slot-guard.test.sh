@@ -83,6 +83,7 @@ make_case() {
   : > "$case_dir/status-fails"
   : > "$case_dir/pool-paths"
   : > "$case_dir/abbrev-home"
+  : > "$case_dir/status-lines"
   printf '0\n' > "$case_dir/status-count"
   printf '0\n' > "$case_dir/return-count"
   : > "$case_dir/returned"
@@ -117,18 +118,20 @@ case "${1:-}" in
       [ "$at" = "$count" ] || continue
       printf '%s\t%s\n' "$p" "$h" >> "$LEASES"
     done < "${FM_TEST_CASE_DIR:?}/lease-on-status"
-    n=0
-    while IFS=$'\t' read -r p h; do
-      [ -n "$p" ] || continue
-      n=$((n + 1))
-      printf '%-5s %-12s %s  (held by %s)\n' "$n" leased "$(as_printed "$p")" "$h"
-    done < "$LEASES"
-    while IFS= read -r p; do
-      [ -n "$p" ] || continue
-      awk -F'\t' -v q="$p" '$1 == q {found=1} END {exit !found}' "$LEASES" && continue
-      n=$((n + 1))
-      printf '%-5s %-12s %s\n' "$n" available "$(as_printed "$p")"
-    done < "${FM_TEST_CASE_DIR:?}/pool-paths"
+    {
+      n=0
+      while IFS=$'\t' read -r p h; do
+        [ -n "$p" ] || continue
+        n=$((n + 1))
+        printf '%-5s %-12s %s  (held by %s)\n' "$n" leased "$(as_printed "$p")" "$h"
+      done < "$LEASES"
+      while IFS= read -r p; do
+        [ -n "$p" ] || continue
+        awk -F'\t' -v q="$p" '$1 == q {found=1} END {exit !found}' "$LEASES" && continue
+        n=$((n + 1))
+        printf '%-5s %-12s %s\n' "$n" available "$(as_printed "$p")"
+      done < "${FM_TEST_CASE_DIR:?}/pool-paths"
+    } | tee -a "${FM_TEST_CASE_DIR:?}/status-lines"
     exit 0 ;;
   return)
     shift
@@ -978,16 +981,27 @@ test_unreadable_pool_refuses_without_mutation() {
 # compares its argument as a string, so the spelling the pool does not know
 # aborted cleanup with "is not managed by treehouse" for work that was merged and
 # a copy that was clean. Both directions must land on the pool's own spelling.
+#
+# pool-is-alias is the measured vessel shape end to end: the pool's own name for
+# the slot is the HOME-rooted symlink, which `treehouse status` prints abbreviated
+# as "~/", while the task record carries the physical name. Resolving the pool's
+# spelling therefore has to expand that tilde before it can recognise the
+# directory at all - a reader that took the path field verbatim would compare a
+# literal tilde against an absolute path, match no line, and hand the same
+# unknown spelling back to the pool a second time.
 test_either_spelling_returns_under_pool_spelling() {
-  local case_dir rc alias
+  local case_dir rc alias FM_TEST_HOME
   for direction in pool-is-alias pool-is-real; do
     case_dir=$(make_case "spelling-$direction")
     alias="$case_dir/alias"
     ln -s "$case_dir/slot" "$alias"
     if [ "$direction" = pool-is-alias ]; then
+      FM_TEST_HOME="$case_dir"
+      abbreviate_pool_paths_under_home "$case_dir"
       register_pool_path "$case_dir" "$alias"
       write_task "$case_dir" finished-task dead "$case_dir/slot"
     else
+      FM_TEST_HOME=
       register_pool_path "$case_dir" "$case_dir/slot"
       write_task "$case_dir" finished-task dead "$alias"
     fi
@@ -1001,6 +1015,12 @@ test_either_spelling_returns_under_pool_spelling() {
     assert_no_grep "is not managed by treehouse" "$case_dir/stderr" \
       "spelling-$direction: the pool was handed a spelling it does not know"
     if [ "$direction" = pool-is-alias ]; then
+      # Precondition on the fixture's own emitted listing: the pool really did
+      # name this slot with an abbreviated root, so the expansion below it is
+      # what made the retry able to recognise the directory.
+      # shellcheck disable=SC2088  # the literal leading tilde is exactly what the pool prints
+      assert_grep "~/alias" "$case_dir/status-lines" \
+        "spelling-$direction: the pool should have listed the slot with an abbreviated root"
       grep -qxF "$alias" "$case_dir/returned" \
         || fail "spelling-$direction: the pool's own spelling should have been returned"
     else
@@ -1014,8 +1034,15 @@ test_either_spelling_returns_under_pool_spelling() {
 # --- (x) the unlanded-work refusal is untouched by the spelling fix ----------
 #
 # The spelling fix must stop the guard firing on a question it was not asked,
-# never soften the question it WAS asked. Same two-spelling setup, plus a commit
-# that exists nowhere else: teardown must still refuse and return nothing.
+# never soften the question it WAS asked. A commit that exists nowhere else:
+# teardown must still refuse and return nothing.
+#
+# This is a guard-still-refuses regression test, not a retry-interaction test.
+# validate_worktree_teardown_safety runs before teardown_treehouse_return is ever
+# reached, so `treehouse return` is never invoked here and the registered pool
+# alias and the second spelling cannot influence the outcome. They are set up
+# anyway so the case is the same shape as (w), differing only in the unlanded
+# commit - which is what makes the refusal attributable to the guard.
 test_second_spelling_still_refuses_unlanded_work() {
   local case_dir rc alias
   # The case name deliberately carries no word this test greps for: every REFUSED
