@@ -58,6 +58,8 @@ A `down:` verdict alone is not seat death: it becomes one only when an independe
 
 Two operating constraints bind wherever it is started.
 The keeper must run on a terminal socket separate from the one it watches, because a keeper sharing that socket dies with the thing it revives.
+That rule is enforced at startup rather than only asserted: when `$TMUX` says the keeper was hand-started on the terminal server hosting the target socket it refuses to run, and it names both the mistake and the fix.
+A keeper started outside a terminal server, or on any other one, is unaffected by that refusal.
 It restores a session and its windows on a target server that survived, and it deliberately refuses to create a new target server: total server loss is not what this stopgap covers.
 
 The keeper obeys the same declarations the respawner obeys, because a home running it as the stand-in for the unit must not lose them.

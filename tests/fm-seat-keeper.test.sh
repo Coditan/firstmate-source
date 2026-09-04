@@ -398,6 +398,37 @@ test_a_state_dir_that_is_not_the_homes_own_is_refused() {
   pass "a state dir that is not the home's own is refused before the keeper takes anything"
 }
 
+# $TMUX names the socket of the server hosting this process, so a keeper started
+# from a pane of the target server would die with the seat it exists to revive.
+# The refusal fires on that socket only, and is inert everywhere else.
+test_a_keeper_on_the_targets_own_server_is_refused() {
+  local dir out rc=0
+  dir=$(make_case same-server)
+  out=$(TMUX="$dir/target.sock,4321,0" run_keeper "$dir" "$DEAD_PANE" 2 2>&1) || rc=$?
+  [ "$rc" = 2 ] || fail "a keeper started on the target socket's own server was not refused with exit 2; got $rc"
+  case "$out" in *"$dir/target.sock"*) ;; *) fail "the refusal did not name the target socket: $out" ;; esac
+  case "$out" in *"die together with the seat it exists to revive"*) ;; *) fail "the refusal did not name the mistake: $out" ;; esac
+  case "$out" in *"start it from a terminal server other than"*) ;; *) fail "the refusal did not name the fix: $out" ;; esac
+  [ ! -e "$dir/home/state/.seat-keeper.log" ] && [ ! -e "$dir/home/state/.seat-keeper.lock" ] \
+    || fail "the refused keeper still published its records"
+  [ "$(launch_calls "$dir")" = 0 ] || fail "the refused keeper still touched the target terminal"
+
+  rc=0
+  dir=$(make_case other-server)
+  TMUX="$dir/other.sock,4321,0" run_keeper "$dir" "$DEAD_PANE" 2 || rc=$?
+  [ "$rc" = 0 ] || fail "a keeper started on another server was refused; got $rc"
+  [ "$(launch_calls "$dir")" -gt 0 ] \
+    || fail "a keeper started on another server did not restore the seat"
+
+  rc=0
+  dir=$(make_case no-server)
+  (unset TMUX; run_keeper "$dir" "$DEAD_PANE" 2) || rc=$?
+  [ "$rc" = 0 ] || fail "a keeper started outside a terminal server was refused; got $rc"
+  [ "$(launch_calls "$dir")" -gt 0 ] \
+    || fail "a keeper started outside a terminal server did not restore the seat"
+  pass "a keeper on the target socket's own server is refused, and any other start is untouched"
+}
+
 test_dead_seat_verdict_restores_the_seat
 test_one_reading_is_not_enough
 test_a_changing_wake_count_is_still_one_condition
@@ -408,6 +439,7 @@ test_declared_stay_down_leaves_the_seat_down
 test_restore_attempts_are_bounded_and_reported
 test_the_state_dir_argument_wins_over_the_environment
 test_a_state_dir_that_is_not_the_homes_own_is_refused
+test_a_keeper_on_the_targets_own_server_is_refused
 test_the_delivery_verdict_is_read_for_the_home_given
 test_a_hand_start_lifts_an_exhausted_bound
 test_a_hand_start_lifts_an_exhausted_but_unfiled_bound

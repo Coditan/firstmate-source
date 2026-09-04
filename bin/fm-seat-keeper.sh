@@ -14,7 +14,8 @@
 # This is a container stopgap for a home whose systemd user manager is absent.
 # It consumes bin/fm-delivery-service.sh's named status verdict and never uses a
 # socket pathname or a process-name match as its seat-death detector. The keeper
-# itself must run on a separate tmux socket from <target-socket>.
+# itself must run on a separate tmux socket from <target-socket>, and refuses to
+# start when $TMUX says it was started on that socket's own server.
 #
 # Deliberate shutdown is declared, not inferred: while state/.seat-stay-down
 # exists this keeper clears its retry episode and leaves the seat down. Same
@@ -67,6 +68,10 @@ case "$KEEPER_STATE" in /*) ;; *) echo "fm-seat-keeper.sh: state-dir must be abs
 case "$TARGET_SOCKET" in /*) ;; *) echo "fm-seat-keeper.sh: target-socket must be absolute" >&2; exit 2 ;; esac
 case "$ACCOUNT_HOME" in /*) ;; *) echo "fm-seat-keeper.sh: account-home must be absolute" >&2; exit 2 ;; esac
 case "$TARGET_SESSION" in ''|*[!A-Za-z0-9_-]*) echo "fm-seat-keeper.sh: target-session contains unsafe characters" >&2; exit 2 ;; esac
+if [ -n "${TMUX-}" ] && [ "${TMUX%%,*}" = "$TARGET_SOCKET" ]; then
+  echo "fm-seat-keeper.sh: this keeper was started on the terminal server hosting target-socket=$TARGET_SOCKET, so it would die together with the seat it exists to revive; start it from a terminal server other than the one hosting that socket" >&2
+  exit 2
+fi
 
 strip_trailing_slashes() {  # <path>
   local value=$1
