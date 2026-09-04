@@ -254,6 +254,10 @@ test_a_reading_that_cannot_be_taken_is_reported_and_keeps_being_reported() {
 # an absence, and the captain is the only channel left when the seat is gone.
 test_an_absence_is_reported_even_when_the_alarm_cannot_keep_its_own_record() {
   local home now
+  if [ "$(id -u)" -eq 0 ]; then
+    echo "skip: running as root, so mode bits do not block a write"
+    return 0
+  fi
   home=$(make_home amnesiac)
   record_seat "$home" 999999
   record_endpoint "$home"
@@ -285,6 +289,10 @@ test_an_absence_is_reported_even_when_the_alarm_cannot_keep_its_own_record() {
 # strength of a claim nothing here can establish.
 test_an_alarm_that_cannot_remember_does_not_grow_the_wake_queue_each_sweep() {
   local home now line lines=0 k
+  if [ "$(id -u)" -eq 0 ]; then
+    echo "skip: running as root, so mode bits do not block a write"
+    return 0
+  fi
   home=$(make_home amnesiac-quiet)
   record_endpoint "$home"
   rm -rf "$home/state"

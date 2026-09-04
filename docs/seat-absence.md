@@ -244,7 +244,9 @@ What is measured for that verdict is a respawner process holding this home's loc
 
 The cost is real and is named here rather than hidden.
 While the vessel is absent the captain's phone says nothing about whether the restart has stopped; the give-up finding still fires, but the findings surface is drained by a seat and during an absence there is no seat, so that signal does not reach him while it lasts.
-What he does get is `holding:`, restored to full effect now that it no longer sits behind a give-up test: a seat that was started and never finished starting is reported with the pane it is sitting in, which is the one fact he can act on.
+What he does get is `holding:`, restored to full effect now that it no longer sits behind a give-up test: the message tells him a seat was started here, that it never finished starting, and that this vessel will not start another beside it.
+That message does not carry the pane the seat is sitting in, and no message to him does - `read_restarter` keeps the verdict's prefix and discards the rest of the status line.
+The pane id is on the `bin/fm-seat-respawner-service.sh status` line, which a human runs, and in the give-up finding, which the sentence above already says does not reach him while the absence lasts.
 
 **A new episode under a condition this home already gave up on emits no give-up finding, and that half stays open.**
 `emit_giveup_finding` returns early when `state/.seat-respawn-giveup` already names the key it is about to report, and nothing drops that record when the condition key changes.
