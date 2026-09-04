@@ -944,6 +944,10 @@ test_a_live_first_mate_is_never_relaunched() {
 # nothing about whether a first mate holds this home, so it must not open one.
 test_an_unreadable_lock_never_produces_a_launch() {
   local home delivery tmux log status rc=0
+  if [ "$(id -u)" -eq 0 ]; then
+    echo "skip: running as root, so mode bits do not block a read"
+    return 0
+  fi
   home=$(make_home unmeasured-lock)
   status="$home/status.txt"
   delivery="$home/fake-delivery"

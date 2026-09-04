@@ -155,6 +155,10 @@ test_a_home_that_never_seated_is_not_an_alarm() {
 # indistinguishable from a healthy vessel.
 test_an_unreadable_record_is_reported_and_never_read_as_healthy() {
   local home status rc=0
+  if [ "$(id -u)" -eq 0 ]; then
+    echo "skip: running as root, so mode bits do not block a read"
+    return 0
+  fi
   home=$(make_home unmeasured)
   record_endpoint "$home"
   printf 'x\n' > "$home/state/.lock"
@@ -172,6 +176,10 @@ test_an_unreadable_record_is_reported_and_never_read_as_healthy() {
 # never established. The outward message already keeps the two apart.
 test_an_unmeasured_reading_is_not_printed_as_a_confirmed_absence() {
   local home line pid
+  if [ "$(id -u)" -eq 0 ]; then
+    echo "skip: running as root, so mode bits do not block a read"
+    return 0
+  fi
   home=$(make_home unmeasured-wording)
   record_endpoint "$home"
   printf 'x\n' > "$home/state/.lock"

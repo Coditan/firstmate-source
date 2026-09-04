@@ -191,7 +191,7 @@ Scope, measured rather than assumed: **this vessel is not affected**, `command -
 The exposure is hosts without GNU coreutils, which this fleet does support: `bin/fm-watch.sh` - the loop that hosts this very check - falls back `timeout` to `gtimeout` to a perl alarm, and `fm_path_mtime` in `bin/fm-wake-lib.sh` and the tmux probe in `bin/fm-backend.sh` both branch on `uname = Darwin`.
 It is also pre-existing rather than introduced by review: the unguarded call was in this branch's first commit, `2595c24`. The bounded probe added later degrades honestly to `RESTARTER=unknown` and is not the call that matters.
 
-The fix is known and was deliberately not taken, under a standing decision that nothing further changes in `bin/fm-seat-alarm.sh`: resolve `timeout`/`gtimeout` once into a variable and skip the wrapper when neither exists, exactly as `bin/fm-currency-round.sh` already does with `HAVE_TIMEOUT`.
+The fix is known and was deliberately not taken here, because the exposure is on hosts this vessel is not one of and the unguarded call predates this branch, so closing it is separate work rather than part of an absence detector: resolve `timeout`/`gtimeout` once into a variable and skip the wrapper when neither exists, exactly as `bin/fm-currency-round.sh` already does with `HAVE_TIMEOUT`.
 Whoever picks this up does not have to rediscover it.
 
 **A pane the respawner launched can be left running with nothing tracking it, and this does not report that either.**

@@ -195,15 +195,19 @@ test_a_killed_seat_is_reported_outward_and_comes_back() {
   # A reading that could not be taken is not an absence on this half either: a
   # first mate this process cannot see is still a first mate, so an unreadable
   # lock must leave the pane untouched and the pending turn standing.
-  turns_before=$(wc -l < "$HOME_DIR/first-turns.log")
-  chmod 000 "$HOME_DIR/state/.lock"
-  run_respawner_once || true
-  sleep 1
-  chmod 600 "$HOME_DIR/state/.lock"
-  [ "$(wc -l < "$HOME_DIR/first-turns.log")" = "$turns_before" ] \
-    || fail "a lock that could not be read still had a first turn typed into the pane"
-  [ -f "$HOME_DIR/state/.seat-first-turn" ] \
-    || fail "a lock that could not be read retired the pending first turn"
+  if [ "$(id -u)" -eq 0 ]; then
+    echo "skip: running as root, so mode bits do not block a read"
+  else
+    turns_before=$(wc -l < "$HOME_DIR/first-turns.log")
+    chmod 000 "$HOME_DIR/state/.lock"
+    run_respawner_once || true
+    sleep 1
+    chmod 600 "$HOME_DIR/state/.lock"
+    [ "$(wc -l < "$HOME_DIR/first-turns.log")" = "$turns_before" ] \
+      || fail "a lock that could not be read still had a first turn typed into the pane"
+    [ -f "$HOME_DIR/state/.seat-first-turn" ] \
+      || fail "a lock that could not be read retired the pending first turn"
+  fi
 
   # OBSERVATION 4: the fresh seat is given its first turn, and only now is there
   # a first mate holding this home - and the cycle that delivers it starts no
