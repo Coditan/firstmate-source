@@ -56,9 +56,12 @@ command -v jq >/dev/null 2>&1 || fail "jq is required for the tailnet identity r
 # It also fakes `tailscale serve`, keeping its published ports in
 # FM_TEST_TS_SERVE_STATE and logging every serve invocation to
 # FM_TEST_TS_SERVE_LOG, so a test can assert that the proxy path was taken - or,
-# just as importantly, that it was NOT. FM_TEST_TS_SERVE=broken makes every
-# serve mutation fail, which is the vessel that has the unbindable address and
-# no way around it. FM_TEST_TS_DOWN_MARKER names a file whose existence makes
+# just as importantly, that it was NOT. FM_TEST_TS_SERVE_PROXY names a directory
+# and turns a publication into a REAL reverse proxy on
+# FM_TEST_TS_SERVE_PROXY_ADDR, torn down again by the matching `off`, so a test
+# can send a request the whole way through one. FM_TEST_TS_SERVE=broken makes
+# every serve mutation fail, which is the vessel that has the unbindable address
+# and no way around it. FM_TEST_TS_DOWN_MARKER names a file whose existence makes
 # every LATER `tailscale status --json` report a stopped backend, so a tailscaled
 # that goes down partway through a run - after its identity was read and before
 # a route could be published onto it - is reproducible rather than hypothetical.
@@ -87,9 +90,25 @@ if [ "${1:-}" = serve ]; then
   done
   [ -n "$port" ] || exit 1
   if [ "${*: -1}" = off ]; then
+    if [ -n "${FM_TEST_TS_SERVE_PROXY:-}" ] && [ -s "$FM_TEST_TS_SERVE_PROXY/$port.pid" ]; then
+      kill "$(cat "$FM_TEST_TS_SERVE_PROXY/$port.pid")" 2>/dev/null || true
+      rm -f "$FM_TEST_TS_SERVE_PROXY/$port.pid"
+    fi
     grep -vx "$port" "$state" > "$state.tmp" 2>/dev/null || : > "$state.tmp"
     mv -f "$state.tmp" "$state"
   else
+    # A publication that really proxies, when a test asks for one. Off by
+    # default, because most cases only need to know that a port was published
+    # and starting a listener for them would be noise.
+    if [ -n "${FM_TEST_TS_SERVE_PROXY:-}" ]; then
+      ready="$FM_TEST_TS_SERVE_PROXY/$port.ready"
+      rm -f "$ready"
+      node "$FM_TEST_TS_SERVE_PROXY_SCRIPT" "$ready" "$FM_TEST_TS_SERVE_PROXY_ADDR" "$port" "$port" \
+        </dev/null >"$FM_TEST_TS_SERVE_PROXY/$port.log" 2>&1 &
+      echo $! > "$FM_TEST_TS_SERVE_PROXY/$port.pid"
+      for _ in $(seq 1 100); do [ -s "$ready" ] && break; sleep 0.05; done
+      [ -s "$ready" ] || exit 1
+    fi
     printf '%s\n' "$port" >> "$state"
   fi
   exit 0
@@ -1849,6 +1868,18 @@ case " $u_allowed " in
 esac
 assert_contains "$(cat "$FM_TEST_TS_SERVE_LOG")" "--http=$u_port" \
   "the port the board bound is the port published onto the tailnet"
+# The link host here is by construction an address this machine cannot bind, so
+# it not answering locally is the premise of this whole path rather than news
+# about the board. Advising the loopback link on the strength of that is the
+# exact hand-over this branch exists to remove.
+assert_not_contains "$out" "does not answer here" \
+  "the link host cannot be expected to answer on the vessel that could not bind it"
+assert_not_contains "$out" "hand over http://127.0.0.1" \
+  "a loopback link may not be advised under a link the proxy genuinely answers"
+# And nothing may claim in exchange that the link was reached: the probe that
+# replaced it touched loopback only.
+assert_not_contains "$out" "is reachable at http" \
+  "no sentence may assert the tailnet name answers, because nothing here tested it"
 pass "a vessel that cannot bind its own address still hands over a tailnet link"
 
 # A proxy outliving its board leaves this vessel's own name answering nothing,
@@ -1860,6 +1891,43 @@ FM_TEST_TS_MODE=userspace FM_HOME="$HOME_U" FM_SERVICE_PORT_RANGE=4796-4799 \
 assert_contains "$(cat "$FM_TEST_TS_SERVE_LOG")" "--http=$u_port off" \
   "the withdrawal names the port it published"
 pass "stopping a proxied board takes its tailnet endpoint down with it"
+
+# The loopback probe is not decoration: it is the one readiness question this
+# state can still answer, and a board that does not answer on the port it bound
+# is a real failure however well its route was published.
+: > "$FM_TEST_TS_SERVE_STATE"
+: > "$FM_TEST_TS_SERVE_LOG"
+HOME_UD=$(make_home "$TMP_ROOT/vessel-ud")
+make_fake_lavish "$HOME_UD"
+export FM_TEST_LAVISH_LOG="$TMP_ROOT/lavish-ud.log"
+: > "$FM_TEST_LAVISH_LOG"
+ud_out=$(FM_TEST_TS_MODE=userspace FM_HOME="$HOME_UD" FM_SERVICE_PORT_RANGE=4936-4937 \
+  "$ROOT/bin/fm-lavish.sh" "$HOME_UD/.lavish/board.html" 2>&1)
+ud_port=$(printf '%s\n' "$ud_out" | sed -n 's|.*://[^:]*:\([0-9][0-9]*\)/session/.*|\1|p' | head -1)
+[ -n "$ud_port" ] || fail "the proxied open should emit a session link, got: $ud_out"
+grep -qx "$ud_port" "$FM_TEST_TS_SERVE_STATE" \
+  || fail "this case only means anything while $ud_port is genuinely published"
+assert_contains "$ud_out" "did not answer" \
+  "a board that answers nothing on the port it bound is still a failure worth reporting"
+assert_contains "$ud_out" "127.0.0.1:$ud_port" \
+  "the failure names the address and port the run actually probed"
+pass "a published route does not excuse a board that never came up on the port it bound"
+
+# Every other state keeps the old behaviour, because there the link host is one
+# this machine did bind and a failed probe against it is real evidence.
+HOME_TN=$(make_home "$TMP_ROOT/vessel-tn")
+make_fake_lavish "$HOME_TN"
+: > "$FM_TEST_LAVISH_LOG"
+tn_out=$(FM_TEST_TS_MODE=kernel FM_HOME="$HOME_TN" FM_SERVICE_PORT_RANGE=4941-4942 \
+  "$ROOT/bin/fm-lavish.sh" "$HOME_TN/.lavish/board.html" 2>&1)
+assert_contains "$tn_out" "/session/" "the tailnet open still emits a session link"
+assert_contains "$tn_out" "does not answer here" \
+  "on a bindable tailnet address a failed probe against the link host is real evidence"
+assert_contains "$tn_out" "hand over http://127.0.0.2" \
+  "and the address form that does work is still named there"
+pass "a bindable tailnet address keeps the link-host probe and its advice"
+: > "$FM_TEST_TS_SERVE_STATE"
+: > "$FM_TEST_TS_SERVE_LOG"
 
 # A withdrawal that does not take is the exact residue this mechanism exists to
 # prevent, and `stop` replaces this process, so the moment before it is the only
@@ -2337,3 +2405,97 @@ expect_code 0 "$?" "a named port with nothing on it is not a failure"
 assert_contains "$out" "nothing to stop" "an empty port is reported as nothing to stop"
 assert_contains "$out" "4795" "the message names the port that was checked"
 pass "stop --port is held to the same ownership proof as a bare stop"
+
+# --- the published proxy really carries the captain's request ----------------
+#
+# Every case above stops at the record: the port was published, the link named
+# the tailnet, the allowlist carried these names. None of them sends a request
+# through the publication, and the one measured claim this whole path rests on
+# is about the request itself - a browser reaching the board through
+# `tailscale serve` carries the tailnet NAME in its Host header, so a board
+# whose allowlist did not accept that name would answer 403 to the only link the
+# captain was handed.
+#
+# So here `tailscale serve` puts up a real reverse proxy. 127.0.0.2 stands in
+# for the socket the tailnet address answers on inside tailscaled's userspace
+# stack: 192.0.2.1 is unbindable by design in this fixture, and reproducing the
+# stack itself needs privileges no vessel account has. Everything on the board
+# side of the proxy is the real thing - the port the allocator bound, the
+# allowlist fm-lavish.sh handed the server, and the Host header the request
+# carries through.
+cat > "$TMP_ROOT/serve-proxy.mjs" <<'JS'
+import http from "node:http";
+import { writeFileSync } from "node:fs";
+const [ready, listenAddr, listenPort, targetPort] = process.argv.slice(2);
+http
+  .createServer((req, res) => {
+    // A serve proxy passes the request through; the Host the browser sent is
+    // what the board behind it sees, which is the whole point of this case.
+    const upstream = http.request(
+      { host: "127.0.0.1", port: Number(targetPort), path: req.url, method: req.method, headers: req.headers },
+      (up) => {
+        res.writeHead(up.statusCode || 502, up.headers);
+        up.pipe(res);
+      },
+    );
+    upstream.on("error", () => res.writeHead(502).end("bad gateway"));
+    req.pipe(upstream);
+  })
+  .listen({ host: listenAddr, port: Number(listenPort) }, () => writeFileSync(ready, "ready\n"));
+JS
+export FM_TEST_TS_SERVE_PROXY="$TMP_ROOT/proxies"
+export FM_TEST_TS_SERVE_PROXY_SCRIPT="$TMP_ROOT/serve-proxy.mjs"
+export FM_TEST_TS_SERVE_PROXY_ADDR=127.0.0.2
+mkdir -p "$FM_TEST_TS_SERVE_PROXY"
+kill_test_proxies() {
+  local p
+  for p in "$FM_TEST_TS_SERVE_PROXY"/*.pid; do
+    [ -e "$p" ] || continue
+    kill "$(cat "$p")" 2>/dev/null || true
+    rm -f "$p"
+  done
+}
+trap 'kill_test_proxies; kill_test_servers; release_ports; fm_test_cleanup' EXIT
+
+: > "$FM_TEST_TS_SERVE_STATE"
+: > "$FM_TEST_TS_SERVE_LOG"
+HOME_PX=$(make_home "$TMP_ROOT/vessel-px")
+make_serving_lavish "$HOME_PX"
+px_out=$(FM_TEST_TS_MODE=userspace FM_HOME="$HOME_PX" FM_SERVICE_PORT_RANGE=4931-4934 \
+  "$ROOT/bin/fm-lavish.sh" "$HOME_PX/.lavish/board.html" 2>&1)
+px_port=$(printf '%s\n' "$px_out" | sed -n 's|.*://[^:]*:\([0-9][0-9]*\)/session/.*|\1|p' | head -1)
+[ -n "$px_port" ] || fail "the proxied open should emit a session link, got: $px_out"
+grep -qx "$px_port" "$FM_TEST_TS_SERVE_STATE" \
+  || fail "this case only means anything while $px_port is genuinely published"
+
+# The Host a browser sends through the proxy by this node's tailnet name. The
+# board must answer it, because that name is the only thing standing between the
+# captain's click and a 403.
+px_named=$(node "$ROOT/bin/fm-service-port-probe.mjs" \
+  http "http://127.0.0.2:$px_port/session/test" "userspace:$px_port" 2>/dev/null)
+[ "$px_named" = 200 ] \
+  || fail "a request through the proxy carrying the tailnet name was answered $px_named, not 200"
+# And by the tailnet address, which is what the emitted link names here.
+px_addressed=$(node "$ROOT/bin/fm-service-port-probe.mjs" \
+  http "http://127.0.0.2:$px_port/session/test" "192.0.2.1:$px_port" 2>/dev/null)
+[ "$px_addressed" = 200 ] \
+  || fail "the link's own hostname was answered $px_addressed through the proxy, not 200"
+# Reaching the board over the proxy must not have opened it to everyone: the
+# allowlist is still closed to a name nobody put in it.
+px_foreign=$(node "$ROOT/bin/fm-service-port-probe.mjs" \
+  http "http://127.0.0.2:$px_port/session/test" "elsewhere.example:$px_port" 2>/dev/null)
+[ "$px_foreign" = 403 ] \
+  || fail "an unlisted host reached the board through the proxy, answered $px_foreign"
+pass "a request through the published proxy reaches the board with the Host the tailnet sends"
+
+# Closing the board takes the endpoint down, so the captain's link stops
+# answering rather than answering nothing.
+FM_TEST_TS_MODE=userspace FM_HOME="$HOME_PX" FM_SERVICE_PORT_RANGE=4931-4934 \
+  "$ROOT/bin/fm-lavish.sh" stop >/dev/null 2>&1
+px_after=$(node "$ROOT/bin/fm-service-port-probe.mjs" \
+  http "http://127.0.0.2:$px_port/session/test" "userspace:$px_port" 2>/dev/null)
+[ "$px_after" != 200 ] \
+  || fail "the tailnet endpoint still answered 200 after the board was stopped"
+pass "a stopped board leaves nothing answering on the endpoint it published"
+: > "$FM_TEST_TS_SERVE_STATE"
+: > "$FM_TEST_TS_SERVE_LOG"

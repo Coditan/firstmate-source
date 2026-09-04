@@ -112,6 +112,9 @@ The rule is that no URL is emitted implying reach the vessel has not established
   That one names what blocked the route and stops there: the state is not durable, and what a later run meets on that host is not something this run established, in either direction.
   Neither is either loopback sentence: an untested vessel has not been shown unreachable.
 - **The link host does not answer after the board opens** - the wrapper names the address form that does work.
+  That readiness probe targets the link host on every state except one: under `reachability=tailnet-proxied` with `route=published` the link host is by construction an address this machine could not bind, so its silence locally is the premise of that path rather than evidence about the board, and the loopback link the advice offers is the link that path exists to stop handing over.
+  There the probe targets the address the run actually bound, and the sentence stays inside what that answers - the board is serving on this vessel and its port is published over `tailscale serve` under the tailnet name - asserting nothing, in either direction, about whether that name answers from anywhere else, because nothing here tested it.
+  A board that does not answer on the port it bound is still reported as the failure it is, however well its route was published.
 - **Every candidate port is taken** - `bin/fm-service-port.sh` exits non-zero with one plain sentence and no board is opened.
   There is deliberately no silent loopback downgrade here, because that would reproduce the original bug somewhere new.
 - **The walk failed on an address this run never established as bindable** - a different state from the one above, and it degrades rather than refusing.
@@ -186,6 +189,7 @@ The durable alternative - giving the container `/dev/net/tun` and `NET_ADMIN` so
 A readiness probe must target the address that was bound.
 Probing loopback while a service binds only a tailnet address reports a healthy server as failed to start; that happened during this investigation and cost real time.
 `bin/fm-service-port-probe.mjs http` exists so callers cannot get this wrong by accident.
+On this vessel that address is loopback, so the readiness probe asks loopback - and answers only the readiness question, since the name in the link was never reached from here.
 
 ### The wrapper observes rather than predicts
 

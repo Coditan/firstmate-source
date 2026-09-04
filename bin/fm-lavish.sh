@@ -765,9 +765,28 @@ fi
 # bound. A bind that succeeded proves nothing about whether the emitted URL
 # resolves and answers, and the emitted URL is the only thing he can act on.
 # This is still a same-host probe: it proves the name and the allowlist, not
-# that his device has tailnet reach.
+# that his device has tailnet reach. The one state where the link host cannot
+# be asked at all is handled first, with its reason given there.
 if [ "$OPENED" -eq 1 ] && [ "$STATUS" -eq 0 ] && command -v node >/dev/null 2>&1 && [ -f "$PROBE" ]; then
-  if ! node "$PROBE" http "http://$LINK_HOST:$PORT/health" >/dev/null 2>&1; then
+  if [ "$REACHABILITY" = tailnet-proxied ] && [ "$ROUTE" = published ]; then
+    # Here the link host is, by construction, an address this machine could not
+    # bind - that is the whole reason a proxy was published onto it, and the
+    # userspace diagnosis above has already said so. Its silence to a local
+    # probe is therefore the premise of this path rather than evidence about the
+    # board, and the loopback link the advice below offers is exactly the link
+    # this path exists to stop handing over. So the readiness question is asked
+    # of what this run actually bound.
+    #
+    # What that answers is bounded and the sentences stay inside it: the board
+    # is up on this vessel and its port was published. Nothing here reached the
+    # tailnet name from anywhere, so nothing here may say the link works - or
+    # that it does not.
+    if node "$PROBE" http "http://$ADDR:$PORT/health" >/dev/null 2>&1; then
+      note "the board is serving on this vessel at $ADDR:$PORT and that port is published over tailscale serve under $LINK_HOST; whether that name answers from another device is not something this run tested."
+    else
+      note "the board did not answer on the port it bound ($ADDR:$PORT), so it is not serving here even though its port was published over tailscale serve under $LINK_HOST."
+    fi
+  elif ! node "$PROBE" http "http://$LINK_HOST:$PORT/health" >/dev/null 2>&1; then
     note "the board is serving, but the link's hostname ($LINK_HOST) does not answer here - hand over http://$ADDR:$PORT/... instead and check this vessel's tailnet name."
   fi
 fi
