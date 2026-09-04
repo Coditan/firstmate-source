@@ -312,6 +312,12 @@ A deliberate swap-thrash reproduction, held long enough to produce a windowed cu
 The floor was measured at 2,400 MiB on the 23,456 MiB calibration host, which is 10.2% of that machine's RAM and **6.1 times below** the lowest headroom ordinary busy operation reached there.
 The alarm reads `MemTotal` on every poll already, so it derives the floor as that same share of whatever machine it is actually on: 2,400 MiB on the calibration host, 793 MiB on a 7,746 MiB one.
 
+**The share only carries downward, and the cap is deliberately one-directional.**
+Applied to a machine smaller than the calibration host the share claims *less* headroom than a measurement already supports, which is honest.
+Applied upward it would claim more - 10.2% of a 64 GiB host is 6,706 MiB, a backstop a busy machine of that size could sit under during ordinary work, asserting an ordinary-headroom baseline at a size this fleet has never measured.
+That is the defect this derivation replaced, mirrored.
+So the derived floor is capped at the 2,400 MiB that was actually measured, and a machine above the calibration host says on its crossing line that its floor was capped and names the share it declined, rather than reporting a share it is not using.
+
 **What would have to happen to cross it on the calibration host:** from that busy low, something would have to take a further **12,256 MiB** without the horizon condition having fired first - which is why the floor is a backstop rather than the primary trigger.
 It exists for the shapes the horizon cannot see: memory taken by processes below the tracking floor, by many small processes at once, or by something that arrives and consumes it entirely between two samples.
 
@@ -328,8 +334,9 @@ The share transfers the calibration honestly; it does not verify it anywhere els
 A home that sets it gets that floor, and every verdict says the floor was configured rather than derived and names what the derivation would have given.
 A value that is not a positive number of MiB is a typo rather than a choice, so it falls back to the derivation and every verdict says that too - the same way an unusable stall gate does.
 
-**When the total cannot be read**, the floor cannot be derived from it.
-`MemAvailable` is readable independently, so the condition keeps working on the 2,400 MiB calibration figure - and names it as **inherited here rather than derived**, because a margin nobody restates after a host move is the exact failure this derivation replaced.
+**When the total cannot be read**, the floor cannot be derived from it, and the alarm falls back to the 2,400 MiB calibration figure and names it as **inherited here rather than derived** - because a margin nobody restates after a host move is the exact failure this derivation replaced.
+That fallback is **defensive rather than reachable today**: `bin/fm-memory-reading.sh` clears `MemTotal` and `MemAvailable` together, so a reading with no total has no available either and the alarm has already reported itself blind before the floor is settled.
+It is kept because the reader's coupling is that component's contract rather than the alarm's, and it costs nothing if that contract ever moves.
 
 ### Recovery margin: 1.25
 
@@ -369,7 +376,8 @@ The margin also has to be *stated* on every machine, not only the swapless one: 
 
 The alarm now reads `MemTotal` and `SwapTotal` from the same reading it already takes, and states in its own voice what its margin is worth on the machine it is on.
 On a machine with swap it says that healthy RAM headroom is not evidence the machine is healthy and that the stall condition is the one that answers that.
-On a machine with no swap it says there is no degrading stretch below the floor, gives the floor's share of **this** machine's RAM, and says plainly that no ordinary-headroom baseline has been measured at that size.
+On a machine with no swap it says there is no degrading stretch below the floor and that what the floor's distance buys where nothing degrades below it is unverified.
+Where the floor came from, and what share of this machine it is, is the derivation note's job and is stated on every shape rather than only this one, so the two notes do not restate each other.
 Every crossing, on every shape, states where its own floor came from.
 A `SwapTotal` that could not be read is reported as unread, never as a machine with no swap; those are opposite findings and collapsing them would be the substituted zero this alarm exists to refuse.
 
@@ -446,9 +454,11 @@ Stated because a limit nobody wrote down is one somebody will later assume away.
   A host that was suspended or frozen for hours comes back, replaces the stored sample it could no longer use, and reads healthy.
   Nothing in the alarm says it was away, because while it was away there was no seat to say it to.
   `--armed` is the instrument for that and it answers only at session start.
-- **Its floor is calibrated for one host size, and it says so rather than adjusting.**
-  See "What these numbers are worth on a different machine" above.
-  On a small host with no swap the floor is a much larger share of RAM than the share it was derived at, no ordinary-headroom baseline has been measured at that size, and the alarm reports that gap instead of inventing a number to close it.
+- **Its floor derives from a share measured on one host size, and it says so on every crossing.**
+  See "Floor: 10.2% of total RAM" and "What these numbers are worth on a different machine" above.
+  The 10.2% is the relationship one measured floor stood in to one measured host, and nothing establishes that this fleet's ordinary busy headroom is itself proportional to machine size - only that host has an ordinary-operation baseline.
+  So the share is carried DOWN onto a smaller machine and never up: above the calibration host the floor is capped at the 2,400 MiB somebody measured, because deriving upward would assert a baseline at a size nobody has measured, which is the same defect mirrored.
+  Every crossing names which of the three it was - derived, capped, or configured - instead of leaving the margin to be assumed.
 - **It measures the host, not this container's own cap.**
   A seat can exhaust its own cgroup limit while the host reads healthy, and no condition here sees that.
 - **It is a call for a decision, not a decision taken.**

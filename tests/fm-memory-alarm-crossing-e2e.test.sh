@@ -45,6 +45,16 @@ HOME_DIR="$TMP_ROOT/home"
 mkdir -p "$HOME_DIR/state" "$HOME_DIR/data"
 
 HORIZON_MIN=15
+# The headroom this run refuses to start under. It has two jobs, and both are
+# checked against the floor the alarm DERIVES here rather than against a number
+# that was once shipped: this run sets no FM_MEMORY_ALARM_FLOOR_MIB, so the floor
+# is the calibration share of this host's own RAM, capped at 2,400 MiB and
+# therefore never above it whatever the host size.
+#   - It keeps the baseline and first polls clear of that floor, so the runaway's
+#     first sighting is silent for the reason this test asserts - no previous
+#     sample to compare against - and not because headroom had already crossed.
+#     6,144 MiB is more than twice the highest floor the derivation can produce.
+#   - It refuses to add pressure to a machine already under it.
 MIN_AVAIL_MIB=6144
 CAP_MIB=2200
 
@@ -125,7 +135,9 @@ GROW_SECONDS=$(( CAP_MIB / RATE_MIB_S ))
 
 alarm() {
   # The sampling-window contract has fixture coverage in fm-memory-reading.test.sh.
-  # This live test compresses time and lowers the floor so it can prove the separate process-to-alarm path.
+  # This live test compresses time so it can prove the separate process-to-alarm
+  # path; the floor is left alone and derived from this host, which is what the
+  # MIN_AVAIL_MIB guard above is measured against.
   # Waiting 270 seconds between live test polls would add no evidence about that path.
   env FM_HOME="$HOME_DIR" FM_STATE_OVERRIDE="$HOME_DIR/state" FM_DATA_OVERRIDE="$HOME_DIR/data" \
       FM_MEMORY_ALARM_HORIZON_MIN="$HORIZON_MIN" \

@@ -192,15 +192,6 @@ derived_floor_alarm() {
       "$ALARM"
 }
 
-# A reading whose MemAvailable is perfectly readable and whose MemTotal is not.
-# Both other conditions divide by available rather than total, so this machine is
-# fully judgeable - it is only the floor that cannot be derived from it.
-reading_total_unmeasured() {  # <available_mib>
-  export FM_TEST_READING_EXIT=3
-  printf '{"schema":"fm-memory-reading.v1","complete":false,"unmeasured":[{"input":"headroom-total","reason":"/proc/meminfo carries no usable MemTotal"}],"headroom":{"total_kb":null,"available_kb":%s,"swap_total_kb":33554428,"swap_free_kb":33554428},"stall":%s,"growth":{"interval_seconds":300,"scope_reason":null,"unmeasured_reason":null},"processes":[]}\n' \
-    "$(( $1 * 1024 ))" "$(stall_obj 0.00)" >"$ANSWER"
-}
-
 # The alarm with the stall condition deliberately switched OFF. This is NOT how
 # it ships: FM_MEMORY_ALARM_STALL unset defaults to the shipped 1.00 gate and the
 # armed shim exports nothing that would empty it, so the condition ships ON. Only
@@ -1758,13 +1749,13 @@ test_a_machine_with_no_swap_is_told_apart_from_one_with_swap() {
   out=$(alarm)
   assert_contains "$out" "no swap configured" "a machine with no swap did not say so on its crossing"
   assert_contains "$out" "the kernel kills something"     "a swapless machine did not say that there is no degrading stretch below the floor"
-  # This case pins an EXPLICIT 2400 MiB floor, so 2400 of 7746 MiB is 31.0%.
-  # Where the floor came from is the derivation note's job, tested separately in
-  # the floor cases below; the shape note's job is what that distance is worth on
-  # a host with nowhere to put the pressure.
-  assert_contains "$out" "31.0% of this machine" "the floor's share of this machine was not stated"
-  assert_contains "$out" "no ordinary-headroom baseline has been measured on a machine this size" "the swapless machine did not say its margin is unverified at that size"
+  # Where the floor came from, and what share of this machine it is, are the
+  # derivation note's job and are tested separately in the floor cases below.
+  # What this note owes is what that distance is worth on a host with nowhere to
+  # put the pressure, and it must not restate the derivation beside it.
+  assert_contains "$out" "the whole warning here" "the swapless machine did not say the floor is the whole warning"
   assert_contains "$out" "is unverified"     "an unverified margin was not reported as unverified"
+  assert_not_contains "$out" "31.0% of this machine" "the shape note restated the floor's share, which the derivation note already owns"
   pass "a machine with no swap is told apart from one with swap, and says what its floor is worth"
 }
 
@@ -1886,6 +1877,29 @@ test_every_crossing_states_where_its_floor_came_from() {
   pass "every crossing states the derivation of the floor it crossed"
 }
 
+test_the_derived_floor_is_never_raised_above_the_figure_that_was_measured() {
+  # The share carries a measurement DOWN honestly and must never carry one UP:
+  # 10.2% of a 64 GiB host is 6,706 MiB, a backstop no measurement at that host
+  # size supports, and asserting one would be this same defect mirrored upward.
+  # Driven with a fabricated total, like both halves above.
+  local out
+  reset_home
+  FM_TEST_TOTAL_KB=67108864          # 64 GiB
+  reading 3000 true 0
+  out=$(derived_floor_alarm)
+  [ -z "$out" ] || fail "a 64 GiB host crossed at 3000 MiB, so the floor was derived above the figure anyone measured: $out"
+
+  reset_home
+  FM_TEST_TOTAL_KB=67108864
+  reading 1800 true 0
+  out=$(derived_floor_alarm)
+  assert_contains "$out" "below the 2400 MiB floor" "a 64 GiB host did not fall back to the measured 2400 MiB floor"
+  assert_not_contains "$out" "below the 6706 MiB floor" "a 64 GiB host used the uncapped share as its floor"
+  assert_contains "$out" "capped there rather than derived upward" "a capped floor did not say it was capped"
+  assert_contains "$out" "would be 6706 MiB" "a capped floor did not name the share it declined"
+  pass "the derived floor is capped at the figure that was measured, never raised above it"
+}
+
 test_a_configured_floor_wins_over_the_derived_one() {
   local out
   reset_home
@@ -1919,21 +1933,6 @@ test_a_configured_floor_wins_over_the_derived_one() {
   assert_contains "$out" "below the 793 MiB floor" "a malformed floor did not fall back to the derived one"
   assert_contains "$out" "was not a number of MiB" "a malformed floor was not reported as unusable"
   pass "a configured floor wins, and an unusable one falls back to the derivation and says so"
-}
-
-test_a_floor_that_could_not_be_derived_is_reported_as_inherited() {
-  # MemAvailable readable, MemTotal not. Every condition is still judgeable and
-  # only the floor's derivation is lost, so the alarm keeps working on the one
-  # figure there is - and names it as inherited rather than passing it off as a
-  # margin measured here.
-  local out
-  reset_home
-  reading_total_unmeasured 1800
-  out=$(derived_floor_alarm)
-  assert_contains "$out" "below the 2400 MiB floor" "a machine with no readable total stopped judging its headroom"
-  assert_contains "$out" "total RAM could not be read" "the alarm did not say why the floor could not be derived"
-  assert_contains "$out" "inherited here rather than derived" "an inherited floor was not reported as inherited"
-  pass "a floor that could not be derived is named as inherited, never as measured here"
 }
 
 test_a_healthy_machine_says_nothing
@@ -2000,6 +1999,6 @@ test_swap_that_could_not_be_read_is_never_reported_as_no_swap
 test_reading_the_shape_moves_no_threshold
 test_the_floor_is_derived_from_the_machine_rather_than_shipped
 test_every_crossing_states_where_its_floor_came_from
+test_the_derived_floor_is_never_raised_above_the_figure_that_was_measured
 test_a_configured_floor_wins_over_the_derived_one
-test_a_floor_that_could_not_be_derived_is_reported_as_inherited
 test_usage_errors_exit_two

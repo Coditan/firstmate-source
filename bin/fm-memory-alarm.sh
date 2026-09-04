@@ -121,8 +121,11 @@
 #              period there. On that host, something would have to consume
 #              roughly ten further gigabytes from the busy low to cross it, and
 #              the horizon condition fires long before that. The share is what
-#              transfers; see "the floor" below for why it, and not the absolute
-#              figure, is what ships.
+#              transfers, and only downward: it is capped at the 2,400 MiB that
+#              was actually measured, so a machine larger than the calibration
+#              host gets that figure rather than a bigger one nobody measured.
+#              See "the floor" below for why it, and not the absolute figure,
+#              is what ships, and why the cap is one-directional.
 # A threshold set so high nothing reaches it is indistinguishable from a healthy
 # machine, so all three are stated here, each reproducible from the doc, and the
 # alarm was proven by driving a real crossing rather than by argument.
@@ -331,15 +334,20 @@ RECOVERY=${FM_MEMORY_ALARM_RECOVERY:-1.25}
 STALE=${FM_MEMORY_ALARM_STALE:-1800}
 NOW=${FM_MEMORY_ALARM_NOW:-$(date +%s)}
 
+# This is composed before the reading exists, so it says only that the
+# configured value was unusable and that this alarm's own floor took over. WHICH
+# floor that is - derived from this machine, or the calibration figure inherited
+# because the total could not be read - is derive_floor's to state, and it is
+# the only place that knows.
 FLOOR_NOTE_PENDING=
 case "$FLOOR_OVERRIDE_MIB" in
   '') ;;
   *[!0-9]*)
-    FLOOR_NOTE_PENDING="the FM_MEMORY_ALARM_FLOOR_MIB configured for this home was not a number of MiB, so the floor this alarm derives from the machine is in force instead of it"
+    FLOOR_NOTE_PENDING="the FM_MEMORY_ALARM_FLOOR_MIB configured for this home was not a number of MiB, so this alarm's own headroom floor is in force instead of it"
     FLOOR_OVERRIDE_MIB= ;;
   *)
     if [ "$FLOOR_OVERRIDE_MIB" -le 0 ]; then
-      FLOOR_NOTE_PENDING="the FM_MEMORY_ALARM_FLOOR_MIB configured for this home was zero, which no reading can ever fall below, so the floor this alarm derives from the machine is in force instead of it"
+      FLOOR_NOTE_PENDING="the FM_MEMORY_ALARM_FLOOR_MIB configured for this home was zero, which no reading can ever fall below, so this alarm's own headroom floor is in force instead of it"
       FLOOR_OVERRIDE_MIB=
     fi ;;
 esac
@@ -409,6 +417,18 @@ fi
 # leaving it to be assumed: that this fleet's ordinary busy headroom is itself
 # proportional to machine size. Only one host has an ordinary-operation baseline.
 # The share transfers the calibration honestly; it does not verify it elsewhere.
+#
+# WHY THE CAP IS ONE-DIRECTIONAL
+# The derivation is therefore capped at the calibration figure itself, and the
+# cap is deliberately asymmetric. Carried DOWN onto a smaller machine the share
+# only ever claims less than a measurement already supports, which is honest.
+# Carried UP onto a larger one it would claim MORE - it would assert an
+# ordinary-headroom baseline at a host size this fleet has never measured, which
+# is exactly the defect this change exists to fix, mirrored: 10.2% of a 64 GiB
+# host is 6,706 MiB, a "backstop" a busy machine of that size could sit under
+# during ordinary work with nothing here to say it should not. So above the
+# calibration host the floor is the 2,400 MiB somebody measured, and the crossing
+# line says it was capped rather than reporting a share it is not using.
 CALIBRATION_FLOOR_MIB=2400
 CALIBRATION_TOTAL_MIB=23456
 
@@ -887,33 +907,59 @@ evaluate() {
 # alarm says about what its silence is worth; the floor's own derivation, above,
 # is what changes where the headroom condition sits.
 
+# The one place the derivation is computed. The floor itself and the figure an
+# override reports as "what the derivation would have given" must be the same
+# number, because the second is a claim about the first.
+#
+# It prints two figures: the floor in force, and the uncapped share it came from.
+# They differ only above the calibration host, where the cap is what is actually
+# holding the floor and the crossing line has to say which figure it declined.
+derived_floor_mib() {  # from TOTAL_MIB; prints "<floor_mib> <uncapped_share_mib>"
+  awk -v f="$CALIBRATION_FLOOR_MIB" -v c="$CALIBRATION_TOTAL_MIB" -v t="$TOTAL_MIB" \
+    'BEGIN {
+       s = int(f * t / c + 0.5)
+       d = (s > f) ? f : s
+       if (d < 1) d = 1
+       printf "%d %d", d, s
+     }'
+}
+
 derive_floor() {  # sets FLOOR_MIB and FLOOR_NOTE, from TOTAL_MIB
-  local share
+  local share pair derived uncapped
   share=$(awk -v f="$CALIBRATION_FLOOR_MIB" -v t="$CALIBRATION_TOTAL_MIB" \
     'BEGIN { printf "%.1f", f * 100 / t }')
   if [ -n "$FLOOR_OVERRIDE_MIB" ]; then
     FLOOR_MIB=$FLOOR_OVERRIDE_MIB
     FLOOR_NOTE="The $FLOOR_MIB MiB floor is the one this home configures, which wins over the $share% of total RAM the alarm would otherwise derive"
     if [ -n "$TOTAL_MIB" ] && [ "$TOTAL_MIB" -gt 0 ]; then
-      FLOOR_NOTE="$FLOOR_NOTE - $(awk -v f="$CALIBRATION_FLOOR_MIB" -v c="$CALIBRATION_TOTAL_MIB" -v t="$TOTAL_MIB" \
-        'BEGIN { printf "%d", f * t / c + 0.5 }') MiB on this machine's $TOTAL_MIB MiB."
+      pair=$(derived_floor_mib)
+      FLOOR_NOTE="$FLOOR_NOTE - ${pair%% *} MiB on this machine's $TOTAL_MIB MiB."
     else
       FLOOR_NOTE="$FLOOR_NOTE, which could not be computed here because this machine's total RAM was not read."
     fi
     return
   fi
-  # No total, no derivation. Falling back to the calibration host's own number is
-  # the only figure there is, and it is INHERITED here rather than derived, so it
-  # is named as inherited: that silence is what let a 23,456 MiB margin sit
-  # unremarked on a 7,746 MiB machine for as long as it did.
+  # DEFENSIVE, and not a path any reading this alarm takes can currently reach:
+  # bin/fm-memory-reading.sh clears MemTotal and MemAvailable together, so a
+  # reading with no total has no available either and evaluate() has already
+  # returned blind before this runs. It is kept because it costs nothing and the
+  # reader's coupling is that component's contract rather than this one's - if it
+  # ever decouples, the floor falls back to the only figure there is, and NAMES
+  # it as inherited rather than derived. That silence is what let a 23,456 MiB
+  # margin sit unremarked on a 7,746 MiB machine for as long as it did.
   if [ -z "$TOTAL_MIB" ] || [ "$TOTAL_MIB" -le 0 ]; then
     FLOOR_MIB=$CALIBRATION_FLOOR_MIB
     FLOOR_NOTE="This machine's total RAM could not be read, so the floor could not be derived from it: the $FLOOR_MIB MiB in force is the figure measured on a $CALIBRATION_TOTAL_MIB MiB host, inherited here rather than derived, and on a smaller machine that is a line ordinary work may sit near."
     return
   fi
-  FLOOR_MIB=$(awk -v f="$CALIBRATION_FLOOR_MIB" -v c="$CALIBRATION_TOTAL_MIB" -v t="$TOTAL_MIB" \
-    'BEGIN { printf "%d", f * t / c + 0.5 }')
-  [ "$FLOOR_MIB" -ge 1 ] || FLOOR_MIB=1
+  pair=$(derived_floor_mib)
+  derived=${pair%% *}
+  uncapped=${pair#* }
+  FLOOR_MIB=$derived
+  if [ "$derived" != "$uncapped" ]; then
+    FLOOR_NOTE="The $FLOOR_MIB MiB floor is the figure measured on the $CALIBRATION_TOTAL_MIB MiB calibration host, capped there rather than derived upward: $share% of this machine's $TOTAL_MIB MiB would be $uncapped MiB, and the share carries a measurement DOWN onto a smaller machine only. Upward it would assert an ordinary-headroom baseline at a host size this fleet has never measured, and this fleet has one on that host only."
+    return
+  fi
   FLOOR_NOTE="The $FLOOR_MIB MiB floor is derived from this machine, not shipped: $share% of its $TOTAL_MIB MiB, the same share the $CALIBRATION_FLOOR_MIB MiB floor stood at on the $CALIBRATION_TOTAL_MIB MiB host it was measured on. The share is what carries across; the absolute figure does not, and this fleet has an ordinary-headroom baseline on that one host only."
 }
 
@@ -931,13 +977,10 @@ machine_shape() {  # sets SHAPE_NOTE
     SHAPE_NOTE="This machine has $SWAP_TOTAL_MIB MiB of swap configured, so a shortage degrades into swap rather than into an immediate kill - which is why healthy RAM headroom here is not evidence that this machine is healthy, and the stall condition is the one that answers that."
     return
   fi
-  if [ -z "$TOTAL_MIB" ] || [ "$TOTAL_MIB" -le 0 ]; then
-    SHAPE_NOTE="This machine has no swap configured, so the floor is the whole warning - but its total RAM could not be read, so what that floor is worth here cannot be stated."
-    return
-  fi
-  local share
-  share=$(awk -v f="$FLOOR_MIB" -v t="$TOTAL_MIB" 'BEGIN { printf "%.1f", f * 100 / t }')
-  SHAPE_NOTE="This machine has no swap configured, so there is no degradation phase below the floor: it runs, and then the kernel kills something. The $FLOOR_MIB MiB floor is the whole warning here, and it is $share% of this machine's $TOTAL_MIB MiB - no ordinary-headroom baseline has been measured on a machine this size, so what that distance buys on a host with no thrashing phase is unverified."
+  # Where the floor came from, and what share of this machine it is, belong to
+  # the derivation note and are stated on every shape. What is left here is this
+  # note's own job: what that distance is worth where nothing degrades below it.
+  SHAPE_NOTE="This machine has no swap configured, so there is no degradation phase below the floor: it runs, and then the kernel kills something. The $FLOOR_MIB MiB floor is the whole warning here, and what that distance buys on a host with no thrashing phase below it is unverified."
 }
 
 # --- the stall run ----------------------------------------------------------
