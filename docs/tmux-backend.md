@@ -227,6 +227,37 @@ The secondmate-liveness sweep turns `unknown` into a reported skip and gates a r
 Agent liveness and composer safety are separate checks.
 During away-mode escalation delivery, `fm_tmux_composer_state` sends a bare shell glyph on an unbordered row to the shared composer classifier as `unknown`, and the daemon injects only into an affirmatively `empty` composer; see [Composer-emptiness safety](herdr-backend.md#composer-emptiness-safety-2026-07-10-fleet-wide-across-all-four-backends).
 
+## claude's idle composer with background shells (verified 2026-09-04, Claude Code 2.1.260, tmux 3.6 on Linux)
+
+A claude worker that starts a long command as a Claude Code background task - a test suite, or the blocking `no-mistakes axi run` it is told to drive - ends its turn and waits for that task's completion to wake it.
+For that whole span its composer is idle, its footer carries no `esc to interrupt`, and the pane renders the harness's own count of still-running background shells instead.
+Captured verbatim from a live worker window on 2026-09-04 with `tmux capture-pane -p -t firstmate:2`, last non-blank lines:
+
+```
+● The pipeline run is under way in the background; I'll act on its first gate or
+  outcome when it returns.
+✻ Sautéed for 53s · done 11:18 PM · 2 shells still running
+                                         ✔ Update installed · Restart to apply
+───────────────────────────────────────────── FIRSTMATE_OP wake delivery queue ─
+❯
+────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ bypass permissions on · 2 shells · ← for agents · ↓ to manage         /rc
+```
+
+The singular form was measured on another worker's footer while a turn was still running: `⏵⏵ bypass permissions on · 1 shell · esc to interrupt · ← for agents · ↓ to…`, so the footer counts shells whether or not a turn is running and the busy rule still wins whenever `esc to interrupt` is present.
+The count is claude's own tracking of its background tasks, and each such task is a direct `bash` child of the claude process, read on the same worker with `ps --ppid <claude pid>`:
+
+```
+    PID    PPID STAT     ELAPSED COMMAND
+4002354 3845587 SNs     01:06:41 /bin/bash -c source /home/firstmate/.claude/shell-snapshots/snapshot-bash-…
+4037447 3845587 SNs        59:28 /bin/bash -c source /home/firstmate/.claude/shell-snapshots/snapshot-bash-…
+```
+
+`fm_pane_background_work` (`bin/fm-tmux-lib.sh`) reads that footer indicator on the same six-line bound as the busy reader, and `bin/fm-crew-state.sh` reports such a pane as `working · source: pane` when no run is attributed.
+The indicator is deliberately kept out of `FM_BUSY_REGEX`: a pane showing only it is idle by the busy rule, so it still goes stale and still reaches the wedge ladder, where a `working` reading holds the ladder on the bounded recheck cadence rather than escalating.
+That is the ceiling: a worker whose background shell never returns still surfaces, once per `FM_PAUSE_RESURFACE_SECS`, as a bounded recheck rather than a wedge; a worker whose indicator has gone (no shells, idle composer) escalates on the unchanged ladder; and a worker whose claude process has exited shows a bare shell and no footer at all.
+The 2026-09-03 baseline this closes is in the fm-firstmate-wake-noise-reduction pull request: four stale wakes and every bare turn-end of two such workers reached the supervising seat and were answered with no action.
+
 ## Submit acknowledgement: "landed" is empty (with one busy-queue exception)
 
 The shared `fm_tmux_submit_enter_core` (`bin/fm-tmux-lib.sh`) types the message once, then retries Enter (Enter only, never a retype) until the composer clears.

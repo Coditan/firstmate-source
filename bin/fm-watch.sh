@@ -5,8 +5,9 @@
 # the external loop alive after the same durable append.
 # The no-verb signal and stale path is absorb-only-when-provably-working: a wake
 # is absorbed only when the crew shows POSITIVE evidence it is still working (an
-# actively-running no-mistakes step, or a backend busy signal), and surfaced
-# otherwise, so a crew that finishes (or stops and waits) without a current
+# actively-running no-mistakes step, a backend busy signal, or the harness's own
+# still-running-background-shells footer, all read by fm-crew-state.sh), and
+# surfaced otherwise, so a crew that finishes (or stops and waits) without a current
 # working signal is never silently swallowed. A declared external-wait pause or
 # a firstmate-declared parked terminal task is the separate idle absorb case and
 # re-surfaces only on its long bounded cadence. A run the authoritative run-step
@@ -830,6 +831,9 @@ handle_parked_stale() {  # <window> <hash>
 #
 # Scoped to codex on purpose: the other verified harnesses keep rendering their
 # busy indicator for the whole turn, so their static-pane stale really is idle.
+# (claude's one measured exception - an idle composer while its own background
+# shells still run - is a rendered footer, so it is read as pane evidence by
+# fm-crew-state.sh rather than corroborated by process liveness here.)
 # This is confined to the STALE path (not crew_absorb_class itself) because agent
 # liveness cannot tell a mid-tool-call apart from an idle post-turn composer - both
 # leave codex running - so the signal/turn-end absorb path must keep the pure

@@ -164,6 +164,7 @@ Claude draws its EMPTY composer as the agent prompt glyph followed by exactly on
 `fm_composer_trim` in `bin/fm-composer-lib.sh` owns what counts as blank padding for every adapter; see `docs/tmux-backend.md`, "claude's empty composer is padded with U+00A0", for the measurement, the reproductions, and the stated limits.
 When a steer reaches a claude worker mid-turn, claude queues it, clears the composer, lists the queued text above the input box, and replaces the composer placeholder with a dim `Press up to edit queued messages` - so a queued steer HAS landed and must never be re-sent.
 Claude's only busy signal is `esc to interrupt` in the bottom hint line; the spinner row carries no interrupt hint, and a long steer can take several seconds after delivery before that hint appears, so a not-busy read on a claude pane is never on its own evidence that a steer failed to land.
+A claude worker waiting on its own Claude Code background task renders no busy signal at all: its composer idles and its footer shows `· N shell(s) ·` instead, which `bin/fm-crew-state.sh` reads as working from the pane through `fm_pane_background_work`; `docs/tmux-backend.md` "claude's idle composer with background shells" carries the measurement and the ceiling that still surfaces a shell that never returns.
 
 **Per-task crewmate hook fact (verified 2026-07-25, Claude Code 2.1.220).**
 The crewmate turn-end hook lives in the task's own `.claude/settings.fm-task.json`, never in `.claude/settings.local.json`, which Claude Code rewrites at runtime and a project is free to track.

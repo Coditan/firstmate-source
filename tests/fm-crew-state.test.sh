@@ -93,7 +93,8 @@ case "${1:-}" in
     printf '%%1\n' ;;
   capture-pane)
     [ "${FM_FAKE_TMUX_MISSING:-0}" = 1 ] && exit 1
-    if [ "${FM_FAKE_BUSY:-0}" = 1 ]; then printf 'work in progress\nesc to interrupt\n'
+    if [ -n "${FM_FAKE_PANE_FILE:-}" ]; then cat "$FM_FAKE_PANE_FILE"
+    elif [ "${FM_FAKE_BUSY:-0}" = 1 ]; then printf 'work in progress\nesc to interrupt\n'
     else printf 'all quiet\n> \n'; fi ;;
 esac
 exit 0
@@ -228,8 +229,27 @@ reset_fakes() {
   FM_FAKE_HERDR_MISSING=0
   FM_FAKE_HERDR_AGENT_STATUS=""
   FM_FAKE_CI_LOGS=""
+  FM_FAKE_PANE_FILE=""
   export FM_FAKE_AXI_STATUS FM_FAKE_AXI_STATUS_RUN FM_FAKE_RUNS_LIST FM_FAKE_BUSY FM_FAKE_TMUX_MISSING
-  export FM_FAKE_HERDR_BUSY FM_FAKE_HERDR_MISSING FM_FAKE_HERDR_AGENT_STATUS FM_FAKE_CI_LOGS
+  export FM_FAKE_HERDR_BUSY FM_FAKE_HERDR_MISSING FM_FAKE_HERDR_AGENT_STATUS FM_FAKE_CI_LOGS FM_FAKE_PANE_FILE
+}
+
+# The pane a claude worker renders while idle at its composer with its own
+# background shells still running, captured verbatim from a live Claude Code
+# 2.1.260 worker on 2026-09-04 (docs/tmux-backend.md "claude's idle composer
+# with background shells"). No busy signature anywhere in it.
+write_claude_background_shells_pane() {  # <file> [count-word]
+  local count=${2:-2 shells}
+  cat > "$1" <<EOF
+● The pipeline run is under way in the background; I'll act on its first gate or
+  outcome when it returns.
+✻ Sautéed for 53s · done 11:18 PM · $count still running
+                                         ✔ Update installed · Restart to apply
+───────────────────────────────────────────── FIRSTMATE_OP wake delivery queue ─
+❯ 
+────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ bypass permissions on · $count · ← for agents · ↓ to manage         /rc
+EOF
 }
 
 # --- run-object fixtures (TOON, as `no-mistakes axi status` emits) -----------
@@ -855,6 +875,110 @@ test_no_run_busy_pane() {
   assert_contains "$out" "state: working" "busy pane -> working"
   assert_contains "$out" "source: pane" "busy pane -> pane source"
   pass "no run + busy pane reads working from the pane"
+}
+
+# --- pane evidence outranks the persistent turn-end marker -------------------
+# state/<id>.turn-ended is created by the crew's first completed turn and
+# removed only at teardown. From 2026-08-19 (commit 84277ec1) to 2026-09-04 the
+# no-run fallback consulted that marker BEFORE reading the pane, so every crew
+# with no attributed run answered `unknown · no-status-after-turn-end` for the
+# rest of its life, busy pane or not - and the watcher, which absorbs a no-verb
+# wake only on a `working` reading, surfaced every turn boundary and every
+# stale of a pre-validation worker. These cases pin the documented order: pane
+# first, then the marker, then the log.
+test_no_run_turn_ended_busy_pane_reads_working() {
+  reset_fakes
+  local d out
+  d=$(new_case turn-ended-busy)
+  make_repo_on_branch "$d/wt" fm/feat-turn-busy
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/turn-busy.meta" "window=fm:fm-turn-busy" "worktree=$d/wt" "kind=ship"
+  : > "$d/state/turn-busy.turn-ended"
+  FM_FAKE_AXI_STATUS=""
+  FM_FAKE_RUNS_LIST=""
+  FM_FAKE_BUSY=1
+  out=$(run_crew_state "$d" turn-busy)
+  assert_contains "$out" "state: working" "a busy pane after a completed turn must read working"
+  assert_contains "$out" "source: pane" "the busy reading must come from the pane"
+  assert_not_contains "$out" "no-status-after-turn-end" "the persistent turn-end marker must not outrank a busy pane"
+  pass "no run + turn-end marker + busy pane reads working from the pane"
+}
+
+test_no_run_idle_pane_waiting_on_background_shells_reads_working() {
+  reset_fakes
+  local d out
+  d=$(new_case background-shells)
+  make_repo_on_branch "$d/wt" fm/feat-bg-shells
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/bg-shells.meta" "window=fm:fm-bg-shells" "worktree=$d/wt" "kind=ship" "harness=claude"
+  : > "$d/state/bg-shells.turn-ended"
+  printf 'working: running the suite in the background\n' > "$d/state/bg-shells.status"
+  FM_FAKE_AXI_STATUS=""
+  FM_FAKE_RUNS_LIST=""
+  FM_FAKE_BUSY=0
+  write_claude_background_shells_pane "$d/pane.txt" "2 shells"
+  FM_FAKE_PANE_FILE="$d/pane.txt"
+  out=$(run_crew_state "$d" bg-shells)
+  assert_contains "$out" "state: working" "an idle composer with live background shells must read working"
+  assert_contains "$out" "source: pane" "the background-shell reading must come from the pane"
+  assert_contains "$out" "background shells" "the detail must say why the idle pane reads working"
+
+  # The singular form the footer renders for exactly one shell.
+  write_claude_background_shells_pane "$d/pane.txt" "1 shell"
+  out=$(run_crew_state "$d" bg-shells)
+  assert_contains "$out" "state: working" "the singular '1 shell' footer must read working too"
+  assert_contains "$out" "source: pane" "the singular footer reading must come from the pane"
+
+  # A secondmate idles on its own watcher, so its pane carries no such evidence.
+  fm_write_meta "$d/state/bg-shells.meta" "window=fm:fm-bg-shells" "worktree=$d/wt" "kind=secondmate" "harness=claude"
+  out=$(run_crew_state "$d" bg-shells)
+  assert_not_contains "$out" "source: pane" "a secondmate's pane must not be read for background shells"
+  pass "no run + idle composer + the harness's own background-shell indicator reads working from the pane"
+}
+
+test_no_run_idle_pane_prose_about_shells_is_not_evidence() {
+  reset_fakes
+  local d out
+  d=$(new_case shells-prose)
+  make_repo_on_branch "$d/wt" fm/feat-shells-prose
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/shells-prose.meta" "window=fm:fm-shells-prose" "worktree=$d/wt" "kind=ship"
+  printf 'working: writing the background-shell reader\n' > "$d/state/shells-prose.status"
+  FM_FAKE_AXI_STATUS=""
+  FM_FAKE_RUNS_LIST=""
+  FM_FAKE_BUSY=0
+  # Idle claude pane whose OUTPUT text mentions shell counts, with no footer
+  # indicator: prose is never positive evidence.
+  cat > "$d/pane.txt" <<'EOF'
+● The watcher must treat 2 shells still running as work, and 1 shell too.
+❯ 
+────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents · ↓ to…
+EOF
+  FM_FAKE_PANE_FILE="$d/pane.txt"
+  out=$(run_crew_state "$d" shells-prose)
+  assert_not_contains "$out" "source: pane" "prose mentioning shell counts must not read as pane evidence"
+  assert_contains "$out" "source: status-log" "with no pane evidence the log fallback must answer"
+  pass "output prose that mentions shell counts is not the background-shell indicator"
+}
+
+test_no_run_turn_ended_with_status_line_reads_the_log() {
+  reset_fakes
+  local d out
+  d=$(new_case turn-ended-paused)
+  make_repo_on_branch "$d/wt" fm/feat-turn-paused
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/turn-paused.meta" "window=fm:fm-turn-paused" "worktree=$d/wt" "kind=ship"
+  : > "$d/state/turn-paused.turn-ended"
+  printf 'paused: waiting on the upstream release\n' > "$d/state/turn-paused.status"
+  FM_FAKE_AXI_STATUS=""
+  FM_FAKE_RUNS_LIST=""
+  FM_FAKE_BUSY=0
+  out=$(run_crew_state "$d" turn-paused)
+  assert_contains "$out" "state: paused" "a declared pause written after a turn end is the crew's newest statement"
+  assert_contains "$out" "source: status-log" "the pause must be read from the log"
+  assert_not_contains "$out" "no-status-after-turn-end" "a status event DID land, so that cause must not fire"
+  pass "no run + turn-end marker + a status line reads the log, not the marker"
 }
 
 test_no_run_herdr_unknown_uses_backend_capture() {
@@ -1885,6 +2009,10 @@ test_cross_branch_attribution_picks_most_recent_row
 test_coarse_run_does_not_probe_other_branch_ci_log_for_ready_status
 test_other_branch_run_ignored
 test_no_run_busy_pane
+test_no_run_turn_ended_busy_pane_reads_working
+test_no_run_idle_pane_waiting_on_background_shells_reads_working
+test_no_run_idle_pane_prose_about_shells_is_not_evidence
+test_no_run_turn_ended_with_status_line_reads_the_log
 test_no_run_herdr_unknown_uses_backend_capture
 test_no_run_herdr_idle_agent_status_corroborated_by_busy_pane
 test_no_run_herdr_idle_agent_status_and_idle_pane_stays_idle

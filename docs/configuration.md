@@ -1075,6 +1075,7 @@ FM_FLEET_SYNC_PACKED_REFS_LOCK_RETRIES=3        # fetch retries after fm-fleet-s
 FM_FLEET_SYNC_PACKED_REFS_LOCK_RETRY_WAIT_SECS=1 # seconds fm-fleet-sync.sh waits before each of those retries
 FM_FLEET_SYNC_PACKED_REFS_LOCK_AGE_SECS=30       # min mtime age before fm-fleet-sync.sh treats a leftover packed-refs.lock as provably stale
 FM_BUSY_REGEX='esc (to )?interrupt|Working\.\.\.|Ctrl\+c:cancel'   # busy-pane signatures, shared by watcher, fm-crew-state pane fallback, and tmux helper
+FM_BACKGROUND_WORK_REGEX='· [0-9]+ shells?( still running| ·)'   # the harness's own still-running-background-shells footer (claude), read by fm-crew-state's pane fallback as working; never part of the busy set, so such a pane still goes stale and holds the ladder on the bounded recheck cadence
 FM_COMPOSER_IDLE_RE=    # optional empty-composer regex, applied after ghost and border stripping
 FM_COMPOSER_GHOST_LUMA_MAX=128   # fleet-wide: max perceived luminance (0.299R+0.587G+0.114B, 0-255) for a TRUECOLOR foreground to count as de-emphasised ghost/placeholder text and be stripped; dim/faint (SGR 2) is stripped regardless. Assumes a dark terminal theme (bin/fm-composer-lib.sh's fm_composer_strip_ghost, shared by the tmux and herdr composer readers)
 GROK_HOME=              # optional Grok config home for firstmate's global grok turn-end hook; defaults to ~/.grok

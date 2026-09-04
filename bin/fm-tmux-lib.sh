@@ -78,6 +78,20 @@
 # interrupt"; opencode: "esc interrupt"; pi: "Working..."; grok: "Ctrl+c:cancel"
 # (grok's mid-turn cancel hint, shown iff a turn is running - verified grok 0.2.73).
 FM_TMUX_BUSY_REGEX_DEFAULT='esc (to )?interrupt|Working\.\.\.|Ctrl\+c:cancel'
+# Background-work footer: the harness's OWN count of its still-running
+# background shells, rendered while its composer is idle. Verified 2026-09-04 on
+# Claude Code 2.1.260 (docs/tmux-backend.md "claude's idle composer with
+# background shells"): the status footer reads `· 1 shell ·` / `· 2 shells ·`
+# and the turn summary reads `done 11:18 PM · 2 shells still running`, with no
+# `esc to interrupt` anywhere, because the agent is waiting for its own shells
+# rather than generating. Deliberately NOT folded into the busy set above: a pane
+# showing only this is idle by the busy rule, so it still goes stale and still
+# reaches the wedge ladder's bounded recheck; what the indicator changes is how
+# that stale is CLASSIFIED (bin/fm-crew-state.sh reads it as working · source:
+# pane), never whether it is detected. The interpunct separators are part of
+# the match so prose that merely mentions "2 shells" in output text cannot
+# satisfy it. FM_BACKGROUND_WORK_REGEX overrides it.
+FM_TMUX_BACKGROUND_WORK_REGEX_DEFAULT='· [0-9]+ shells?( still running| ·)'
 
 fm_tmux_quote_command_arg() {
   local value=$1
@@ -324,6 +338,26 @@ fm_pane_is_busy() {  # <target>
   tail40=$(fm_tmux_command capture-pane -p -t "$win" -S -40 2>/dev/null) || return 1
   printf '%s' "$tail40" | grep -v '^[[:space:]]*$' | tail -6 \
     | grep -qiE "${FM_BUSY_REGEX:-$FM_TMUX_BUSY_REGEX_DEFAULT}"
+}
+
+# fm_pane_tail_shows_background_work: 0 if the pane text on stdin ends in the
+# harness's own still-running-background-shells indicator
+# (FM_TMUX_BACKGROUND_WORK_REGEX_DEFAULT). Same 6-line footer bound as the busy
+# reader, for the same reason: the indicator lives in the TUI footer area, and
+# bounding the scan there keeps displayed content from satisfying it. Shared by
+# the tmux reader below and bin/fm-crew-state.sh's non-tmux capture path.
+fm_pane_tail_shows_background_work() {
+  grep -v '^[[:space:]]*$' | tail -6 \
+    | grep -qE "${FM_BACKGROUND_WORK_REGEX:-$FM_TMUX_BACKGROUND_WORK_REGEX_DEFAULT}"
+}
+
+# fm_pane_background_work: 0 if the pane's last few non-blank lines show the
+# harness waiting on its own background shells (an idle composer that is NOT
+# a stopped agent). Reads the same 40-line tail as fm_pane_is_busy.
+fm_pane_background_work() {  # <target>
+  local win=$1 tail40
+  tail40=$(fm_tmux_command capture-pane -p -t "$win" -S -40 2>/dev/null) || return 1
+  printf '%s' "$tail40" | fm_pane_tail_shows_background_work
 }
 
 # fm_tmux_submit_core: type <text> into <target> ONCE, then submit with Enter,
