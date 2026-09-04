@@ -67,8 +67,6 @@ CHECK_ID=seat-restart
 LEGACY_CHECK="$STATE/seat-respawner.check.sh"
 LEGACY_TRUST="$STATE/seat-respawner.check-trust"
 BEAT="$STATE/.last-seat-respawner-beat"
-ATTEMPTS="$STATE/.seat-respawn-attempts"
-GIVEUP="$STATE/.seat-respawn-giveup"
 CONVERGE_REPORTED="$STATE/.seat-respawner-converge-reported"
 GRACE=${FM_SEAT_RESPAWNER_GRACE:-120}
 CONFIRM_TIMEOUT=${FM_SEAT_RESPAWNER_CONFIRM_TIMEOUT:-10}
@@ -415,25 +413,6 @@ recorded_first_turn_field() {  # <key>
   recorded_respawn_field "$STATE/.seat-first-turn" "$1"
 }
 
-# Has the respawner STOPPED RETRYING the absence that stands right now?
-#
-# The give-up record names the condition key the episode gave up on, and the
-# attempt record names the key the respawner is spending cycles against now.
-# Only the two agreeing is a give-up that still applies: an episode that gave up
-# on a superseded condition says nothing about the one standing now, and the
-# respawner starts a fresh count for a new key without clearing the old
-# give-up.  Both keys must be present and equal, so a record that could not be
-# read - missing, a symlink, empty - is never turned into a give-up here; an
-# unread record is not a fact, which is this area's standing rule.
-gave_up_on_current_condition() {
-  local given standing
-  given=$(recorded_respawn_field "$GIVEUP" key)
-  [ -n "$given" ] || return 1
-  standing=$(recorded_respawn_field "$ATTEMPTS" key)
-  [ -n "$standing" ] || return 1
-  [ "$given" = "$standing" ]
-}
-
 # A first turn that was typed into a pane still open past its deadline.  The
 # respawner marks this itself in the record it owns; this only reads it.
 first_turn_held() {
@@ -442,9 +421,8 @@ first_turn_held() {
 
 # `up:` is composed into a sentence the captain reads on his phone during an
 # outage - bin/fm-seat-alarm.sh's restarter_clause turns it into "an automatic
-# restart is running and should bring it back on its own" - so it may only be
-# printed for the same reading healthy_respawner takes, beacon and home
-# included. A live pid that has stopped cycling gets its own `stalled:` prefix,
+# restart is running on this vessel" - so it may only be printed for the same
+# reading healthy_respawner takes, beacon and home included. A live pid that has stopped cycling gets its own `stalled:` prefix,
 # as bin/fm-delivery-lib.sh already gives the listener; every reader that is not
 # looking for `up:` or `down:` reads it as unknown, which is the honest answer.
 #
@@ -453,30 +431,16 @@ first_turn_held() {
 # beating normally, which is what makes `up:` true of the process and false of
 # the vessel: a seat was started, it never finished starting, and this half will
 # not open another beside it.  Reporting that as `up:` would put "an automatic
-# restart is running and should bring it back on its own" on the captain's
-# phone every repeat of an absence that will not resolve without him - an
-# instrument reading healthy while the thing it watches is broken, which is the
-# shape this whole area exists to remove.
-#
-# A RESPAWNER THAT HAS GIVEN UP IS THE SAME OVERCLAIM ONE STEP FURTHER ON, so it
-# gets a `gave-up:` prefix of its own ahead of both.  Past its attempt bound the
-# respawner returns at the bound test every cycle and will never launch again
-# for that condition, while its process keeps beating exactly as before; the
-# episode ends only when the delivery status changes, a seat takes this home's
-# lock, or the stay-down marker is set.  Neither of the other two prefixes is
-# true of that: `up:` promises the captain a restart that is running, and the
-# give-up needs no first-turn record to have been written at all - an endpoint
-# whose tmux server has exited refuses the launch before one exists - so
-# `holding:` cannot carry it either.
+# restart is running on this vessel" on the captain's phone every repeat of an
+# absence that will not resolve without him, and drop the open pane he could act
+# on - an instrument reading healthy while the thing it watches is broken, which
+# is the shape this whole area exists to remove.
 status_report() {
   local age=999999 pid backend
   backend=$(select_backend)
   [ -e "$BEAT" ] && age=$(fm_path_age "$BEAT")
   pid=$(recorded_respawner_field pid)
-  if healthy_respawner && gave_up_on_current_condition; then
-    printf 'gave-up: respawner pid %s stopped retrying this absence at its attempt bound and will not start another seat for it (last beat %ss ago, %s)\n' \
-      "$pid" "$age" "$backend"
-  elif healthy_respawner && first_turn_held; then
+  if healthy_respawner && first_turn_held; then
     printf 'holding: respawner pid %s started a seat in pane %s that has not finished starting (last beat %ss ago, %s)\n' \
       "$pid" "$(recorded_first_turn_field pane)" "$age" "$backend"
   elif healthy_respawner; then

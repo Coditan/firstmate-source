@@ -336,7 +336,6 @@ read_restarter() {
   [ -x "$RESPAWNER_SERVICE" ] || return 0
   line=$(timeout "$PROBE_TIMEOUT" "$RESPAWNER_SERVICE" status 2>/dev/null) || true
   case "$line" in
-    gave-up:*) RESTARTER=gave-up ;;
     up:*) RESTARTER=up ;;
     holding:*) RESTARTER=holding ;;
     down:*) RESTARTER=down ;;
@@ -527,8 +526,7 @@ waiting_clause() {
 
 restarter_clause() {
   case "$RESTARTER" in
-    up) printf 'An automatic restart is running and should bring it back on its own.' ;;
-    gave-up) printf 'An automatic restart tried and has stopped retrying, so nothing here will start another one without you.' ;;
+    up) printf 'An automatic restart is running on this vessel.' ;;
     holding) printf 'A restart already started a first mate here and it never finished starting, so this vessel is waiting on that one and will not start another by itself.' ;;
     down) printf 'Nothing on this vessel is currently trying to bring it back.' ;;
     *) printf 'Whether anything is trying to bring it back could not be read.' ;;

@@ -418,8 +418,8 @@ test_a_restarter_that_stopped_cycling_is_never_called_running() {
 
   run_alarm "$home" >/dev/null
   kill "$restarter" 2>/dev/null || true
-  assert_no_grep "should bring it back on its own" "$home/outbox" \
-    "a restarter that never cycled was reported to the captain as bringing the seat back"
+  assert_no_grep "An automatic restart is running" "$home/outbox" \
+    "a restarter that never cycled was reported to the captain as a restart that is running"
   assert_grep "Whether anything is trying to bring it back could not be read" "$home/outbox" \
     "an unreadable restarter state was not reported as unreadable"
   pass "a restarter that has stopped cycling is never reported as running"
@@ -505,9 +505,9 @@ test_a_vessel_that_is_not_a_secondmate_home_is_armed_and_nagged() {
 
 # The restarter reading the captain acts on. A respawner that is cycling
 # normally while the seat it started never finished starting is NOT a recovery
-# under way, and reporting it as one puts "should bring it back on its own" on
-# the captain's phone every repeat of an absence that will not resolve without
-# him.
+# under way, and reporting it as one puts "an automatic restart is running on
+# this vessel" on the captain's phone every repeat of an absence that will not
+# resolve without him, with the open pane he could act on left out of it.
 test_a_restarter_holding_a_seat_that_never_started_is_not_called_running() {
   local home restarter
   home=$(make_home holding-restarter)
@@ -531,8 +531,8 @@ test_a_restarter_holding_a_seat_that_never_started_is_not_called_running() {
 
   run_alarm "$home" >/dev/null
   kill "$restarter" 2>/dev/null || true
-  assert_no_grep "should bring it back on its own" "$home/outbox" \
-    "a restarter holding a seat that never started was reported as bringing the seat back"
+  assert_no_grep "An automatic restart is running" "$home/outbox" \
+    "a restarter holding a seat that never started was reported as a plain restart in progress"
   assert_no_grep "Nothing on this vessel is currently trying to bring it back" "$home/outbox" \
     "a restarter that had already started a seat was reported as nothing trying"
   assert_grep "never finished starting" "$home/outbox" \
@@ -542,15 +542,19 @@ test_a_restarter_holding_a_seat_that_never_started_is_not_called_running() {
   pass "a restarter holding a seat that never finished starting is reported honestly"
 }
 
-# The same reading one step further on. A respawner that has spent its attempt
-# bound will never launch again for the absence standing now, while its process
-# keeps beating exactly as it did before, so every repeat to the captain would
-# otherwise carry "an automatic restart is running and should bring it back on
-# its own" for something nothing is retrying. He acts on that sentence by going
-# back to bed.
-test_a_restarter_that_stopped_retrying_is_never_called_running() {
-  local home restarter key
-  home=$(make_home gave-up-restarter)
+# THE ONE SENTENCE THIS CLAUSE MAY CARRY IS THE ONE THAT WAS MEASURED.
+#
+# A cycling respawner is a fact this alarm can read: its own lock, this home, a
+# live pid, a fresh beacon. Whether it will bring the seat back is not - the
+# episode is bounded, its bound can be spent while the process keeps beating
+# exactly as it does here, and this alarm reads nothing that would tell it
+# which. So the clause states the restart is running and stops there. The
+# outcome half it used to carry - that it "should bring it back on its own" -
+# was the captain being told to go back to bed by an instrument with no reading
+# behind the advice.
+test_a_running_restarter_is_reported_without_promising_an_outcome() {
+  local home restarter
+  home=$(make_home running-restarter)
   record_seat "$home" 999999
   record_endpoint "$home"
   restarter=$(start_harness_shaped_process "$home" claude)
@@ -559,34 +563,19 @@ test_a_restarter_that_stopped_retrying_is_never_called_running() {
     printf 'pid=%s\n' "$restarter"
     printf 'fm-home=%s\n' "$home"
   } > "$home/state/.seat-respawner.lock/record"
-  # Cycling normally: a beacon this respawner just wrote.
   : > "$home/state/.last-seat-respawner-beat"
-  # The episode it is spending cycles against, and its give-up recorded against
-  # that same condition. These are the respawner's own persisted records.
-  key=$(printf 'no session has published where the model turn lives' | cksum | awk '{print $1 ":" $2}')
-  printf 'key=%s\ncount=5\nnext=0\nholds=0\n' "$key" > "$home/state/.seat-respawn-attempts"
-  printf 'key=%s\nfinding=f-gave-up\n' "$key" > "$home/state/.seat-respawn-giveup"
 
-  run_alarm "$home" >/dev/null
-  assert_no_grep "on its own" "$home/outbox" \
-    "a restarter that stopped retrying was reported as bringing the seat back on its own"
-  assert_no_grep "Nothing on this vessel is currently trying to bring it back" "$home/outbox" \
-    "a restarter that had tried and stopped was reported as nothing having tried"
-  assert_grep "stopped retrying" "$home/outbox" \
-    "the captain was not told the automatic restart has stopped retrying"
-  assert_grep "without you" "$home/outbox" \
-    "the captain was not told nothing further starts without him"
-
-  # A give-up against a condition that no longer stands says nothing about the
-  # one that does, so the ordinary reading comes back.
-  : > "$home/outbox"
-  printf 'key=0:0\nfinding=f-stale\n' > "$home/state/.seat-respawn-giveup"
-  rm -f "$home/data/seat-alarm.state"
   run_alarm "$home" >/dev/null
   kill "$restarter" 2>/dev/null || true
-  assert_no_grep "stopped retrying" "$home/outbox" \
-    "a give-up against a superseded condition was reported for the absence standing now"
-  pass "a restarter that stopped retrying is never reported as one that is still trying"
+  assert_grep "An automatic restart is running" "$home/outbox" \
+    "the captain was not told that an automatic restart is running here"
+  assert_no_grep "bring it back on its own" "$home/outbox" \
+    "the captain was promised an outcome this alarm never measured"
+  assert_no_grep "should" "$home/outbox" \
+    "the restarter clause predicted what will happen rather than reporting what is"
+  assert_no_grep "Nothing on this vessel is currently trying to bring it back" "$home/outbox" \
+    "a running restarter was reported as nothing trying"
+  pass "a running restarter is reported as running and promises nothing"
 }
 
 test_a_failed_send_is_retried_rather_than_counted() {
@@ -723,5 +712,5 @@ test_a_restarter_that_stopped_cycling_is_never_called_running
 test_a_secondmate_home_is_never_armed_and_is_disarmed_if_it_was
 test_a_vessel_that_is_not_a_secondmate_home_is_armed_and_nagged
 test_a_restarter_holding_a_seat_that_never_started_is_not_called_running
-test_a_restarter_that_stopped_retrying_is_never_called_running
+test_a_running_restarter_is_reported_without_promising_an_outcome
 test_the_watcher_runs_the_armed_alarm_and_pages_the_captain_itself

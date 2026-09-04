@@ -860,108 +860,6 @@ test_a_held_first_turn_is_reported_as_holding_rather_than_up() {
   pass "a respawner holding a seat that never finished starting answers holding rather than up"
 }
 
-# THE RESTARTER THAT HAS STOPPED RETRYING, REPORTED AS ONE THAT IS STILL TRYING.
-#
-# The give-up is not the end of the process, only of the episode: past the bound
-# one_cycle returns at the bound test every cycle while the loop keeps beating
-# normally, so every reading that keys on the process alone still says `up:` and
-# the alarm turns that into "an automatic restart is running and should bring it
-# back on its own" on every repeat to the captain, for an absence nothing will
-# retry.
-#
-# The path exercised here is the one that has no first-turn record at all, so
-# `holding:` cannot cover it either: the endpoint's tmux server has exited, its
-# recorded server pid answers no liveness test, and launch_in_tmux refuses
-# before a window is opened. Each cycle still spends a launch, the bound is
-# still reached, and the give-up is still recorded - against a condition key,
-# which is what makes the reading below specific to the absence standing now.
-test_a_respawner_that_gave_up_is_not_reported_as_a_running_restart() {
-  local home delivery tmux log status findings out key i
-
-  home=$(make_home giveup-status)
-  status="$home/status.txt"
-  delivery="$home/fake-delivery"
-  tmux="$home/fake-tmux"
-  log="$home/tmux.log"
-  printf 'undeliverable: listener pid 1 is up with 1 wake(s) pending, but no session has published where the model turn lives\n' > "$status"
-  write_fake_delivery "$delivery"
-  write_pane_fake_tmux "$tmux" "$log"
-
-  # An endpoint whose tmux server is gone: the pid it names is not live, so the
-  # socket is refused and no window is ever opened.
-  {
-    printf 'backend=tmux\n'
-    printf 'target=%%9\n'
-    printf 'harness=claude\n'
-    printf 'session-lock-pid=999999\n'
-    printf 'tmux-server=%s,999999\n' "$home/tmux.sock"
-  } > "$home/state/.primary-endpoint"
-
-  run_status() {
-    env FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" FM_STATE_OVERRIDE="$home/state" \
-      FM_CONFIG_OVERRIDE="$home/config" FM_SEAT_RESPAWNER_FORCE_BACKEND=keeper \
-      "$SERVICE" status
-  }
-
-  i=0
-  while [ "$i" -lt 3 ]; do
-    FM_SEAT_RESPAWNER_MAX_ATTEMPTS=2 \
-      FM_FAKE_DELIVERY_STATUS="$status" run_respawner_once "$home" "$delivery" "$tmux" \
-      || fail "respawner refused cycle $i"
-    i=$((i + 1))
-    sleep 2
-  done
-
-  [ ! -e "$log" ] \
-    || fail "the launch was not refused, so this is not the no-record path"
-  [ ! -e "$home/state/.seat-first-turn" ] \
-    || fail "a first turn was recorded, so this is not the no-record path"
-  findings=$(find "$home/data/findings" -maxdepth 1 -type f -name '*.json' | wc -l | tr -d ' ')
-  [ "$findings" = 1 ] \
-    || fail "the episode never reached its bound; got $findings give-up findings"
-  key=$(sed -n 's/^key=//p' "$home/state/.seat-respawn-attempts" | head -1)
-  [ -n "$key" ] || fail "the episode recorded no condition key to report against"
-
-  # The process is untouched by all of that: its own lock, this home, a live
-  # pid, a beacon it just wrote. Everything that makes a respawner healthy is
-  # true, and it will still never launch again for this condition.
-  mkdir -p "$home/state/.seat-respawner.lock"
-  {
-    printf 'pid=%s\n' "$$"
-    printf 'fm-home=%s\n' "$home"
-  } > "$home/state/.seat-respawner.lock/record"
-  : > "$home/state/.last-seat-respawner-beat"
-
-  out=$(run_status)
-  case "$out" in
-    gave-up:*) : ;;
-    *) fail "a respawner that stopped retrying did not answer gave-up: $out" ;;
-  esac
-  assert_contains "$out" "stopped retrying" \
-    "the gave-up verdict did not say that retrying has stopped"
-
-  # A give-up recorded against a condition that no longer stands says nothing
-  # about the one that does: the respawner starts a fresh count under the new
-  # key without clearing the old record.
-  printf 'key=0:0\nfinding=stale\n' > "$home/state/.seat-respawn-giveup"
-  out=$(run_status)
-  case "$out" in
-    up:*) : ;;
-    *) fail "a give-up against a superseded condition coloured the standing report: $out" ;;
-  esac
-
-  # And a record that could not be read is not a give-up either - two absent
-  # keys are not a match.
-  printf 'key=%s\nfinding=stale\n' "$key" > "$home/state/.seat-respawn-giveup"
-  rm -f "$home/state/.seat-respawn-attempts"
-  out=$(run_status)
-  case "$out" in
-    up:*) : ;;
-    *) fail "an unreadable episode record was turned into a give-up: $out" ;;
-  esac
-  pass "a respawner that gave up on the standing condition is never reported as up"
-}
-
 # The state this whole area exists to remove is a restarter that is in the tree
 # and has never once run, so an armed home with no beacon at all must be the
 # loudest case rather than the one that stays silent.
@@ -1279,7 +1177,6 @@ test_the_giveup_says_what_ends_the_episode_and_what_only_refutes_a_sentence
 test_a_stale_confirmation_never_claims_the_pane_is_still_open
 test_an_inherited_confirmation_never_claims_the_pane_is_still_open
 test_a_held_first_turn_is_reported_as_holding_rather_than_up
-test_a_respawner_that_gave_up_is_not_reported_as_a_running_restart
 test_an_armed_restart_that_never_ran_is_reported
 test_launch_does_not_pin_the_respawners_path
 test_resume_style_launch_command_is_refused
