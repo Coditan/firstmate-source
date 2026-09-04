@@ -121,9 +121,19 @@
 #      is flagged superseded. A genuinely parked run plus a needs-decision log
 #      agree, and are reported as parked.
 #   4. No run for this crew (pre-validation, or kind=scout): fall back to the
-#      recorded backend's pane busy state, then the status log's last line only
-#      when its verb maps to a recognized run-state. Decision-only events such as
-#      `resolved` never become current state or detail.
+#      recorded backend's pane - a busy signature, or the harness's own
+#      indicator that its background shells are still running while its
+#      composer idles (fm_pane_background_work, bin/fm-tmux-lib.sh; verified
+#      on Claude Code 2.1.260) - then the status log's last line only when its
+#      verb maps to a recognized run-state. Decision-only events such as
+#      `resolved` never become current state or detail. The pane is read
+#      BEFORE the turn-end marker is consulted: that marker persists from the
+#      crew's first completed turn until teardown, so consulting it first
+#      would answer `unknown` for every later turn of a crew whose pane
+#      carries positive evidence it is still working (the 2026-08-19 to
+#      2026-09-04 regression measured in the fm-firstmate-wake-noise-reduction
+#      pull request: every turn boundary of a pre-validation crew woke the
+#      supervisor).
 #   5. Missing meta or torn-down worktree: report unknown with the cause that
 #      names which. If no run is attributed to this crew, a dead endpoint also
 #      reports unknown rather than trusting a stale status log - UNLESS the tool
@@ -337,6 +347,27 @@ crew_pane_is_busy() {  # <target>
             | grep -qiE "${FM_BUSY_REGEX:-$FM_TMUX_BUSY_REGEX_DEFAULT}"
           ;;
       esac
+      ;;
+  esac
+}
+
+# crew_pane_waits_on_background_work: the harness is idle at its composer
+# because it is waiting for ITS OWN background shells to finish, which is
+# mid-work and not a stopped crew. Claude Code runs a long test suite or a
+# blocking `no-mistakes axi run` as a background shell, ends its turn, and is
+# woken by that shell's completion; for that whole span the pane shows no busy
+# signature and renders `· N shells ·` in its footer instead. Read through the
+# same backend-aware split as crew_pane_is_busy, on the same footer bound.
+# Measured 2026-09-03 on the Tugboat seat: four stale wakes and every bare
+# turn-end of two such workers reached the supervisor, each answered with no
+# action, because this reader had no way to say "working" for them.
+crew_pane_waits_on_background_work() {  # <target>
+  case "$TASK_BACKEND" in
+    tmux) fm_pane_background_work "$1" ;;
+    *)
+      local tail40
+      tail40=$(fm_backend_capture "$TASK_BACKEND" "$1" 40 "$EXPECTED_LABEL" 2>/dev/null) || return 1
+      printf '%s' "$tail40" | fm_pane_tail_shows_background_work
       ;;
   esac
 }
@@ -899,21 +930,36 @@ if ! fm_backend_session_cli_available "$TASK_BACKEND"; then
   emit_degraded missing-dependency endpoint-reader-missing \
     "$TASK_BACKEND CLI not on PATH: endpoint $BACKEND_TARGET cannot be read"
 fi
-if [ -e "$TURNEND" ]; then
+# Positive pane evidence is read FIRST, ahead of every absence verdict below.
+# Secondmates idle on their own watcher (idle pane = healthy), so neither pane
+# signal is meaningful for them; read their state from the status log only.
+PANE_READABLE=0
+if pane_readable "$BACKEND_TARGET"; then
+  PANE_READABLE=1
+  if [ "$KIND" != secondmate ]; then
+    if crew_pane_is_busy "$BACKEND_TARGET"; then
+      emit working pane "harness busy"
+    fi
+    if crew_pane_waits_on_background_work "$BACKEND_TARGET"; then
+      emit working pane "harness idle at its composer, waiting on its own background shells"
+    fi
+  fi
+fi
+# A completed turn that landed no status event at all is its own unknown, and
+# it outranks a dead endpoint (the crew said nothing, whether or not it is still
+# there). It is NOT consulted while the status log holds a line: the marker
+# persists from the first completed turn until teardown, and a `working:` or
+# `paused:` line written after it is the newer statement, which the log fallback
+# below reads on its own terms.
+if [ -e "$TURNEND" ] && [ -z "$LOG_LINE" ]; then
   emit_unknown no-status-after-turn-end "turn-end marker exists but no status event landed: $TURNEND${SEP}$UNKNOWN_REASON"
 fi
 # An unreadable endpoint means the crew is gone ONLY if the tool that reads
 # endpoints is installed. Without it, `fm_backend_capture` fails identically for
 # a live crew and a dead one, and answering "gone" would send firstmate into
 # stuck-crewmate recovery against a perfectly healthy worker.
-if ! pane_readable "$BACKEND_TARGET"; then
+if [ "$PANE_READABLE" -eq 0 ]; then
   emit_unknown endpoint-unreadable "backend target gone: $BACKEND_TARGET"
-fi
-
-# Secondmates idle on their own watcher (idle pane = healthy), so the busy
-# signature is not meaningful for them; read their state from the status log only.
-if [ "$KIND" != secondmate ] && crew_pane_is_busy "$BACKEND_TARGET"; then
-  emit working pane "harness busy"
 fi
 
 # Fall back to the status log's last line, but ONLY when its verb maps to a real

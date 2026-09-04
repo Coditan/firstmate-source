@@ -966,6 +966,176 @@ test_nonterminal_stale_provably_working_absorbed_then_escalated() {
   pass "provably-working non-terminal stale is absorbed, holds the ladder while its run is active, and escalates once the run stops"
 }
 
+# --- claude idle composer with background shells (Claude Code 2.1.260) --------
+# A claude worker that runs a long command as a Claude Code background task ends
+# its turn and waits for that task to wake it. Its composer idles, its footer has
+# no busy signature, and the pane renders the harness's own `· N shells ·` count
+# instead (docs/tmux-backend.md "claude's idle composer with background shells").
+# Measured 2026-09-03 on the Tugboat seat: four stale wakes and every bare
+# turn-end of two such workers reached the supervisor and were answered with no
+# action. These cases drive the REAL bin/fm-crew-state.sh (not the canned fake),
+# because the reading that changed lives there: the pane is read before the
+# persistent turn-end marker, and the background-shell footer reads as working.
+_background_shells_case() {  # <dir-name> <window> <pane-variant: shells|idle>
+  local dir state window key
+  dir=$(make_case "$1"); state="$dir/state"; window=$2
+  mkdir -p "$dir/wt"
+  if [ "$3" = shells ]; then
+    cat > "$dir/pane.txt" <<'PANE'
+● The pipeline run is under way in the background; I'll act on its first gate or
+  outcome when it returns.
+✻ Sautéed for 53s · done 11:18 PM · 2 shells still running
+                                         ✔ Update installed · Restart to apply
+───────────────────────────────────────────── FIRSTMATE_OP wake delivery queue ─
+❯ 
+────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ bypass permissions on · 2 shells · ← for agents · ↓ to manage         /rc
+PANE
+  else
+    cat > "$dir/pane.txt" <<'PANE'
+● Done. The suite passed and the branch is clean.
+───────────────────────────────────────────── FIRSTMATE_OP wake delivery queue ─
+❯ 
+────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents · ↓ to…
+PANE
+  fi
+  # kind=scout never drives a no-mistakes run, so the real reader goes straight
+  # to its pane fallback without a git repo or a no-mistakes install.
+  printf 'window=%s\nworktree=%s\nkind=scout\nharness=claude\n' "$window" "$dir/wt" > "$state/bg.meta"
+  printf 'working: running the suite in the background\n' > "$state/bg.status"
+  printf '%s' "$(seen_sig "$state/bg.status")" > "$state/.seen-bg_status"
+  key=$(printf '%s' "$window" | tr ':/.' '___')
+  printf '%s\t%s\t%s\n' "$dir" "$state" "$key"
+}
+
+# Launch the watcher over the REAL crew-state reader for a background-shells case.
+_watch_real_reader_bg() {  # <dir> <state> <window> <out> [extra env assignments...]
+  local dir=$1 state=$2 window=$3 out=$4
+  shift 4
+  PATH="$dir/fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$dir/pane.txt" \
+    FM_FAKE_TMUX_CURRENT_COMMAND=claude \
+    FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$ROOT/bin/fm-crew-state.sh" FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 env "$@" "$WATCH" > "$out" &
+}
+
+test_turn_ended_waiting_on_background_shells_absorbed_by_the_real_reader() {
+  local fields dir state key out window pid
+  window="test:fm-bgshells-turn"
+  fields=$(_background_shells_case bg-shells-turn-end "$window" shells)
+  IFS=$'\t' read -r dir state key <<< "$fields"
+  out="$dir/watch.out"
+  # The worker's turn ended with no new status line; its pane shows the shells
+  # footer. The real reader must answer working · pane, so the wake is absorbed.
+  : > "$state/bg.turn-ended"
+  _watch_real_reader_bg "$dir" "$state" "$window" "$out" FM_STALE_ESCALATE_SECS=999
+  pid=$!
+  if ! wait_live "$pid" 40; then
+    reap "$pid"; fail "a bare turn-end of a worker waiting on its own background shells was surfaced: $(cat "$out")"
+  fi
+  reap "$pid"
+  [ ! -s "$out" ] || fail "the absorbed turn-end printed a wake reason: $(cat "$out")"
+  [ ! -s "$state/.wake-queue" ] || fail "the absorbed turn-end enqueued a wake: $(cat "$state/.wake-queue")"
+  grep -F "absorbed benign signal" "$state/.watch-triage.log" >/dev/null \
+    || fail "the turn-end absorb was not recorded in the triage log: $(cat "$state/.watch-triage.log" 2>/dev/null)"
+  [ -s "$state/.seen-bg_turn-ended" ] || fail "the absorbed turn-end did not advance its .seen-* suppressor"
+  pass "a bare turn-end whose claude pane shows its own background shells is absorbed (real reader)"
+}
+
+test_turn_ended_idle_without_shells_still_surfaces_with_the_real_reader() {
+  local fields dir state key out drain_out window pid
+  window="test:fm-bgshells-idle-turn"
+  fields=$(_background_shells_case bg-shells-idle-turn-end "$window" idle)
+  IFS=$'\t' read -r dir state key <<< "$fields"
+  out="$dir/watch.out"; drain_out="$dir/drain.out"
+  # Same worker shape, but the composer is idle with no shells indicator: the
+  # crew has stopped, and the swallowed-finish guard must still surface it.
+  : > "$state/bg.turn-ended"
+  _watch_real_reader_bg "$dir" "$state" "$window" "$out" FM_STALE_ESCALATE_SECS=999
+  pid=$!
+  wait_for_exit "$pid" 40 || fail "a bare turn-end of an idle worker with no shells was absorbed by the real reader"
+  grep -F "signal: $state/bg.turn-ended" "$out" >/dev/null || fail "the surfaced turn-end did not print its signal: $(cat "$out")"
+  FM_STATE_OVERRIDE="$state" "$DRAIN" > "$drain_out" 2>/dev/null || fail "drain after the surfaced turn-end failed"
+  grep "$(printf '\tsignal\t')" "$drain_out" | grep -F "$state/bg.turn-ended" >/dev/null || fail "the surfaced turn-end was not queued"
+  pass "a bare turn-end whose claude pane is idle with no background shells still surfaces (real reader)"
+}
+
+test_background_shells_stale_holds_the_ladder_and_still_surfaces_on_the_bound() {
+  local fields dir state key out drain_out window pid pane_hash
+  window="test:fm-bgshells-stale"
+  fields=$(_background_shells_case bg-shells-stale "$window" shells)
+  IFS=$'\t' read -r dir state key <<< "$fields"
+  out="$dir/watch.out"; drain_out="$dir/drain.out"
+  pane_hash=$(hash_text "$(cat "$dir/pane.txt")")
+  printf '%s' "$pane_hash" > "$state/.hash-$key"
+  printf '1\n' > "$state/.count-$key"
+
+  # Phase A: first sighting of the static shells pane is absorbed as working,
+  # with the wedge timer started - never surfaced as a stopped crew.
+  _watch_real_reader_bg "$dir" "$state" "$window" "$out" FM_STALE_ESCALATE_SECS=999
+  pid=$!
+  if ! wait_live "$pid" 40; then
+    reap "$pid"; fail "a stale claude pane waiting on its own background shells was surfaced at first sight: $(cat "$out")"
+  fi
+  reap "$pid"
+  [ ! -s "$state/.wake-queue" ] || fail "the first sighting enqueued a wake: $(cat "$state/.wake-queue")"
+  [ "$(cat "$state/.stale-$key" 2>/dev/null || true)" = "$pane_hash" ] || fail "the absorbed stale did not advance its suppressor"
+  [ -s "$state/.stale-since-$key" ] || fail "the absorbed stale did not start the wedge timer (the ceiling)"
+  grep -F "absorbed non-terminal stale (provably working)" "$state/.watch-triage.log" >/dev/null \
+    || fail "the absorb was not recorded as provably working: $(cat "$state/.watch-triage.log" 2>/dev/null)"
+
+  # Phase B: past the escalation threshold, the shells are still running: the
+  # ladder is held rather than climbed, and nothing is delivered inside the bound.
+  echo $(( $(date +%s) - 500 )) > "$state/.stale-since-$key"
+  : > "$out"
+  _watch_real_reader_bg "$dir" "$state" "$window" "$out" FM_STALE_ESCALATE_SECS=240 FM_PAUSE_RESURFACE_SECS=600
+  pid=$!
+  if ! wait_live "$pid" 40; then
+    reap "$pid"; fail "background shells climbed the wedge ladder instead of holding it: $(cat "$out")"
+  fi
+  reap "$pid"
+  [ ! -s "$state/.wake-queue" ] || fail "the held ladder enqueued a wake: $(cat "$state/.wake-queue")"
+  [ ! -e "$state/.wedge-escalations-$key" ] || fail "the held ladder incremented the escalation count"
+  grep -F "ladder held" "$state/.watch-triage.log" >/dev/null \
+    || fail "the hold was not recorded in the triage log: $(cat "$state/.watch-triage.log" 2>/dev/null)"
+
+  # Phase C: the ceiling. A shell that never returns still surfaces once the
+  # hold outlives the bounded recheck cadence - as a recheck, not a wedge.
+  sleep 6
+  echo $(( $(date +%s) - 500 )) > "$state/.stale-since-$key"
+  : > "$out"
+  _watch_real_reader_bg "$dir" "$state" "$window" "$out" FM_STALE_ESCALATE_SECS=240 FM_PAUSE_RESURFACE_SECS=5
+  pid=$!
+  wait_for_exit "$pid" 40 || fail "a background-shells hold that outlived its recheck cadence never surfaced: $(cat "$out")"
+  grep -F "bounded recheck" "$out" >/dev/null || fail "the ceiling wake did not identify itself as a bounded recheck: $(cat "$out")"
+  grep -F "possible wedge" "$out" >/dev/null && fail "the ceiling wake was mislabeled a wedge escalation: $(cat "$out")"
+  FM_STATE_OVERRIDE="$state" "$DRAIN" > "$drain_out" 2>/dev/null || fail "drain after the bounded recheck failed"
+  grep "$(printf '\tstale\t')" "$drain_out" | grep -F "$window" >/dev/null || fail "the bounded recheck was not queued"
+  pass "a stale claude pane with live background shells is absorbed, holds the ladder, and still surfaces on the bounded cadence"
+}
+
+test_genuinely_wedged_worker_without_shells_still_escalates_with_the_real_reader() {
+  local fields dir state key out drain_out window pid pane_hash
+  window="test:fm-bgshells-wedged"
+  fields=$(_background_shells_case bg-shells-wedged "$window" idle)
+  IFS=$'\t' read -r dir state key <<< "$fields"
+  out="$dir/watch.out"; drain_out="$dir/drain.out"
+  pane_hash=$(hash_text "$(cat "$dir/pane.txt")")
+  printf '%s' "$pane_hash" > "$state/.hash-$key"
+  printf '1\n' > "$state/.count-$key"
+  # Idle composer, no shells indicator, no run: the real reader falls to the
+  # `working:` log line, which is not positive evidence, so the stale surfaces
+  # at once even under a high threshold - the swallowed-wedge guard.
+  _watch_real_reader_bg "$dir" "$state" "$window" "$out" FM_STALE_ESCALATE_SECS=999
+  pid=$!
+  wait_for_exit "$pid" 40 || fail "an idle claude pane with no shells and no run was absorbed by the real reader"
+  grep -Fx "stale: $window" "$out" >/dev/null || fail "the wedged worker did not print the immediate stale wake: $(cat "$out")"
+  [ ! -e "$state/.stale-since-$key" ] || fail "a stopped worker must not start the wedge timer (immediate surface)"
+  FM_STATE_OVERRIDE="$state" "$DRAIN" > "$drain_out" 2>/dev/null || fail "drain after the wedged-worker surface failed"
+  grep "$(printf '\tstale\t')" "$drain_out" | grep -F "$window" >/dev/null || fail "the wedged-worker stale was not queued"
+  pass "an idle claude pane with no background shells and no run still surfaces immediately (real reader)"
+}
+
 # --- codex static-pane liveness backstop (0.145.0 false-idle) ----------------
 # codex 0.145.0 drops its "esc to interrupt" busy row while an answer streams and
 # mid tool-call, so a healthy codex worker on a STATIC pane renders no busy text
@@ -2842,6 +3012,10 @@ test_mark_parked_wrapper
 test_mark_parked_wrapper_rejects_secondmate
 test_stale_terminal_status_overridden_by_active_run
 test_nonterminal_stale_provably_working_absorbed_then_escalated
+test_turn_ended_waiting_on_background_shells_absorbed_by_the_real_reader
+test_turn_ended_idle_without_shells_still_surfaces_with_the_real_reader
+test_background_shells_stale_holds_the_ladder_and_still_surfaces_on_the_bound
+test_genuinely_wedged_worker_without_shells_still_escalates_with_the_real_reader
 test_codex_static_pane_alive_absorbed
 test_codex_static_pane_dead_surfaces
 test_codex_backstop_scoped_to_codex
