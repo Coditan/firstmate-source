@@ -472,6 +472,7 @@ These skills are not captain-invocable; load them only at their precise triggers
 - `scout-research` - load before dispatching an investigation whose deliverable is knowledge rather than a change, and when carrying one out as a scout; it forks the `research` plugin skill because that skill's opening step is refused in a primary home, and `docs/scout-research-provenance.md` carries its licence notice.
 - `deploying` - load before any deploy, redeploy, migration, recompute, or rollback against a running host, before re-running a deploy to confirm an earlier one worked, and before reporting that a change is live; firstmate loads it to brief such a task, and the worker loads it to run one.
 - `ask-user-authority` - load before deciding any ask-user finding, regardless of the project's `yolo` posture.
+- `omega-protocol` - load when the captain names the omega protocol in chat, before acting on any of its grants, and when the away window he invoked it for ends; it is in force only after he invokes it by name, never from `/afk` alone.
 - `harness-adapters` - load before every harness-specific operation section 4 lists.
 - `firstmate-orca` - load before switching to Orca, spawning or supervising Orca-backed work, smoke-testing Orca backend behavior, debugging Orca task state, or reconciling Orca-backed task metadata.
 - `crew-dispatch` - load at the dispatch, steering, and validation trigger section 7 names.
