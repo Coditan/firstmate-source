@@ -509,15 +509,17 @@ secondmate_sync() {
 secondmate_liveness_sweep() {
   # Idempotent secondmate liveness guarantee - SESSION START ONLY. A
   # secondmate agent that has exited leaves its backend endpoint alive as a
-  # bare shell; the session-start digest's "endpoint: alive" read
-  # (fm_backend_target_exists, pane-PRESENCE only) reports that shell as
-  # alive, so recovery never respawns it, and the watcher deliberately exempts
-  # secondmates from stale-pane detection (an idle secondmate pane is healthy
-  # by design). Evidence 2026-07-07: every secondmate in this fleet was found
-  # as a dead zsh shell, invisible to every existing check. This sweep closes
-  # the gap deterministically: for every LIVE secondmate meta (kind=secondmate
-  # with a recorded window=), run the deeper fm_backend_agent_alive probe
-  # (bin/fm-backend.sh) and act only on a CONFIDENT verdict:
+  # bare shell. The session-start digest no longer calls that shell "alive" -
+  # it asks fm_backend_agent_alive alongside the pane-PRESENCE check and says
+  # the window has no agent in it (bin/fm-session-start.sh) - but naming it is
+  # the whole of what a digest does, nothing there respawns it, and the
+  # watcher deliberately exempts secondmates from stale-pane detection (an
+  # idle secondmate pane is healthy by design). Evidence 2026-07-07: every
+  # secondmate in this fleet was found as a dead zsh shell, invisible to every
+  # existing check. This sweep closes the gap deterministically: for every LIVE
+  # secondmate meta (kind=secondmate with a recorded window=), run the deeper
+  # fm_backend_agent_alive probe (bin/fm-backend.sh) and act only on a
+  # CONFIDENT verdict:
   #   alive   - no-op.
   #   dead    - kill the stale endpoint first (best-effort; the tmux adapter
   #             refuses to create a same-named window over a live one) then

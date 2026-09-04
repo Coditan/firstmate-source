@@ -17,7 +17,10 @@
 #   - status-tail bounding, default and FM_SESSION_START_STATUS_TAIL override
 #   - orphan status logs whose task meta has already disappeared
 #   - per-task endpoint-liveness lines for a live and a dead recorded target,
-#     tmux and herdr both
+#     tmux and herdr both, plus the reading in between them: a window that is
+#     still there with no agent left in it is never rendered as "alive", and
+#     neither is one on a backend that cannot answer the agent question at all,
+#     nor one whose backend could not be asked whether the endpoint is there
 #   - composition: the script invokes the real fm-lock.sh/fm-bootstrap.sh/
 #     fm-wake-drain.sh (their real, distinctive output appears verbatim), it
 #     does not reimplement their logic
@@ -195,11 +198,15 @@ SH
   chmod +x "$fakebin/ps"
 }
 
-# make_fake_tmux <fakebin> <live-target>: display-message succeeds only for
-# the given "session:window" target - the exact primitive
-# fm_backend_target_exists uses for a tmux endpoint liveness read.
+# make_fake_tmux <fakebin> <live-target> [foreground-command]: display-message
+# and list-panes succeed only for the given "session:window" target and the
+# pane id it resolves to - the exact primitives an endpoint reading uses. The
+# optional third argument is that pane's foreground command, which is the whole
+# of what separates the two readings the digest must not confuse: a harness
+# binary (the default) is a live agent, while a bare shell name is a pane that
+# still exists with nothing running in it (fm_backend_tmux_agent_alive).
 make_fake_tmux() {
-  local fakebin=$1 live=$2
+  local fakebin=$1 live=$2 comm=${3:-claude}
   cat > "$fakebin/tmux" <<SH
 #!/usr/bin/env bash
 set -u
@@ -207,8 +214,10 @@ case "\${1:-}" in
   list-panes|display-message)
     target=""
     prev=""
+    fmt=""
     for a in "\$@"; do
       [ "\$prev" = "-t" ] && target="\$a"
+      case "\$a" in '#{'*) fmt="\$a" ;; esac
       prev="\$a"
     done
     # Only the one live target resolves - the exact primitive
@@ -218,7 +227,13 @@ case "\${1:-}" in
       printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$live" "$live" "$live.0" "$live.0" "${live#*:}" '@1' '%1'
       exit 0
     fi
-    if [ "\$target" = "$live" ]; then
+    # The window target AND the pane id it resolves to both answer: an agent
+    # reading resolves the target to %1 first (fm_tmux_resolve_pane) and then
+    # asks %1 itself for its foreground command.
+    if [ "\$target" = "$live" ] || [ "\$target" = '%1' ]; then
+      case "\$fmt" in
+        *pane_current_command*) printf '%s\n' "$comm"; exit 0 ;;
+      esac
       [ "\${1:-}" = list-panes ] && { printf '%%1 1\n'; exit 0; }
       printf '%%1\n'; exit 0
     fi
@@ -230,28 +245,63 @@ SH
   chmod +x "$fakebin/tmux"
 }
 
-# make_fake_herdr <fakebin> <live-pane>: the pane and agent reads return the
-# normalized JSON that the passive Herdr liveness classifier consumes.
+# make_fake_herdr <fakebin> <live-pane> [husk-pane]: the pane and agent reads
+# return the normalized JSON that the passive Herdr liveness classifier
+# consumes. <live-pane> has a registered agent. The optional <husk-pane> is the
+# shape the 2026-09-04 incident turned on: `pane get` still succeeds, so the
+# pane is structurally there, but `agent get` answers agent_not_found because
+# nothing is registered in it any more. Real herdr writes an error response's
+# JSON body to stderr and exits 1, which this fixture mirrors for that pane.
 make_fake_herdr() {
-  local fakebin=$1 live=$2
+  local fakebin=$1 live=$2 husk=${3:-__no_husk_pane__}
   cat > "$fakebin/herdr" <<SH
 #!/usr/bin/env bash
 set -u
 if [ "\${1:-}" = pane ] && [ "\${2:-}" = get ]; then
-  if [ "\${3:-}" = "$live" ]; then
-    printf '{"result":{"pane":{"pane_id":"%s"}}}\n' "$live"
-  else
-    printf '{"error":{"code":"pane_not_found"}}\n'
-  fi
+  case "\${3:-}" in
+    "$live"|"$husk") printf '{"result":{"pane":{"pane_id":"%s"}}}\n' "\${3:-}" ;;
+    *) printf '{"error":{"code":"pane_not_found"}}\n' ;;
+  esac
   exit 0
 fi
-if [ "\${1:-}" = agent ] && [ "\${2:-}" = get ] && [ "\${3:-}" = "$live" ]; then
-  printf '{"result":{"agent":{"agent_status":"working"}}}\n'
-  exit 0
+if [ "\${1:-}" = agent ] && [ "\${2:-}" = get ]; then
+  case "\${3:-}" in
+    "$live") printf '{"result":{"agent":{"agent_status":"working"}}}\n'; exit 0 ;;
+    "$husk") printf '{"error":{"code":"agent_not_found"}}\n' >&2; exit 1 ;;
+  esac
 fi
 exit 1
 SH
   chmod +x "$fakebin/herdr"
+}
+
+# make_fake_orca <fakebin> <live-terminal>: `orca terminal read` answers ok for
+# the one recorded terminal id and ok:false for anything else, which is the
+# whole of what an endpoint existence read asks of this backend. Orca has no
+# agent-state probe at all (fm_backend_agent_alive reports unknown for it), and
+# that is exactly the case this fixture exists to pin.
+make_fake_orca() {
+  local fakebin=$1 live=$2
+  cat > "$fakebin/orca" <<SH
+#!/usr/bin/env bash
+set -u
+if [ "\${1:-}" = terminal ] && [ "\${2:-}" = read ]; then
+  target=""
+  prev=""
+  for a in "\$@"; do
+    [ "\$prev" = "--terminal" ] && target="\$a"
+    prev="\$a"
+  done
+  if [ "\$target" = "$live" ]; then
+    printf '{"ok":true,"lines":[]}\n'
+  else
+    printf '{"ok":false}\n'
+  fi
+  exit 0
+fi
+exit 1
+SH
+  chmod +x "$fakebin/orca"
 }
 
 # run_session_start <home> <root> <path>
@@ -261,9 +311,19 @@ SH
 # codex and opencode have no env markers (ancestry only). Without this, a local
 # claude/pi/grok session fails cases that pin a different fake harness while CI
 # (no ambient markers) still passes.
+#
+# The FM_*_OVERRIDE unsets are the same hazard one level down, and they are not
+# cosmetic: every firstmate worker is launched with FM_STATE_OVERRIDE and
+# FM_CONFIG_OVERRIDE pointing at the REAL home, and STATE/CONFIG resolve from
+# those BEFORE FM_HOME (bin/fm-session-start.sh). Running this suite from inside
+# a live worker therefore read the real fleet's state/ and config/ instead of the
+# throwaway one each test just built - every endpoint, lock, and queue assertion
+# silently measuring the running fleet. CI, with no such variables set, passed
+# throughout.
 run_session_start() {
   local home=$1 root=$2 path=$3
   env -u CLAUDECODE -u PI_CODING_AGENT -u GROK_AGENT \
+    -u FM_STATE_OVERRIDE -u FM_CONFIG_OVERRIDE -u FM_FINDINGS_DIR \
     FM_HOME="$home" FM_ROOT_OVERRIDE="$root" PATH="$path" \
     "$SESSION_START"
 }
@@ -740,6 +800,126 @@ EOF
   assert_contains "$out" "endpoint: dead (backend=herdr window=sess:p-dead)" "dead herdr endpoint not reported dead"
 
   pass "herdr endpoint liveness is reported per task: alive for a live pane, dead for a gone one"
+}
+
+# The 2026-09-04 incident these three tests hold the line on: the container was
+# rebuilt and all fourteen workers died, but every endpoint still printed
+# `alive` because the digest rendered fm_backend_target_exists's PRESENCE
+# answer with the word for a live worker. On herdr that check maps both
+# `no-agent` and `live` to present, which is right for its own question and
+# wrong to print as "alive" (bin/fm-backend.sh, fm_backend_target_exists).
+# Firstmate read the digest as the fleet's state and steered four dead panes.
+
+test_endpoint_pane_without_agent_is_not_alive_herdr() {
+  local rec root home fakebin out
+  rec=$(new_world liveness-herdr-husk)
+  IFS='|' read -r root home fakebin <<EOF
+$rec
+EOF
+  make_fake_toolchain "$fakebin"
+  make_fake_ps_claude "$fakebin"
+  make_fake_herdr "$fakebin" "p-live" "p-husk"
+
+  printf 'window=sess:p-live\nkind=ship\nbackend=herdr\n' > "$home/state/task-live.meta"
+  printf 'window=sess:p-husk\nkind=ship\nbackend=herdr\n' > "$home/state/task-husk.meta"
+
+  out=$(run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+  assert_not_contains "$out" "endpoint: alive (backend=herdr window=sess:p-husk)" \
+    "a herdr pane whose agent is gone was reported alive"
+  assert_contains "$out" "endpoint: NO AGENT - the window exists but nothing is running in it (backend=herdr window=sess:p-husk)" \
+    "a herdr pane whose agent is gone was not reported as having no agent"
+  assert_contains "$out" "endpoint: alive (backend=herdr window=sess:p-live)" \
+    "a herdr pane with a registered agent stopped being reported alive"
+
+  pass "a herdr pane that exists with no agent behind it is never reported alive"
+}
+
+test_endpoint_pane_without_agent_is_not_alive_tmux() {
+  local rec root home fakebin out
+  rec=$(new_world liveness-tmux-husk)
+  IFS='|' read -r root home fakebin <<EOF
+$rec
+EOF
+  make_fake_toolchain "$fakebin"
+  make_fake_ps_claude "$fakebin"
+  # The window is still there; its foreground process is a bare shell, so the
+  # agent that used to be in it has exited.
+  make_fake_tmux "$fakebin" "fm-sess:husk-window" bash
+
+  printf 'window=fm-sess:husk-window\nkind=ship\n' > "$home/state/task-husk.meta"
+
+  out=$(run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+  assert_not_contains "$out" "endpoint: alive" \
+    "a tmux window sitting at a bare shell was reported alive"
+  assert_contains "$out" "endpoint: NO AGENT" \
+    "a tmux window sitting at a bare shell was not reported as having no agent"
+
+  pass "a tmux window sitting at a bare shell is never reported alive"
+}
+
+test_endpoint_unreadable_agent_state_is_not_alive() {
+  local rec root home fakebin out
+  rec=$(new_world liveness-no-agent-probe)
+  IFS='|' read -r root home fakebin <<EOF
+$rec
+EOF
+  make_fake_toolchain "$fakebin"
+  make_fake_ps_claude "$fakebin"
+  # The orca existence read runs through node, so the real interpreter has to
+  # answer here rather than the toolchain's detect-only stub.
+  ln -sf "$(command -v node)" "$fakebin/node"
+  make_fake_orca "$fakebin" "term-live"
+
+  printf 'window=term-live\nkind=ship\nbackend=orca\n' > "$home/state/task-a.meta"
+
+  out=$(run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+  assert_not_contains "$out" "endpoint: alive" \
+    "an endpoint whose backend cannot answer the agent question was reported alive"
+  assert_contains "$out" "endpoint: unknown" \
+    "an unreadable agent state was not reported as unknown"
+  assert_contains "$out" "agent state unreadable" \
+    "the unknown endpoint line did not name what could not be read"
+
+  pass "an endpoint on a backend with no agent probe reports unknown, never alive"
+}
+
+# The third branch of the same three-way read, and the one the endpoint status
+# capture protects: fm_backend_target_exists answers 2 - it could not ask the
+# backend at all - so nothing about this endpoint is known, not even whether it
+# is still there. It must say so, and it must not be confused with the pane
+# that exists with no agent in it.
+test_endpoint_unreadable_existence_is_reported_unknown() {
+  local rec root home fakebin out
+  rec=$(new_world liveness-existence-unreadable)
+  IFS='|' read -r root home fakebin <<EOF
+$rec
+EOF
+  make_fake_toolchain "$fakebin"
+  make_fake_ps_claude "$fakebin"
+  # A herdr server that answers neither pane_not_found nor a pane: the
+  # classifier reports `unknown`, and the existence check turns that into "could
+  # not be asked" rather than present or absent.
+  cat > "$fakebin/herdr" <<'SH'
+#!/usr/bin/env bash
+set -u
+printf '{"error":{"code":"server_unreachable"}}\n' >&2
+exit 1
+SH
+  chmod +x "$fakebin/herdr"
+
+  printf 'window=sess:p-opaque\nkind=ship\nbackend=herdr\n' > "$home/state/task-a.meta"
+
+  out=$(run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+  assert_not_contains "$out" "endpoint: alive" \
+    "an endpoint whose backend could not be asked at all was reported alive"
+  assert_not_contains "$out" "endpoint: dead" \
+    "an endpoint whose backend could not be asked at all was reported dead"
+  assert_not_contains "$out" "endpoint: NO AGENT" \
+    "an unreadable endpoint was reported as a window with no agent in it"
+  assert_contains "$out" "endpoint: unknown (backend=herdr window=sess:p-opaque unreadable)" \
+    "an endpoint whose existence could not be read was not reported unknown"
+
+  pass "an endpoint whose backend cannot be asked at all reports unknown, never alive or dead"
 }
 
 # --- composition: real scripts run, not reimplemented ------------------------
@@ -1472,6 +1652,10 @@ test_status_tail_bounding
 test_orphan_status_logs_are_printed
 test_endpoint_liveness_tmux
 test_endpoint_liveness_herdr
+test_endpoint_pane_without_agent_is_not_alive_herdr
+test_endpoint_pane_without_agent_is_not_alive_tmux
+test_endpoint_unreadable_agent_state_is_not_alive
+test_endpoint_unreadable_existence_is_reported_unknown
 test_composition_invokes_real_scripts
 test_backlog_compact_tasks_axi_omits_bodies_and_keeps_metadata
 test_backlog_compact_manual_backend_skips_indented_bodies

@@ -785,6 +785,39 @@ SH
   pass "jobs scheduler runs proven scripts; failure propagates; non-proven refused"
 }
 
+test_ambient_home_pointers_never_reach_a_script() {
+  local tmp fixture out var
+  tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-envleak.XXXXXX")
+  fixture="$tmp/fm-envleak.test.sh"
+  out="$tmp/out.txt"
+  cat >"$fixture" <<'SH'
+#!/usr/bin/env bash
+set -u
+for var in FM_HOME FM_STATE_OVERRIDE FM_DATA_OVERRIDE FM_ROOT_OVERRIDE \
+  FM_PROJECTS_OVERRIDE FM_CONFIG_OVERRIDE FM_BACKEND; do
+  eval "seen=\${$var-<unset>}"
+  printf 'saw %s=%s\n' "$var" "$seen"
+done
+SH
+  chmod +x "$fixture"
+  FM_HOME="$tmp/leaked-home" \
+    FM_STATE_OVERRIDE="$tmp/leaked-state" \
+    FM_DATA_OVERRIDE="$tmp/leaked-data" \
+    FM_ROOT_OVERRIDE="$tmp/leaked-root" \
+    FM_PROJECTS_OVERRIDE="$tmp/leaked-projects" \
+    FM_CONFIG_OVERRIDE="$tmp/leaked-config" \
+    FM_BACKEND=leaked-backend \
+    "$RUNNER" "$fixture" >"$out" 2>&1 \
+    || { cat "$out"; rm -rf "$tmp"; fail "runner should pass on the env fixture"; }
+  for var in FM_HOME FM_STATE_OVERRIDE FM_DATA_OVERRIDE FM_ROOT_OVERRIDE \
+    FM_PROJECTS_OVERRIDE FM_CONFIG_OVERRIDE FM_BACKEND; do
+    grep -Fqx "saw $var=<unset>" "$out" \
+      || { rm -rf "$tmp"; fail "$var leaked into a selected script: $(grep -F "saw $var=" "$out")"; }
+  done
+  rm -rf "$tmp"
+  pass "ambient home pointers never reach a selected script"
+}
+
 test_aggregate_json() {
   local tmp a b
   tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-aggjson.XXXXXX")
@@ -846,4 +879,5 @@ test_family_guard_refuses_a_test_with_no_family
 test_family_guard_refuses_a_family_with_no_stated_boundary
 test_jobs_requires_proven_isolated
 test_jobs_parallel_scheduler_and_failure_propagation
+test_ambient_home_pointers_never_reach_a_script
 test_aggregate_json
