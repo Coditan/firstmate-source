@@ -47,36 +47,53 @@ fm_retry_kv_get() {  # <file> <key>
   return 1
 }
 
-# Reads the episode recorded at <record-file> into FM_RETRY_ATTEMPT_COUNT and
-# FM_RETRY_ATTEMPT_NEXT. A record naming another key, an absent record, and an
-# unreadable count are one answer: this key has no episode yet, so a supervisor
-# never inherits another condition's exhausted bound.
+# Reads the episode recorded at <record-file> into FM_RETRY_ATTEMPT_COUNT,
+# FM_RETRY_ATTEMPT_NEXT, and FM_RETRY_ATTEMPT_HOLDS. A record naming another key,
+# an absent record, and an unreadable count are one answer: this key has no
+# episode yet, so a supervisor never inherits another condition's exhausted bound.
+#
+# An episode can spend two DIFFERENT things, and they are recorded apart on
+# purpose. `count` is launches: cycles on which the supervisor actually started
+# something. `holds` is cycles that were due and spent waiting on something the
+# supervisor had already started. A caller that never holds writes no holds and
+# reads 0, and so does a record written before this field existed: every cycle
+# such a record counted was a launch. What each caller does with the two - which
+# it bounds on, and which it is willing to call a launch out loud - is the
+# caller's, because only it knows what its own cycle spent.
 fm_retry_read_attempts() {  # <record-file> <key>
-  local file=$1 want=$2 key count next
+  local file=$1 want=$2 key count next holds
   # shellcheck disable=SC2034 # Public source-library result read by callers.
   FM_RETRY_ATTEMPT_COUNT=0
   # shellcheck disable=SC2034 # Public source-library result read by callers.
   FM_RETRY_ATTEMPT_NEXT=0
+  # shellcheck disable=SC2034 # Public source-library result read by callers.
+  FM_RETRY_ATTEMPT_HOLDS=0
   key=$(fm_retry_kv_get "$file" key 2>/dev/null || true)
   [ "$key" = "$want" ] || return 0
   count=$(fm_retry_kv_get "$file" count 2>/dev/null || true)
   next=$(fm_retry_kv_get "$file" next 2>/dev/null || true)
+  holds=$(fm_retry_kv_get "$file" holds 2>/dev/null || true)
   case "$count" in ''|*[!0-9]*) count=0 ;; esac
   case "$next" in ''|*[!0-9]*) next=0 ;; esac
+  case "$holds" in ''|*[!0-9]*) holds=0 ;; esac
   # shellcheck disable=SC2034 # Public source-library result read by callers.
   FM_RETRY_ATTEMPT_COUNT=$count
   # shellcheck disable=SC2034 # Public source-library result read by callers.
   FM_RETRY_ATTEMPT_NEXT=$next
+  # shellcheck disable=SC2034 # Public source-library result read by callers.
+  FM_RETRY_ATTEMPT_HOLDS=$holds
 }
 
-fm_retry_write_attempts() {  # <record-file> <key> <count> <next>
-  local file=$1 tmp
+fm_retry_write_attempts() {  # <record-file> <key> <count> <next> [holds]
+  local file=$1 tmp holds=${5:-0}
+  case "$holds" in ''|*[!0-9]*) holds=0 ;; esac
   case "$file" in */*) mkdir -p "${file%/*}" || return 1 ;; esac
   tmp=$(mktemp "$file.XXXXXX") || return 1
   {
     printf 'key=%s\n' "$2"
     printf 'count=%s\n' "$3"
     printf 'next=%s\n' "$4"
+    printf 'holds=%s\n' "$holds"
   } > "$tmp" || { rm -f "$tmp"; return 1; }
   mv -f "$tmp" "$file"
 }
@@ -149,8 +166,12 @@ fm_retry_backoff() {  # <count-after-attempt> <base> <max>
 # Prints one line for the caller's log, and returns non-zero when the finding
 # could not be filed, because a supervisor that gave up unrecorded is itself
 # something the operator has to see.
-fm_retry_giveup_emit() {  # <giveup-file> <key> <officer> <claim> <where> <measurement>
+# <refuted-by> is optional: a caller whose give-up is refuted by something other
+# than a fresh deliverable status says so itself, because only it knows what
+# would actually disprove the claim it just made.
+fm_retry_giveup_emit() {  # <giveup-file> <key> <officer> <claim> <where> <measurement> [refuted-by]
   local giveup=$1 key=$2 officer=$3 claim=$4 where=$5 measurement=$6 out
+  local refuted=${7:-"A fresh delivery status for the same queued work becomes deliverable after a launch attempt, or the stay-down marker is set deliberately."}
   if [ -f "$giveup" ] && [ "$(fm_retry_kv_get "$giveup" key 2>/dev/null || true)" = "$key" ]; then
     return 0
   fi
@@ -162,7 +183,7 @@ fm_retry_giveup_emit() {  # <giveup-file> <key> <officer> <claim> <where> <measu
       --claim "$claim" \
       --where "$where" \
       --measurement "$measurement" \
-      --refuted-by "A fresh delivery status for the same queued work becomes deliverable after a launch attempt, or the stay-down marker is set deliberately." 2>&1); then
+      --refuted-by "$refuted" 2>&1); then
     {
       printf 'key=%s\n' "$key"
       printf 'finding=%s\n' "$(printf '%s\n' "$out" | awk -F= '/^id=/{print $2; exit}')"

@@ -424,7 +424,7 @@ NAME_HINTS: tuple[tuple[str, str, int], ...] = (
     ("fm-watch*", "supervision-wake", 5),
     ("fm-wake*", "supervision-wake", 5),
     ("fm-delivery*", "supervision-wake", 5),
-    ("fm-seat-stay-down.sh", "supervision-wake", 6),
+    ("fm-seat-*", "supervision-wake", 5),
     ("fm-journal*", "supervision-wake", 5),
     ("fm-event-batch*", "supervision-wake", 5),
     ("fm-turnend-guard*", "supervision-wake", 4),

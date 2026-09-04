@@ -111,8 +111,8 @@ An `unmeasured` reading must repeat in two consecutive rounds before it surfaces
   `bin/fm-bootstrap.sh`'s `SELF_DRIFT` check owns that.
   The `seat-can-update` reading answers a different question - whether an arriving update could be taken at all - and reports the consequence for delivery rather than restating `TANGLE`'s remediation.
 - It does not change `bin/fm-ff-lib.sh`'s refusal policy.
-- It inherits one bound from the watcher rather than inventing one: the check sweep ends the cycle on the first check that prints, so a check earlier in the sweep that wakes on every window can delay a later one.
-  For this round that shifts when it runs rather than whether: the cadence is "at most once per window", not "exactly at", and a round genuinely starved past the staleness limit reports itself through `--armed` instead of going quiet.
+- It inherits one bound from the watcher rather than inventing one: the round runs on the watcher's check sweep, so its cadence is "at most once per window", not "exactly at".
+  A check that speaks no longer ends that sweep, so no other watch can delay this one by sorting ahead of it; a round genuinely starved past the staleness limit still reports itself through `--armed` instead of going quiet.
 - It does not address the ad-hoc PATH finding from the same backlog item.
   `bin/fm-axi-path-lib.sh`'s `fm_axi_shadowed` and bootstrap's `AXI_SUITE_SHADOWED:` line already report when a maintained AXI copy is not the one a plain shell runs, and that library is sourceable from a login profile.
 

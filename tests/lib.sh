@@ -86,6 +86,17 @@ export FM_CODEBASE_SWEEP_NUDGE_DISABLE=1
 # suites still exercise arming.
 export FM_FORGE_STATUS_DISABLE=1
 
+# The first-mate watch and the restart it depends on are armed by that same
+# locked bootstrap step and have the same property: every fixture home is
+# unarmed by definition, so every suite that composes fm-bootstrap.sh would
+# otherwise see both diagnostics. Silence the reporting modes suite-wide;
+# tests/fm-seat-alarm.test.sh, tests/fm-seat-respawner.test.sh and
+# tests/fm-seat-absence-e2e.test.sh set them back to 0 and drive the readings
+# against their own fixture homes. --arm is deliberately NOT silenced, so the
+# bootstrap suites still exercise arming.
+export FM_SEAT_ALARM_DISABLE=1
+export FM_SEAT_RESPAWNER_DISABLE=1
+
 # bin/fm-nm-path-lib.sh resolves the no-mistakes CLI from the seat's install
 # location as well as from PATH, so a fixture that strips the CLI off PATH is no
 # longer stripped: on a developer machine it would quietly reach the REAL
@@ -134,6 +145,44 @@ export FM_GROSSREINSCHIFF_DISABLE=1
 export FM_VESSEL_IDENTITY_DISABLE=1
 
 export FM_TEST_SKIP_WATCHER_SERVICE=1
+
+# NOTHING THAT ADDRESSES A HOME, OR SELECTS A SERVICE MODE, MAY ARRIVE AMBIENTLY.
+#
+# A worker started from inside the monitoring service's own process tree inherits
+# that service's whole environment. Measured in a task shell on coditan-vessel
+# 2026-08-30: FM_HOME, FM_ROOT_OVERRIDE and FM_STATE_OVERRIDE all naming the LIVE
+# home, plus FM_WATCH_DAEMON=1 and FM_WATCH_MANAGER=keeper. Both halves of that
+# broke suites on an unmodified origin/main, in the two ways this class breaks
+# things:
+#
+#   - FM_WATCH_DAEMON=1 made every watcher test drive the daemon shape of
+#     bin/fm-watch.sh while asserting the one-shot shape. wake() records a pending
+#     wake and returns instead of exiting, so tests/fm-wake-queue.test.sh hung to
+#     its timeout and reported "watcher did not exit for first signal".
+#   - FM_STATE_OVERRIDE outranks the FM_HOME a suite passes per invocation, so a
+#     fixture that recorded a dead seat in its own throwaway home had
+#     bin/fm-seat-alarm.sh read the LIVE home's session lock instead, find the
+#     running seat there, and report the fixture healthy. The suite was measuring
+#     the machine it was running on.
+#
+# The second is the worse shape and the reason this is a scrub rather than a
+# per-suite fix: a test that silently reads live state can PASS while proving
+# nothing, and it is one careless fixture away from writing there too. A suite
+# that needs a home names it on the invocation, which is where that choice
+# belongs; ROOT here comes from this file's own location and needs none of these.
+#
+# The home-addressing half is the set bin/fm-test-isolation-proof.sh already
+# clears before it runs a candidate suite, kept identical here so the two do not
+# drift into disagreeing about what a leaked home looks like. FM_DATA_OVERRIDE
+# earns its place the same way FM_STATE_OVERRIDE did: bin/fm-seat-alarm.sh
+# resolves its durable history and the memory its grace and repeat cadence are
+# paced from under it, and tests/fm-seat-alarm.test.sh addresses its fixture with
+# FM_HOME alone, so a leaked value both reads a live home and writes into it.
+unset FM_HOME FM_ROOT_OVERRIDE FM_STATE_OVERRIDE FM_CONFIG_OVERRIDE \
+  FM_DATA_OVERRIDE FM_PROJECTS_OVERRIDE FM_BACKEND \
+  FM_FINDINGS_DIR FM_WAKE_QUEUE FM_WAKE_QUEUE_LOCK
+unset FM_WATCH_DAEMON FM_WATCH_MANAGER FM_WATCH_SERVICE_PATH \
+  FM_WATCH_SOURCE_VERSION FM_WATCH_X_MODE_VERSION
 
 # --- reporters --------------------------------------------------------------
 

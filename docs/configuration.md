@@ -37,9 +37,12 @@ Several vessels can share one machine as separate UNIX accounts, so a successful
 
 Watcher coordination uses `state/.watch.lock` for the daemon pid, executable, home, manager, source, and X-mode identities plus the keeper tier's handed-down service `PATH`, `state/.last-watcher-beat` for daemon freshness, `state/.wake-queue` for durable delivery, and `state/.wake-queue.lock` for atomic append and drain.
 Delivery coordination is the companion service's, in the same shape: `state/.delivery.lock` for the listener pid, executable, home, manager, and source identities, `state/.last-delivery-beat` for listener freshness, and `state/.primary-endpoint` for the address the locked session published (docs/wake-delivery.md).
-Seat-respawner coordination uses `state/.seat-respawner.lock` for the respawner pid, home, and executable identity, `state/.last-seat-respawner-beat` for respawner freshness, `state/.seat-stay-down` for the declared stop marker, and `state/.seat-respawn-attempts`, `state/.seat-respawn-giveup`, and `state/.seat-respawner.log` for one unreachable-seat retry episode (docs/seat-respawner.md).
+Seat-respawner coordination uses `state/.seat-respawner.lock` for the respawner pid, home, and executable identity plus the manager, source version, and keeper tier's handed-down service `PATH` a later convergence compares against, `state/.last-seat-respawner-beat` for respawner freshness, `state/.seat-stay-down` for the declared stop marker, `state/.seat-first-turn` for the turn owed to a seat it launched, and `state/.seat-respawn-attempts`, `state/.seat-respawn-giveup`, and `state/.seat-respawner.log` for one unreachable-seat retry episode (docs/seat-respawner.md).
 The terminal-hosted seat keeper that stands in for that unit shares `state/.seat-stay-down` and keeps its own `state/.seat-keeper.lock` for the keeper pid and pid identity, `state/.seat-keeper.pid`, `state/.seat-keeper-target`, and `state/.seat-keeper-attempts`, `state/.seat-keeper-giveup`, and `state/.seat-keeper.log` for its retry episode (docs/seat-respawner.md).
 The tmux fallback also records `state/.watch-keeper.pid`, while systemd convergence writes the private mode-`0600` `state/.watch-service.env` environment file.
+The seat alarm keeps `state/seat-vacancy.check.sh` with its `.check-trust` for the armed watcher check, and `data/seat-alarm.log` and `data/seat-alarm.state` for its append-only history and for the last reading it took.
+Those two live in `data/` rather than `state/` on purpose and the location is load-bearing rather than filing: `state/` is one of the things the alarm measures, and a memory kept inside the measured directory both put that directory back after reporting it missing and vanished with it, leaving the alarm silent (docs/seat-absence.md).
+The seat respawner's own tier records the same way: `state/.seat-respawner-keeper.pid` for the tmux keeper, `state/.seat-respawner-service.env` for systemd convergence, `state/.seat-respawner-watcher-revived` as the rate-limit marker for reviving a provably dead watcher, and `state/.seat-respawner-converge-reported` for the condition the watcher-hosted check last reported, so a failure that cannot clear is said once rather than once per sweep.
 
 `bin/fm-session-start.sh`'s header is the single owner of session-start ordering, composed commands, digest contents, and the digest's startup mechanism.
 `docs/sessionstart-nudge.md` owns the native session-open adapter mechanics that nudge the digest command.
@@ -310,14 +313,32 @@ The tracked template is `systemd/fm-seat-respawner@.service` and the instance is
 The first unit copy and `enable --now` require explicit captain consent through `RESPAWNER_UNIT:` and `bin/fm-bootstrap.sh install seat-respawner-unit`.
 Bootstrap never installs, enables, or starts it silently.
 After installation, locked bootstrap converges stale template bytes, checkout path, composed service `PATH`, and the respawner source version.
-The respawner itself reads the wake-delivery service verdict rather than probing panes, honors `state/.seat-stay-down`, uses `config/seat-launch-command` as its fresh-start launch command, and reports exhausted retry episodes through the findings surface.
-[`docs/seat-respawner.md`](seat-respawner.md) owns the mechanism, retry bound, accepted manual-close trade, and verification limits.
+If `systemd --user` is unavailable, a detached home-scoped tmux keeper is selected automatically, as it is for the watcher and the delivery listener; `bin/fm-seat-respawner-service.sh select` reports which tier a home is on and the keeper tier needs no install.
+That tier is converged on every watcher sweep through the check `bin/fm-seat-respawner-service.sh --arm` installs at `state/seat-restart.check.sh`, rather than only at session start, because a restarter re-ensured by a seat session start is re-ensured by the thing it exists to restart.
+That id sorts before the alarm's `state/seat-vacancy.check.sh` so the restarter is converged before the seat is read, and neither can displace the other because the watcher runs every due check rather than stopping at the first one that speaks.
+Both `--arm` paths retire their pre-rename predecessor shim and `.check-trust` by exact name once the replacement is registered.
+The respawner itself reads the wake-delivery service verdict rather than probing panes, refuses to launch while the session lock names a live first mate, honors `state/.seat-stay-down`, uses `config/seat-launch-command` as its fresh-start launch command, gives the fresh seat one typed first turn, and reports exhausted retry episodes through the findings surface.
+[`docs/seat-respawner.md`](seat-respawner.md) owns the mechanism, retry bound, accepted manual-close trade, and verification limits, and [`docs/seat-absence.md`](seat-absence.md) owns the detection half, the supervision arrangement, and what is still not covered.
+
+## Seat absence alarm
+
+`bin/fm-seat-alarm.sh` is the per-home watch for the seat's own absence, armed as a watcher check at every session start and reported by `SEAT_ALARM:` when it is unarmed or has stopped running.
+It arms only on the vessel it watches: a secondmate home inherits no outbound sender, so `--arm` there removes any shim an earlier version left, prints `not armed:` rather than `armed:`, and `--armed` stays silent because nothing is missing.
+It is the one alarm in this fleet that carries its own message out through `bin/fm-tg-send.sh` rather than printing a line for firstmate to route, because firstmate is the subject of its reading and cannot report its own absence.
+[`docs/seat-absence.md`](seat-absence.md) owns its verdicts, what it keys on, its cadence, and the residual it does not close.
+Its own header owns the tuning - the grace an absence must persist for, the repeat interval, the staleness bar `--armed` reads, and the send and probe timeouts - so the values are stated once, beside the code that applies them, rather than copied into the list below.
 
 ## Seat launch command (config/seat-launch-command / FM_SEAT_LAUNCH_COMMAND)
 
 `config/seat-launch-command` is the local, gitignored command the seat respawner runs in a new tmux window when the primary seat is unreachable.
 The file format is the first non-empty, non-comment line, read under the effective config directory.
 The command must start a fresh seat and must not use resume-style flags such as `--resume`, `--continue`, or Claude's `-c` unless that exact resume path has separately proven lock ownership and context-size safety.
+
+**The command owns the seat's environment, because nothing else can.**
+The respawner composes no `PATH` for it: a respawned seat never reads `~/.profile` on its own, so any value composed by the launcher silently becomes the seat's tool set, and a value composed outside the login chain cannot reproduce what that chain produces.
+Measured on `coditan-vessel`, 2026-08-27, with `env -i HOME=/home/coditan`: `bash -lc 'command -v claude'` resolves `/usr/local/bin/claude` 2.1.234 while `bash -lic` resolves `~/.npm-global/bin/claude` 2.1.247, because `~/.bashrc` returns at its own `case $- in *i*` guard before the line that adds the npm prefix.
+So a login shell alone fixes the tool suite and **not** the agent binary, and a home wanting the maintained copies of both needs an INTERACTIVE login shell - `bash -lic 'exec claude'` rather than `bash -lc`.
+`/bin/sh` on that host is `dash`, which constrains anything ever appended to `~/.profile`, since non-bash login shells read it too.
 `FM_SEAT_LAUNCH_COMMAND` overrides the file for tests and specialized service environments only.
 An absent command makes the respawner log a refused launch and keep the bounded retry episode rather than guessing how to start a seat.
 
@@ -1031,6 +1052,14 @@ FM_SEAT_RESPAWNER_POLL=15    # seconds between primary-seat respawner checks of 
 FM_SEAT_RESPAWNER_BACKOFF=30 # seconds before the second attempt for one unreachable-seat episode; doubles per attempt
 FM_SEAT_RESPAWNER_MAX_BACKOFF=900 # maximum seconds between respawn attempts for one episode
 FM_SEAT_RESPAWNER_MAX_ATTEMPTS=5 # attempts before the respawner emits a finding and stops retrying that episode
+FM_SEAT_RESPAWNER_GRACE=120  # seconds before a respawner beacon reads as stale; a live process whose beacon is older answers status stalled rather than up, and the alarm reports the restarter as unreadable rather than as under way
+FM_SEAT_RESPAWNER_CONFIRM_TIMEOUT=10   # seconds fm-seat-respawner-service waits to confirm a fresh respawner before reporting failure
+FM_SEAT_RESPAWNER_ARMED_STALE=1800   # seconds without a completed respawner cycle before --armed reports the restart as stopped
+FM_SEAT_FIRST_TURN_DEADLINE=600   # seconds a launched seat may owe its typed first turn before that turn is abandoned out loud; the same record holds the next launch until then, so one idle pane is never joined by another
+FM_SEAT_SUBMIT_RETRIES=3     # Enter-only retries when submitting that first turn, the delivery listener's rule unchanged: the text is typed once and never retyped
+FM_SEAT_SUBMIT_SLEEP=0.4     # seconds between those Enter retries and the settle read after them
+FM_SEAT_WATCHER_GRACE=       # seconds before the respawner reads a watcher beacon as stale; falls back to FM_GUARD_GRACE so one fleet has one staleness bar
+FM_SEAT_WATCHER_REVIVE_EVERY=120   # seconds between attempts to revive a provably DEAD watcher; a live watcher whose beacon aged out is never restarted here (docs/seat-absence.md)
 FM_SEAT_LAUNCH_COMMAND=      # test or specialized override for config/seat-launch-command; must be a fresh start, not resume-style
 # FM_SEAT_KEEPER_* tune the hand-started container stopgap instead (bin/fm-seat-keeper.sh); its own header owns that list, and docs/seat-respawner.md owns what the keeper is for
 FM_TG_RECV_ATTACH_POLL=0.5  # seconds between checks while fm-tg-recv-arm is attached to an existing receiver

@@ -197,6 +197,62 @@ SH
   pass "registered custom check output is queued before cadence suppression"
 }
 
+# A sweep that stops at its first speaking check LOSES every check behind it for a
+# full cadence interval, and the loss is invisible: the sweep looks like a healthy
+# sweep, and the skipped check simply never says anything.
+#
+# Measured on coditan-vessel over the 50.3h ending 2026-08-30 22:13Z, from
+# state/sweep-tick.log against the wake journal: 401 sweeps, 67 of them (17%)
+# ended early on a check sorting before seat-alarm.check.sh, and the longest
+# unbroken run of those was 60 consecutive sweeps - 5.3 hours, 16:57Z to 22:16Z on
+# 2026-08-30, during which the seat alarm would not have run once. That is the
+# length of the outage the alarm exists to catch, so the alarm could have been
+# armed, healthy and reporting active throughout the very absence it was built for.
+#
+# The order that produces it is the plain glob order of state/*.check.sh, so
+# ADDING ANY WATCH can silently delay any watch behind it. That is why this test
+# asserts on the sweep rather than on any one check's name.
+test_a_speaking_check_does_not_starve_the_checks_behind_it() {
+  local dir state fakebin out drain_out first last ran
+  dir=$(make_case check-starvation)
+  state="$dir/state"
+  fakebin="$dir/fakebin"
+  out="$dir/watch.out"
+  drain_out="$dir/drain.out"
+  first="$state/a-speaks.check.sh"
+  last="$state/z-behind-it.check.sh"
+  ran="$dir/z-ran"
+  printf '%s\n' fm-pr-check-migration-scan-v1 > "$state/.pr-check-migration-scan-v1"
+  printf '%s\n' fm-pr-check-migration-v1 > "$state/.pr-check-migration-v1"
+  chmod 0600 "$state/.pr-check-migration-scan-v1" "$state/.pr-check-migration-v1"
+  cat > "$first" <<'SH'
+#!/usr/bin/env bash
+printf 'a-spoke\n'
+SH
+  cat > "$last" <<SH
+#!/usr/bin/env bash
+: > "$ran"
+printf 'z-spoke\n'
+SH
+  chmod 0700 "$first" "$last"
+  FM_STATE_OVERRIDE="$state" "$ROOT/bin/fm-check-register.sh" a-speaks >/dev/null \
+    || fail "could not register the first check"
+  FM_STATE_OVERRIDE="$state" "$ROOT/bin/fm-check-register.sh" z-behind-it >/dev/null \
+    || fail "could not register the check behind it"
+
+  PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="$state" FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=0 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+  wait_for_exit "$!" 40 || fail "watcher did not exit for check output"
+
+  [ -e "$ran" ] || fail "the check behind a speaking one never ran at all"
+  FM_STATE_OVERRIDE="$state" "$DRAIN" > "$drain_out" || fail "drain after the check sweep failed"
+  grep "$(printf '\tcheck\t')" "$drain_out" | grep -F "$first" | grep -F a-spoke >/dev/null \
+    || fail "the first check's wake was not queued"
+  grep "$(printf '\tcheck\t')" "$drain_out" | grep -F "$last" | grep -F z-spoke >/dev/null \
+    || fail "a check behind a speaking one was skipped, so its wake never reached the queue"
+  pass "every due check runs even when an earlier one speaks"
+}
+
 test_atomic_double_drain() {
   local dir state out1 out2 all count leftover
   dir=$(make_case double-drain)
@@ -361,6 +417,7 @@ test_signal_catchup_without_running_watcher
 test_stale_enqueue_before_suppressor
 test_not_working_stale_enqueue_before_suppressor
 test_check_output_is_queued
+test_a_speaking_check_does_not_starve_the_checks_behind_it
 test_atomic_double_drain
 test_drain_echo_is_bounded_at_its_stated_edge
 test_drain_echo_shortens_a_single_oversized_row

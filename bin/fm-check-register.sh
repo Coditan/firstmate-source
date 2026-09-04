@@ -12,12 +12,12 @@
 #
 # This command neither creates the check nor gives it a wall-clock cadence.
 # The watcher sweeps state/*.check.sh no more often than once per
-# FM_CHECK_INTERVAL seconds (default 300), and a sweep stops at the first
-# registered check that reports. It stamps the interval before it stops, so the
-# checks sorted after that one wait for the next sweep rather than running later
-# in the same pass: a check is not guaranteed to run once per interval when an
-# earlier-sorting check is chatty. A check that must run less often therefore
-# owns that schedule itself and stays silent when it is not due.
+# FM_CHECK_INTERVAL seconds (default 300), and every due check in a sweep runs:
+# a check that reports has its wake queued and the sweep carries on to the rest,
+# delivering once the sweep is over. So no sibling can delay a check by sorting
+# ahead of it, and the cadence is "at most once per interval" rather than
+# "exactly at" it. A check that must run less often therefore owns that schedule
+# itself and stays silent when it is not due.
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
