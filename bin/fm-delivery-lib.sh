@@ -22,10 +22,12 @@
 # old waiter's death looked like too.  If the only observable is "no wake
 # arrived", the fleet cannot tell a healthy quiet fleet from a dead listener,
 # and the failure this work removes would simply move house.  So the outside
-# view is never a boolean: fm_delivery_report classifies the listener, the
-# endpoint, and the queue into one named verdict, and every not-delivering
-# verdict names its own cause.  tests/fm-delivery.test.sh feeds each bad
-# condition in deliberately and requires the matching verdict back.
+# view is never a boolean: fm_delivery_classify classifies the listener, the
+# endpoint, and the queue into one named verdict, every not-delivering verdict
+# names its own cause, and the prose line and the machine key=value line are
+# two renderings of that one classification.  tests/fm-delivery.test.sh feeds
+# each bad condition in deliberately and requires the matching verdict back;
+# tests/fm-delivery-status-contract.test.sh holds the machine line's contract.
 #
 # The durable wake queue remains the single source of truth for what is pending.
 # Nothing here stores a second copy of it; the listener only observes it and
@@ -232,29 +234,59 @@ fm_delivery_attempt_outcome_clear() {  # <state>
   rm -f "$(fm_delivery_attempt_outcome_path "$1")"
 }
 
-fm_delivery_attempt_outcome_write_blocked() {  # <state> <reason>
-  local state=$1 reason=$2 record tmp
+# The record is one `blocked=<prose>` line, optionally followed by one
+# `reason=<token>` line carrying the same cause as a single machine token from
+# the reason vocabulary below.  The token travels with the prose from the moment
+# the listener records the blocker, so the machine verdict never has to be
+# reverse-engineered from a sentence, which is the two-repository prose match
+# the machine line exists to retire.
+fm_delivery_reason_token_valid() {  # <token>
+  case "${1:-}" in
+    ''|*[!a-z0-9-]*) return 1 ;;
+  esac
+  return 0
+}
+
+fm_delivery_attempt_outcome_write_blocked() {  # <state> <reason> [reason-token]
+  local state=$1 reason=$2 token=${3:-} record tmp
   record=$(fm_delivery_attempt_outcome_path "$state")
   case "$reason" in
     ''|*$'\n'*|*$'\r'*) return 2 ;;
   esac
+  if [ -n "$token" ] && ! fm_delivery_reason_token_valid "$token"; then
+    return 2
+  fi
   [ "${#reason}" -le 1024 ] || reason=${reason:0:1024}
   mkdir -p "$state" || return 1
   tmp=$(mktemp "$record.XXXXXX") || return 1
-  printf 'blocked=%s\n' "$reason" > "$tmp" || { rm -f "$tmp"; return 1; }
+  {
+    printf 'blocked=%s\n' "$reason"
+    [ -z "$token" ] || printf 'reason=%s\n' "$token"
+  } > "$tmp" || { rm -f "$tmp"; return 1; }
   mv -f "$tmp" "$record" || { rm -f "$tmp"; return 1; }
   chmod 600 "$record" 2>/dev/null || true
 }
 
 FM_DELIVERY_ATTEMPT_REASON=
+FM_DELIVERY_ATTEMPT_REASON_TOKEN=
 fm_delivery_attempt_outcome_read_blocked() {  # <state>
-  local record line extra
+  local record line extra rest
   FM_DELIVERY_ATTEMPT_REASON=
+  FM_DELIVERY_ATTEMPT_REASON_TOKEN=
   record=$(fm_delivery_attempt_outcome_path "$1")
   [ -f "$record" ] && [ ! -L "$record" ] || return 1
   IFS= read -r line < "$record" || return 1
   IFS= read -r extra < <(tail -n +2 "$record") || true
-  [ -z "$extra" ] || return 1
+  IFS= read -r rest < <(tail -n +3 "$record") || true
+  [ -z "$rest" ] || return 1
+  case "$extra" in
+    '') ;;
+    reason=?*)
+      fm_delivery_reason_token_valid "${extra#reason=}" || return 1
+      FM_DELIVERY_ATTEMPT_REASON_TOKEN=${extra#reason=}
+      ;;
+    *) return 1 ;;
+  esac
   case "$line" in
     blocked=?*) FM_DELIVERY_ATTEMPT_REASON=${line#blocked=} ;;
     *) return 1 ;;
@@ -264,56 +296,195 @@ fm_delivery_attempt_outcome_read_blocked() {  # <state>
 
 # --- the outside view --------------------------------------------------------
 # One line, one verdict, and never a bare silence.  Print it wherever a human or
-# an agent asks whether wakes are being delivered; the verdict word is stable and
-# machine-readable, and the remainder of the line names the cause.
+# an agent asks whether wakes are being delivered.  The verdict vocabulary and
+# the exit status each verdict carries are defined HERE and nowhere else: the
+# prose line (fm_delivery_report) and the machine line
+# (fm_delivery_report_machine) are two renderings of one classification
+# (fm_delivery_classify), so they cannot drift apart.  docs/wake-delivery.md
+# "Machine-readable status contract" is the consumer-facing statement of the
+# machine line, and tests/fm-delivery-status-contract.test.sh holds it.
 #
-# Verdicts:
-#   idle           listening, nothing pending - the ONLY healthy silence
-#   delivering     listening, wakes pending, submitting to the model turn
-#   undeliverable  listening, wakes pending, but something concrete blocks the
-#                  submit; the reason follows
-#   away           the away daemon owns delivery under the /afk contract, so the
-#                  listener deliberately stands down
-#   stalled        a live listener whose beacon aged out
-#   down           no live identity-matched listener at all
+# Verdicts (exit status in brackets):
+#   idle           [0] listening, nothing pending - the ONLY healthy silence
+#   delivering     [0] listening, wakes pending, submitting to the model turn
+#   away           [0] the away daemon owns delivery under the /afk contract,
+#                      so the listener deliberately stands down
+#   undeliverable  [1] listening, wakes pending, but something concrete blocks
+#                      the submit; the reason names it
+#   stalled        [1] a live listener whose beacon aged out
+#   down           [1] no live identity-matched listener at all
 #
-fm_delivery_report() {  # <state> <delivery-path> [grace] [home]
+# Reason tokens (the machine line's `reason=`; empty for idle and delivering):
+#   afk                       away: state/.afk is present
+#   beacon-stale              stalled: the beacon aged past the grace
+#   listener-dead             down: no live identity-matched listener
+#   endpoint-absent           undeliverable: no endpoint has been published
+#   endpoint-malformed        undeliverable: the endpoint record has no address
+#   endpoint-stale-session    undeliverable: published by a session that no
+#                             longer holds the fleet lock
+#   endpoint-unproven-server  undeliverable: a tmux endpoint with no provable
+#                             server identity
+#   backend-unsupported       undeliverable: the listener has no verified
+#                             composer primitives for the published backend
+#   pane-missing              undeliverable: the published pane no longer exists
+#   pane-unverified           undeliverable: the published pane could not be
+#                             verified
+#   server-mismatch           undeliverable: the tmux server at the recorded
+#                             socket is not the recorded server
+#   server-unverifiable       undeliverable: the tmux server could not be
+#                             verified
+#   mid-turn                  undeliverable: the session pane is mid-turn, so
+#                             delivery waits; the one blocker that is a wait
+#                             rather than a fault
+#   composer-pending          undeliverable: the composer holds unsubmitted text
+#   composer-unknown          undeliverable: the composer could not be
+#                             confirmed empty
+#   encode-failed             undeliverable: the delivery message could not be
+#                             encoded
+#   submit-unconfirmed        undeliverable: the submit was typed but never
+#                             confirmed
+#   attempt-blocked           undeliverable: a blocked-attempt record written
+#                             before tokens existed, carrying prose only
+#
+# shellcheck disable=SC2034 # Read by sourcing callers and by tests/fm-delivery-status-contract.test.sh.
+FM_DELIVERY_VERDICTS='idle delivering away undeliverable stalled down'
+
+fm_delivery_verdict_exit() {  # <verdict> -> prints 0 or 1; returns 2 for a non-verdict
+  case "${1:-}" in
+    idle|delivering|away) printf '0\n' ;;
+    undeliverable|stalled|down) printf '1\n' ;;
+    *) return 2 ;;
+  esac
+}
+
+# The endpoint classifier's own status names double as the reason tokens for
+# the endpoint-blocked case, prefixed so a consumer can tell an endpoint fault
+# from a pane or server fault without knowing which function produced it.
+fm_delivery_endpoint_reason_token() {  # <status>
+  case "${1:-}" in
+    absent|malformed|stale-session|unproven-server) printf 'endpoint-%s\n' "$1" ;;
+    *) printf 'endpoint-unusable\n' ;;
+  esac
+}
+
+# The single classification both renderers read.  Returns the verdict's exit
+# status and leaves every field a renderer needs in FM_DELIVERY_VERDICT_*.
+FM_DELIVERY_VERDICT=
+FM_DELIVERY_VERDICT_PID=
+FM_DELIVERY_VERDICT_PENDING=
+FM_DELIVERY_VERDICT_BEACON_AGE=
+FM_DELIVERY_VERDICT_GRACE=
+FM_DELIVERY_VERDICT_BACKEND=
+FM_DELIVERY_VERDICT_TARGET=
+FM_DELIVERY_VERDICT_HARNESS=
+FM_DELIVERY_VERDICT_REASON=
+FM_DELIVERY_VERDICT_REASON_TEXT=
+fm_delivery_classify() {  # <state> <delivery-path> [grace] [home]
   local state=$1 delivery_path=$2 grace=${3:-$FM_DELIVERY_GRACE_DEFAULT} home=${4:-$FM_HOME}
-  local depth age reason
-  depth=$(fm_delivery_queue_depth "$state")
+  FM_DELIVERY_VERDICT=
+  FM_DELIVERY_VERDICT_PID=
+  FM_DELIVERY_VERDICT_PENDING=$(fm_delivery_queue_depth "$state")
+  FM_DELIVERY_VERDICT_BEACON_AGE=$(fm_path_age "$state/.last-delivery-beat")
+  FM_DELIVERY_VERDICT_GRACE=$grace
+  FM_DELIVERY_VERDICT_BACKEND=
+  FM_DELIVERY_VERDICT_TARGET=
+  FM_DELIVERY_VERDICT_HARNESS=
+  FM_DELIVERY_VERDICT_REASON=
+  FM_DELIVERY_VERDICT_REASON_TEXT=
   if ! fm_delivery_healthy "$state" "$delivery_path" "$grace" "$home"; then
-    age=$(fm_path_age "$state/.last-delivery-beat")
     if [ "$FM_DELIVERY_HEALTH" = beacon-stale ]; then
-      printf 'stalled: delivery listener pid %s is alive but its beacon is %ss old (grace %ss); %s wake(s) pending\n' \
-        "$FM_DELIVERY_LIVE_PID" "$age" "$grace" "$depth"
+      FM_DELIVERY_VERDICT=stalled
+      FM_DELIVERY_VERDICT_PID=$FM_DELIVERY_LIVE_PID
+      FM_DELIVERY_VERDICT_REASON=beacon-stale
       return 1
     fi
-    printf 'down: no live identity-matched delivery listener for this home (last beat %ss ago); %s wake(s) pending\n' \
-      "$age" "$depth"
+    FM_DELIVERY_VERDICT=down
+    FM_DELIVERY_VERDICT_REASON=listener-dead
     return 1
   fi
+  FM_DELIVERY_VERDICT_PID=$FM_DELIVERY_HEALTHY_PID
   if [ -e "$state/.afk" ]; then
-    printf 'away: listener pid %s is up and standing down because away mode owns delivery; %s wake(s) pending\n' \
-      "$FM_DELIVERY_HEALTHY_PID" "$depth"
+    FM_DELIVERY_VERDICT=away
+    FM_DELIVERY_VERDICT_REASON=afk
     return 0
   fi
-  if [ "$depth" -eq 0 ]; then
-    printf 'idle: listener pid %s is up and the durable queue is empty\n' "$FM_DELIVERY_HEALTHY_PID"
+  if [ "$FM_DELIVERY_VERDICT_PENDING" -eq 0 ]; then
+    FM_DELIVERY_VERDICT=idle
     return 0
   fi
   if ! fm_delivery_endpoint_status "$state"; then
-    reason=$(fm_delivery_endpoint_reason "$FM_DELIVERY_ENDPOINT_STATUS")
-    printf 'undeliverable: listener pid %s is up with %s wake(s) pending, but %s\n' \
-      "$FM_DELIVERY_HEALTHY_PID" "$depth" "$reason"
+    FM_DELIVERY_VERDICT=undeliverable
+    FM_DELIVERY_VERDICT_REASON=$(fm_delivery_endpoint_reason_token "$FM_DELIVERY_ENDPOINT_STATUS")
+    FM_DELIVERY_VERDICT_REASON_TEXT=$(fm_delivery_endpoint_reason "$FM_DELIVERY_ENDPOINT_STATUS")
     return 1
   fi
+  FM_DELIVERY_VERDICT_BACKEND=$FM_DELIVERY_ENDPOINT_BACKEND
+  FM_DELIVERY_VERDICT_TARGET=$FM_DELIVERY_ENDPOINT_TARGET
+  FM_DELIVERY_VERDICT_HARNESS=$FM_DELIVERY_ENDPOINT_HARNESS
   if fm_delivery_attempt_outcome_read_blocked "$state"; then
-    printf 'undeliverable: listener pid %s is up with %s wake(s) pending, but %s\n' \
-      "$FM_DELIVERY_HEALTHY_PID" "$depth" "$FM_DELIVERY_ATTEMPT_REASON"
+    FM_DELIVERY_VERDICT=undeliverable
+    FM_DELIVERY_VERDICT_REASON=${FM_DELIVERY_ATTEMPT_REASON_TOKEN:-attempt-blocked}
+    FM_DELIVERY_VERDICT_REASON_TEXT=$FM_DELIVERY_ATTEMPT_REASON
     return 1
   fi
-  printf 'delivering: listener pid %s is up with %s wake(s) pending for %s pane %s (%s)\n' \
-    "$FM_DELIVERY_HEALTHY_PID" "$depth" "$FM_DELIVERY_ENDPOINT_BACKEND" "$FM_DELIVERY_ENDPOINT_TARGET" \
-    "${FM_DELIVERY_ENDPOINT_HARNESS:-unknown harness}"
+  FM_DELIVERY_VERDICT=delivering
   return 0
+}
+
+# The prose rendering: for humans, and unchanged for every consumer that still
+# matches its first word.
+fm_delivery_report() {  # <state> <delivery-path> [grace] [home]
+  local rc
+  fm_delivery_classify "$@"
+  rc=$?
+  case "$FM_DELIVERY_VERDICT" in
+    stalled)
+      printf 'stalled: delivery listener pid %s is alive but its beacon is %ss old (grace %ss); %s wake(s) pending\n' \
+        "$FM_DELIVERY_VERDICT_PID" "$FM_DELIVERY_VERDICT_BEACON_AGE" "$FM_DELIVERY_VERDICT_GRACE" "$FM_DELIVERY_VERDICT_PENDING"
+      ;;
+    down)
+      printf 'down: no live identity-matched delivery listener for this home (last beat %ss ago); %s wake(s) pending\n' \
+        "$FM_DELIVERY_VERDICT_BEACON_AGE" "$FM_DELIVERY_VERDICT_PENDING"
+      ;;
+    away)
+      printf 'away: listener pid %s is up and standing down because away mode owns delivery; %s wake(s) pending\n' \
+        "$FM_DELIVERY_VERDICT_PID" "$FM_DELIVERY_VERDICT_PENDING"
+      ;;
+    idle)
+      printf 'idle: listener pid %s is up and the durable queue is empty\n' "$FM_DELIVERY_VERDICT_PID"
+      ;;
+    undeliverable)
+      printf 'undeliverable: listener pid %s is up with %s wake(s) pending, but %s\n' \
+        "$FM_DELIVERY_VERDICT_PID" "$FM_DELIVERY_VERDICT_PENDING" "$FM_DELIVERY_VERDICT_REASON_TEXT"
+      ;;
+    delivering)
+      printf 'delivering: listener pid %s is up with %s wake(s) pending for %s pane %s (%s)\n' \
+        "$FM_DELIVERY_VERDICT_PID" "$FM_DELIVERY_VERDICT_PENDING" "$FM_DELIVERY_VERDICT_BACKEND" \
+        "$FM_DELIVERY_VERDICT_TARGET" "${FM_DELIVERY_VERDICT_HARNESS:-unknown harness}"
+      ;;
+  esac
+  return "$rc"
+}
+
+# The machine rendering: one line of space-separated key=value pairs, every
+# key always present, no value ever containing whitespace, parsed by splitting
+# on spaces and then once on the first `=`.  Field order is stable.
+fm_delivery_machine_value() {  # <value> -> the value with whitespace collapsed to `_`
+  printf '%s' "$1" | tr -s '[:space:]' '_'
+}
+
+fm_delivery_report_machine() {  # <state> <delivery-path> [grace] [home]
+  local rc
+  fm_delivery_classify "$@"
+  rc=$?
+  printf 'verdict=%s exit=%s listener_pid=%s pending=%s beacon_age_seconds=%s grace_seconds=%s backend=%s target=%s reason=%s\n' \
+    "$FM_DELIVERY_VERDICT" "$(fm_delivery_verdict_exit "$FM_DELIVERY_VERDICT")" \
+    "$(fm_delivery_machine_value "$FM_DELIVERY_VERDICT_PID")" \
+    "$(fm_delivery_machine_value "$FM_DELIVERY_VERDICT_PENDING")" \
+    "$(fm_delivery_machine_value "$FM_DELIVERY_VERDICT_BEACON_AGE")" \
+    "$(fm_delivery_machine_value "$FM_DELIVERY_VERDICT_GRACE")" \
+    "$(fm_delivery_machine_value "$FM_DELIVERY_VERDICT_BACKEND")" \
+    "$(fm_delivery_machine_value "$FM_DELIVERY_VERDICT_TARGET")" \
+    "$(fm_delivery_machine_value "$FM_DELIVERY_VERDICT_REASON")"
+  return "$rc"
 }
