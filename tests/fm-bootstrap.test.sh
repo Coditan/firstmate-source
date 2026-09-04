@@ -159,6 +159,28 @@ add_no_origin_projects() {
   done
 }
 
+# The clone refresh no longer blocks bootstrap: it is started early and
+# collected at the end, and whichever run has not finished by then reports
+# itself as pending and delivers its own result afterwards. So a case about
+# fleet-sync's own reporting asks for the WHOLE delivery - what the digest
+# printed, plus what the deferred run wrote once it finished - rather than
+# racing the collect call and calling the loser a regression. Bounded in real
+# time, and it uses `command sleep` because these cases replace `sleep` with a
+# simulated clock.
+append_deferred_fleet_sync_result() {  # <home> <bootstrap-output>
+  local home=$1 out=$2 dir waited=0
+  case "$out" in
+    *"FLEET_SYNC: fleet: pending:"*) ;;
+    *) return 0 ;;
+  esac
+  dir="$home/state/.deferred/fleet-sync"
+  while [ ! -f "$dir/done" ] && [ "$waited" -lt 300 ]; do
+    command sleep 0.1
+    waited=$((waited + 1))
+  done
+  [ ! -f "$dir/out" ] || cat "$dir/out"
+}
+
 run_bootstrap_timeout_case() {
   local home=$1 fake_root=$2 fakebin=$3 override started_marker git_record wait_for_marker
   override=__unset__
@@ -193,20 +215,23 @@ run_bootstrap_timeout_case() {
     }
     export -f sleep
     export -f git
+    local bootstrap_out
     if [ "$override" = __unset__ ]; then
-      PATH="$fakebin:$BASE_PATH" FM_HOME="$home" FM_ROOT_OVERRIDE="$fake_root" \
+      bootstrap_out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$home" FM_ROOT_OVERRIDE="$fake_root" \
         FM_FAKE_FLEET_SYNC_STARTED_MARKER="$started_marker" \
         FM_FAKE_GIT_SYNC_STARTED_RECORD="$git_record" \
         FM_FAKE_GIT_WAIT_FOR_FLEET_START="$wait_for_marker" \
-        FM_FAKE_TREEHOUSE_LEASE_HELP=1 "$ROOT/bin/fm-bootstrap.sh" 2>/dev/null
+        FM_FAKE_TREEHOUSE_LEASE_HELP=1 "$ROOT/bin/fm-bootstrap.sh" 2>/dev/null)
     else
-      PATH="$fakebin:$BASE_PATH" FM_HOME="$home" FM_ROOT_OVERRIDE="$fake_root" \
+      bootstrap_out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$home" FM_ROOT_OVERRIDE="$fake_root" \
         FM_FLEET_SYNC_BOOTSTRAP_TIMEOUT="$override" \
         FM_FAKE_FLEET_SYNC_STARTED_MARKER="$started_marker" \
         FM_FAKE_GIT_SYNC_STARTED_RECORD="$git_record" \
         FM_FAKE_GIT_WAIT_FOR_FLEET_START="$wait_for_marker" \
-        FM_FAKE_TREEHOUSE_LEASE_HELP=1 "$ROOT/bin/fm-bootstrap.sh" 2>/dev/null
+        FM_FAKE_TREEHOUSE_LEASE_HELP=1 "$ROOT/bin/fm-bootstrap.sh" 2>/dev/null)
     fi
+    printf '%s\n' "$bootstrap_out"
+    append_deferred_fleet_sync_result "$home" "$bootstrap_out"
   )
 }
 
@@ -630,7 +655,7 @@ test_fleet_sync_timeout_empty_override_uses_default() {
 }
 
 test_fleet_sync_timeout_is_computed_before_launch() {
-  local case_dir home fakebin fake_root out started_marker git_record
+  local case_dir home fakebin fake_root out started_marker git_record scan_after_start
   case_dir="$TMP_ROOT/fleet-timeout-launch-order"
   home="$case_dir/home"
   started_marker="$case_dir/fleet-started"
@@ -643,7 +668,13 @@ test_fleet_sync_timeout_is_computed_before_launch() {
 
   out=$(run_bootstrap_timeout_case "$home" "$fake_root" "$fakebin" __unset__ "$started_marker" "$git_record" 1)
 
-  [ ! -s "$git_record" ] || fail "fleet sync launched before timeout scan finished: $(tr '\n' ';' < "$git_record")"
+  # The scan reads each project clone, so a scan git call landing AFTER the
+  # launch is what would prove the order broke. Every other git call bootstrap
+  # makes now legitimately runs alongside the refresh - that is the point of
+  # deferring it - so this looks only at calls against the projects directory
+  # rather than at the whole record.
+  scan_after_start=$(grep '/projects/' "$git_record" 2>/dev/null || true)
+  [ -z "$scan_after_start" ] || fail "fleet sync launched before timeout scan finished: $(printf '%s' "$scan_after_start" | tr '\n' ';')"
   assert_contains "$out" $'FLEET_SYNC: alpha: synced\nFLEET_SYNC: beta: skipped: no origin remote' "launch-order case should relay partial fleet-sync output before reporting its timeout"
   assert_timeout_report "$out" 20
   pass "bootstrap computes the timeout before launching fleet sync"

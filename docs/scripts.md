@@ -12,6 +12,7 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-vessel-identity.sh`  | State which home on which host a session is driving, and stamp it on that session's own tmux status bar where an attaching person meets it without running a command (docs/vessel-identity.md) |
 | `fm-operational-input.sh` | Construct and parse the canonical cross-language operational-input protocol |
 | `fm-bootstrap.sh`        | Detect toolchain and fleet problems, run the locked session-start sweeps, and install approved tools |
+| `fm-deferred-check.sh`   | Run one session-start check off the critical path and make sure its result reaches the session either way: printed in the digest if it finished, reported pending if it did not, and queued as a check wake by the run itself when it outlives the digest |
 | `fm-axi-suite.sh`        | Check and gate patch/minor self-updates of the npm-distributed AXI CLI suite, and report when the maintained copy is not the copy this session runs |
 | `fm-axi-path-lib.sh`     | Resolve and prepend one vessel's home-private AXI npm prefix, record the pre-prepend session PATH, and name the maintained tools something else shadows |
 | `fm-currency-round.sh` | Run this home's daily currency round, arm it on the watcher, and report a home that has stopped being checked |

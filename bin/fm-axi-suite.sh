@@ -1,12 +1,20 @@
 #!/usr/bin/env bash
 # Keep the npm-distributed kunchenguid AXI CLI suite current.
 #
-# Usage: fm-axi-suite.sh [--check-only] [--force]
+# Usage: fm-axi-suite.sh [--check-only] [--force] [--shadow-only|--no-shadow]
 #   --check-only  report eligible patch/minor updates as AXI_SUITE_UPDATE:
 #                 instead of installing them, and skip any pending hook-setup
 #                 retry for an already-current tool (report it as
 #                 AXI_SUITE_STUCK: ... retry pending instead).
 #   --force       run the check now regardless of the cadence stamp.
+#   --shadow-only report which copy of the suite this session actually resolves
+#                 and stop there, touching neither the cadence stamp nor the
+#                 registry. It is a few PATH lookups and no network.
+#   --no-shadow   skip that report and do only the currency check, for a caller
+#                 that has already run --shadow-only in its own process tree.
+#                 The split exists because the shadow report can only be
+#                 answered from inside the session's own tree; see the comment
+#                 at the report_shadowed call site.
 #
 # The default cadence is once every 24 hours per FM_HOME. Every home owns the
 # npm prefix $FM_HOME/.local/axi, whose bin directory resolves before inherited
@@ -83,6 +91,8 @@ AMBIENT_PATH=$(fm_axi_ambient_path) || AMBIENT_KNOWN=0
 INTERVAL=${FM_AXI_SUITE_CHECK_INTERVAL:-86400}
 CHECK_ONLY=0
 FORCE=0
+SHADOW=1
+SHADOW_ONLY=0
 SUITE="${FM_AXI_SUITE_TOOLS:-quota-axi gh-axi tasks-axi gnhf lavish-axi chrome-devtools-axi}"
 NET_TIMEOUT=${FM_AXI_SUITE_NETWORK_TIMEOUT:-30}
 PROBE_TIMEOUT=${FM_AXI_SUITE_PROBE_TIMEOUT:-15}
@@ -92,7 +102,9 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --check-only) CHECK_ONLY=1 ;;
     --force) FORCE=1 ;;
-    *) echo "usage: fm-axi-suite.sh [--check-only] [--force]" >&2; exit 2 ;;
+    --shadow-only) SHADOW_ONLY=1 ;;
+    --no-shadow) SHADOW=0 ;;
+    *) echo "usage: fm-axi-suite.sh [--check-only] [--force] [--shadow-only|--no-shadow]" >&2; exit 2 ;;
   esac
   shift
 done
@@ -269,7 +281,20 @@ report_shadowed() {
 $shadowed
 EOF
 }
-report_shadowed
+if [ "$SHADOW" -eq 1 ]; then
+  report_shadowed
+fi
+# THE SHADOW REPORT CANNOT BE DEFERRED, and the two flags above exist for that.
+# It answers a question about the CALLER's own process tree, and the record it
+# reads is honoured only for the process that made it and that process's
+# descendants. A check run detached from the session - which is what deferring it
+# means - has been orphaned to init by the time it looks, so it can only answer
+# that it cannot tell. So the caller that wants both runs this report in its own
+# tree with --shadow-only and defers the registry half with --no-shadow; see
+# bin/fm-bootstrap.sh, which does exactly that.
+if [ "$SHADOW_ONLY" -eq 1 ]; then
+  exit 0
+fi
 
 now=$(date +%s 2>/dev/null || echo 0)
 if [ "$FORCE" -ne 1 ] && [ -f "$STAMP" ] && [ -f "$PREFIX_CUTOVER" ]; then

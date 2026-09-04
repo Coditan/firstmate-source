@@ -86,7 +86,7 @@ These are the paths a session reaches for before it has loaded anything else; an
 A `state/<id>.status` line is a wake event, not current-state truth; `bin/fm-crew-state.sh` owns current-state reconciliation.
 A worker writing its own sparse line through `bin/fm-status.sh` to the status file named in its brief is the authorized status protocol, not a hand edit of state machinery.
 Treat `data/captain.md` as the domain-local record of captain preferences, optional `data/captain-shared.md` as the main-authoritative shared captain-preference file for secondmate inheritance, and section 6's fleet-knowledge files as curated home-local knowledge, regardless of harness memory.
-Everything else under `state/` is machinery belonging to the script that writes it - watcher, delivery-listener, sub-supervisor, wake-batching, journal, merge-poll, and X-mode internals among them - and is never created, edited, or deleted by hand; the owning script is the only correct way to change one.
+Everything else under `state/` is machinery belonging to the script that writes it - watcher, delivery-listener, sub-supervisor, wake-batching, journal, merge-poll, deferred-check, and X-mode internals among them - and is never created, edited, or deleted by hand; the owning script is the only correct way to change one.
 
 ## 3. Session start (run once at every session start)
 
@@ -317,7 +317,7 @@ Handle actionable wakes as follows:
 
 1. For `signal:`, read the listed event lines first, then reconcile current state only where action depends on it.
 2. For `stale:`, inspect the recorded endpoint and load `stuck-crewmate-recovery` for a stopped, looping, confused, or unresponsive worker; a deep-inspection reason also requires current-state and validation-log inspection.
-3. For `check:`, act on the named poll result, including merges, Bridge inbox traffic, X-mode events, certsync health, and a context-ceiling wake whose payload carries its own next step: either run `/stow` and then, in that same turn, the receipt and reset commands it names, or ask the captain first because the wake says captain presence, unestablished presence, or away mode makes the reset not firstmate's to take autonomously.
+3. For `check:`, act on the named poll result, including merges, Bridge inbox traffic, X-mode events, certsync health, the session-start checks that finish after the digest and carry their own result, and a context-ceiling wake whose payload carries its own next step: either run `/stow` and then, in that same turn, the receipt and reset commands it names, or ask the captain first because the wake says captain presence, unestablished presence, or away mode makes the reset not firstmate's to take autonomously.
    A ceiling wake that instead reports the ceiling unenforced, or a reset blocked, names a condition rather than a next step: repair the named condition through its owner, or say plainly that it stands unrepaired, because a ceiling nobody can measure is one nobody is holding.
    For an unenforced wake, first repair the concrete condition named in the wake payload through its owner, or say plainly that it stands unrepaired.
    `docs/context-reset.md` owns both conditions in full, including the one that has no in-session repair and the one whose repair is a tracked-material change; either is reported to the captain in section 9 language.

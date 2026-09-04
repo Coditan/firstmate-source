@@ -93,6 +93,18 @@ run_case() {
     "$ROOT/bin/fm-axi-suite.sh" --force
 }
 
+# Same case, with the caller's own flags instead of --force, for the two halves
+# bootstrap now invokes separately.
+run_case_flags() {
+  local root=$1 tools=$2
+  shift 2
+  PATH="$root/bin:$BASE_PATH" FM_HOME="$root/home" FM_STATE_OVERRIDE="$root/state" \
+    FM_AXI_SUITE_DISABLE=0 FM_AXI_SUITE_TOOLS="$tools" FM_AXI_SUITE_CHECK_INTERVAL=0 \
+    FM_TEST_VERSIONS="$root/versions" FM_TEST_INSTALL_LOG="$root/install.log" \
+    FM_TEST_HOOK_LOG="$root/hook.log" \
+    "$ROOT/bin/fm-axi-suite.sh" --force "$@"
+}
+
 test_patch_and_minor_auto_update() {
   local w out
   w="$TMP_ROOT/automatic"
@@ -709,6 +721,43 @@ test_shadowed_suite_is_reported_even_while_the_maintained_copy_is_current() {
   pass "a maintained copy that is not the resolved copy is reported, not folded into an all-clear"
 }
 
+# The split the deferral needed: the shadow report answers a question about the
+# CALLER's process tree, so it cannot be run detached, while the currency check
+# is the half worth taking off the session-start critical path. Each flag has to
+# do its own half and nothing of the other's, or bootstrap's inline call and its
+# deferred one would between them either double-report or lose a line.
+test_shadow_only_reports_shadowing_and_touches_nothing_else() {
+  local w out
+  w="$TMP_ROOT/shadow-only"
+  mkdir -p "$w/bin" "$w/home/.local/axi/bin" "$w/state"
+  make_npm "$w/bin" "$w/versions" "$w/install.log"
+  make_tool "$w/home/.local/axi/bin" split-axi 1.2.3
+  make_tool "$w/bin" split-axi 1.2.3
+  printf '%s\n' 'split-axi=1.2.4' > "$w/versions"
+  out=$(run_case_flags "$w" "split-axi" --shadow-only)
+  assert_contains "$out" "AXI_SUITE_SHADOWED: split-axi runs from $w/bin/split-axi" \
+    "--shadow-only must still report which copy actually runs"
+  assert_not_contains "$out" 'AXI_SUITE_UPDATED' "--shadow-only must not reach the registry or install anything"
+  [ ! -s "$w/install.log" ] || fail "--shadow-only installed something: $(cat "$w/install.log")"
+  [ ! -f "$w/state/axi-suite-update.checked" ] || fail "--shadow-only wrote the cadence stamp"
+  pass "--shadow-only answers the caller-environment question and stops there"
+}
+
+test_no_shadow_does_the_currency_check_without_repeating_the_shadow_report() {
+  local w out
+  w="$TMP_ROOT/no-shadow"
+  mkdir -p "$w/bin" "$w/home/.local/axi/bin" "$w/state"
+  make_npm "$w/bin" "$w/versions" "$w/install.log"
+  make_tool "$w/home/.local/axi/bin" split-axi 1.2.3
+  make_tool "$w/bin" split-axi 1.2.3
+  printf '%s\n' 'split-axi=1.2.4' > "$w/versions"
+  out=$(run_case_flags "$w" "split-axi" --no-shadow)
+  assert_contains "$out" 'AXI_SUITE_UPDATED: split-axi 1.2.3 -> 1.2.4' "--no-shadow must still do the currency check"
+  assert_not_contains "$out" 'AXI_SUITE_SHADOWED' "--no-shadow must leave the shadow report to the caller that ran it"
+  assert_not_contains "$out" 'AXI_SUITE_SHADOW_UNKNOWN' "--no-shadow must not report on shadowing at all"
+  pass "--no-shadow does the registry half alone"
+}
+
 test_unshadowed_suite_reports_nothing_extra() {
   local w out
   w="$TMP_ROOT/unshadowed"
@@ -877,6 +926,8 @@ test_an_unattributable_environment_reports_that_it_cannot_tell
 test_a_half_recorded_marker_is_not_answered_for
 test_shadowed_suite_is_reported_even_while_the_maintained_copy_is_current
 test_unshadowed_suite_reports_nothing_extra
+test_shadow_only_reports_shadowing_and_touches_nothing_else
+test_no_shadow_does_the_currency_check_without_repeating_the_shadow_report
 test_shadow_report_survives_an_entrypoint_that_prepended_first
 test_unseeded_vessel_reports_no_shadowing
 test_two_homes_update_distinct_prefixes_concurrently
