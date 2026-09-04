@@ -196,6 +196,39 @@ test_folded_records_must_stay_visible_on_the_board() {
   pass "the folded records are required to stay visible, in a documented component"
 }
 
+# `records` is the captain-actionable count and never the open count. On one
+# vessel a count of 2 looked complete for nineteen days purely because nothing
+# beside it said what it was not counting, so the count of what the reading
+# withheld has to survive the last hop to the board rather than stopping at the
+# snapshot. The wording has ONE owner - bin/fm-bearings-snapshot.sh writes it,
+# this script passes it through - so what is pinned here is the passage, not a
+# second copy of the sentence.
+test_withheld_captain_holds_reach_the_board_input() {
+  local cap out
+  cap=$TMP_ROOT/withheld.json
+  cat > "$cap" <<'JSON'
+{"schema":"fm-bearings.v1",
+ "decisions_open":[{"id":"under-way","key":"under-way","verb":"captain-hold","summary":"Deployment window","owner":"(main)"}],
+ "omitted":[{"surface":"backlog item bodies","reveal":"--fields bodies"},
+            {"surface":"captain holds withheld from decisions_open: 3 (answered_pending_close 2, blocked_by_unresolved 1)","reveal":"bin/fm-fleet-snapshot.sh --json, then read backlog.omitted and secondmate_current.records[].omitted"}]}
+JSON
+  out=$(inv "$cap")
+  [ "$(printf '%s' "$out" | jq -r '.withheld_captain_holds.surface')" \
+    = "captain holds withheld from decisions_open: 3 (answered_pending_close 2, blocked_by_unresolved 1)" ] \
+    || fail "the withheld-captain-hold disclosure must reach the board input verbatim: $out"
+  # It must be the disclosure that is carried, not merely the first omitted entry.
+  [ "$(printf '%s' "$out" | jq -r '.withheld_captain_holds.reveal')" \
+    = "bin/fm-fleet-snapshot.sh --json, then read backlog.omitted and secondmate_current.records[].omitted" ] \
+    || fail "the wrong omitted entry was carried through: $out"
+  assert_contains "$("$INV" --summary --from "$cap")" "withheld from this reading:" \
+    "the human summary must say what the reading did not count"
+  # A reading that withheld nothing says so as null rather than as an empty phrase,
+  # so a board can tell "nothing withheld" from "disclosure absent".
+  [ "$(inv "$(capture one-decision)" | jq -r '.withheld_captain_holds')" = "null" ] \
+    || fail "a reading that withheld nothing must not invent a disclosure"
+  pass "the withheld-captain-hold count reaches the board input, and its absence is null"
+}
+
 test_inventory_is_read_only() {
   # The board presents; bin/fm-decision-hold.sh owns every mutation.
   assert_no_grep 'fm-decision-hold.sh hold' "$INV" "the inventory must not create holds"
@@ -215,4 +248,5 @@ test_summary_names_the_unpaired_variants
 test_the_fold_does_not_claim_to_be_exact
 test_every_stated_purpose_describes_the_fold_the_same_way
 test_folded_records_must_stay_visible_on_the_board
+test_withheld_captain_holds_reach_the_board_input
 test_inventory_is_read_only

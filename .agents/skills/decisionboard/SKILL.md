@@ -5,7 +5,7 @@ description: >-
   Use when the captain invokes /decisionboard, asks to see the open decisions as a board, asks what is waiting on him visually, or asks for the decision backlog laid out rather than listed.
   For one named undertaking and where it stands against its own destination, use the sea chart instead.
   Presents only: it groups the per-member panel records by originating investigation and keeps the judge's record where a judge ruled, without verifying that the judge covered every question the analysts raised, shows what each decision gates, and never records an answer.
-  Shows only what the captain-actionable surface returns, which is not every open captain decision: one blocked by another record never reaches that surface and so never reaches this board.
+  Shows only what the captain-actionable surface returns, which is not every open captain decision: one blocked by another record never reaches that surface and so never reaches this board, and the surface now counts every such record it withheld so a short list is distinguishable from a filtered one.
 user-invocable: true
 metadata:
   internal: true
@@ -133,16 +133,22 @@ Render a confident pairing under its decision; render everything else at group l
 Never assert which question an unpaired variant restates.
 
 A decision blocked by another record is not on this board at all, and nothing on the board marks that it is missing.
-Captain-actionability is a single predicate in `bin/fm-fleet-snapshot.sh` and a record blocked by anything fails it, so that decision leaves `decisions_open` entirely; real blockers land it in `gates`, while a dangling target found nowhere is surfaced separately through bearings `integrity[]`.
-Measured on a two-decision fixture, adding one `blocked-by` edge takes the reported inventory from "records: 2 decisions kept: 2" to "records: 1 decisions kept: 1", with no footnote anywhere.
+Captain-actionability is a single predicate, owned by `bin/fm-captain-actionable-lib.sh`, and a record blocked by anything fails it, so that decision leaves `decisions_open` entirely; real blockers land it in `gates`, while a dangling target found nowhere is surfaced separately through bearings `integrity[]`.
+Measured on a two-decision fixture, adding one `blocked-by` edge takes the reported inventory from "records: 2 decisions kept: 2" to "records: 1 decisions kept: 1"; the kept count says nothing about the drop, and only the withheld count described next reports that it happened.
 So this is the captain-actionable set, not the open set: say that on the board in the same breath as the unverified fold, and never present it as everything waiting on him.
+
+How many are missing is no longer unknowable, so say the number rather than only the caveat.
+The snapshot's `backlog.omitted[]` counts every non-terminal record carrying `hold-kind: captain` that the surface withheld, with the reason for each - a decision already settled as Done was never a candidate and is never counted as withheld, so the number means decisions this surface is not showing him rather than decisions that exist. Read it with its reasons: a record he has already answered whose close is unfinished is counted under `answered_pending_close`, so the reasons beside the number are what separate the decisions still waiting on him from the ones he has already made.
+Bearings makes that count fleet-wide, summing it with the same disclosure from every registered secondmate home, so a decision routed away from this home is counted no differently from one kept here; `bin/fm-decision-inventory.sh` passes that line through under `withheld_captain_holds`.
+Print the count and its reasons in the reservation block beside the two sentences above, because a count of two looked complete for nineteen days on one vessel purely because nothing beside it said what it was not counting.
 
 These sentences have a component and a position, and both matter.
 They go in `.fm-reserve`, the reservation block, **above the entries** - a declaration of what the sheet does not show, printed under the entries, is one he reads after he has already decided.
 `docs/board-layout.md` owns its markup.
 
-For one named undertaking, `.agents/skills/sea-chart` reconciles its own records against the backlog and reports each withheld one by name with its cause - fleet-wide there is no such count yet.
-The blocker is the only shape of this loss left, and it belongs to the snapshot rather than to this board: the predicate reads the hold kind alone, so a captain hold carried on a record of any other kind does reach here.
+For one named undertaking, `.agents/skills/sea-chart` reconciles its own records against the backlog and reports each withheld one by name with its cause; fleet-wide the count now exists too, in the bearings `omitted[]` line assembled from `backlog.omitted[]` and every secondmate home's own, though it counts and names ids rather than restating each record.
+The blocker is the only shape of this loss left, and it belongs to the snapshot rather than to this board.
+Two shapes that used to belong to it no longer do: the predicate reads the hold kind alone, so a captain hold carried on a record of any other kind reaches here, and it no longer asks what phase the work is in, so a captain hold that stopped work already under way reaches here too.
 
 ## Every folded record stays visible
 

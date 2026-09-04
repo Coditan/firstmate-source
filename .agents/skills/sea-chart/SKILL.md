@@ -97,7 +97,9 @@ Print `withheld_folded` beside it, or the same record is counted once as folded 
 A withheld or possibly-answered count above zero is not a footnote.
 Render those records in full, with the blocker or the closed twin named, near the top.
 Withheld records do not all carry the same news, and each one says which it is in `cause` with the reason in `why`.
-A `blocked` record is a decision the fleet has lost track of and belongs at the top with its blocker named; an `in-flight` one is simply being worked right now, and `no-hold` or `other-hold` mean the record never asked the captain anything in the first place.
+A `blocked` record is a decision the fleet has lost track of and belongs at the top with its blocker named, while `no-hold` or `other-hold` mean the record never asked the captain anything in the first place.
+There is no phase cause and there must not be one: a captain hold on work already under way is a question that STOPPED that work, so it reaches the decision list like any other and never arrives here.
+An in-flight record that does arrive here is held off by one of the causes above, which is the one to name.
 A `stale-edge` or `dangling-edge` record belongs at the top too, for the opposite reason: nothing is holding it, the blocker it names is either Done in the archive or a real record nowhere, and the captain can answer it now once somebody clears the edge.
 An `unpaired-variant` record is one the surface did return and the fold then dropped, because no judge ruling in its group carries its decision key - it is a question only an analyst raised, and the rule below about folded records is exactly why it is listed here rather than left between the two surfaces.
 A `folded-elsewhere` record is the other one the surface returned: the fold hung it as a variant under a ruling of a DIFFERENT undertaking, so no section of this chart can carry it without drawing a record this chart does not own.

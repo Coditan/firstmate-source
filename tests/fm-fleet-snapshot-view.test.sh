@@ -354,6 +354,109 @@ EOF
   pass "backlog normalization preserves strict roles, resolves real blockers, and flags a dangling one"
 }
 
+# A captain hold is a question addressed to the captain, and what phase the work
+# is in does not change who is being asked. Gating this surface on `queued`
+# withheld exactly the more urgent half - a question that STOPPED work already
+# under way - and withheld it in silence. Measured on the main home 2026-08-29:
+# 9 records carried `hold-kind: captain` outside Done, the surface returned 8,
+# and the missing one was a Commodore decision sitting on in-flight work.
+# The disclosure half is not decoration: on the reporting vessel a count of 2
+# looked complete for nineteen days because nothing on the surface said what it
+# was not counting. Every captain-kind hold now either reaches the surface or is
+# named in backlog.omitted[] with the reason it did not.
+test_captain_hold_reaches_the_surface_whatever_phase_the_work_is_in() {
+  local home fakebin out
+  home=$(make_home captain-hold-phase)
+  cat > "$home/data/backlog.md" <<'EOF'
+## In flight
+- [ ] under-way - Deployment window (repo: alpha) (kind: ship) (hold: captain picks the window) (hold-kind: captain)
+- [ ] blocker-work - Work another decision waits on (repo: alpha) (kind: ship)
+
+## Queued
+- [ ] before-start - API shape (repo: alpha) (kind: ship) (hold: captain picks the shape) (hold-kind: captain)
+- [ ] gated - Gated decision blocked-by: blocker-work - waits (repo: alpha) (kind: captain) (hold: captain picks the vendor) (hold-kind: captain)
+- [ ] answered - Answered but unclosed (repo: alpha) (kind: captain) (hold: captain picks the name) (hold-kind: captain)
+  Resolution recorded by fm-decision-hold.
+- [ ] phantom - Held off by a broken edge only blocked-by: ghost-x - waits (repo: alpha) (kind: captain) (hold: captain picks the date) (hold-kind: captain)
+- [ ] other-audience - Waiting on a vendor (repo: alpha) (kind: ship) (hold: vendor replies) (hold-kind: external)
+
+## Done
+- [x] settled - Settled question (repo: alpha) (kind: captain) (hold: captain picked it) (hold-kind: captain) (done 2026-08-20)
+EOF
+  mkdir -p "$home/projects/blocker-work"
+  fm_write_meta "$home/state/blocker-work.meta" \
+    "window=firstmate:fm-blocker-work" "worktree=$home/projects/blocker-work" \
+    "project=alpha" "harness=codex" "kind=ship" "mode=ship"
+  printf 'working: under way\n' > "$home/state/blocker-work.status"
+  fakebin=$(make_fakebin "$home")
+  out=$(PATH="$fakebin:$PATH" FM_HOME="$home" "$SNAPSHOT" --json)
+
+  printf '%s' "$out" | jq -e '
+    ([.backlog.records[] | select(.captain_actionable == true) | .id] | sort)
+      == ["before-start", "under-way"]
+  ' >/dev/null || fail "a captain hold on work under way did not reach the actionable surface: $out"
+
+  # Every captain-kind hold that COULD have reached the surface is either on it or
+  # named in omitted[] with a reason. The population is the non-terminal ones: a
+  # Done record was never a candidate, and counting it as withheld made the
+  # disclosure announce a withholding that was not one. The invariant is what
+  # makes a short list distinguishable from a filtered one, so it is asserted as
+  # an invariant and not as a list of cases.
+  printf '%s' "$out" | jq -e '
+    ([.backlog.records[] | select(.structured and .hold_kind == "captain" and .state != "done")] | length) as $candidates
+    | ([.backlog.records[] | select(.captain_actionable == true)] | length) as $shown
+    | ([.backlog.omitted[] | select(.surface == "captain_actionable") | .count] | add // 0) as $withheld
+    | ($candidates == $shown + $withheld)
+  ' >/dev/null || fail "captain holds were neither shown nor disclosed as withheld: $out"
+
+  printf '%s' "$out" | jq -e '
+    ([.backlog.omitted[] | select(.surface == "captain_actionable")
+      | {reason, ids}] | sort_by(.reason))
+      == [{reason: "answered_pending_close", ids: ["answered"]},
+          {reason: "blocked_by_unresolved", ids: ["gated"]},
+          {reason: "dangling_blocker_edge", ids: ["phantom"]}]
+  ' >/dev/null || fail "the withheld captain holds were not disclosed with their reasons: $out"
+
+  # A settled question is not a withholding. It was never a candidate for the
+  # surface, so it must not be named in the disclosure the captain reads as
+  # "decisions you are not being shown".
+  printf '%s' "$out" | jq -e '
+    ([.backlog.omitted[] | select(.surface == "captain_actionable") | .ids[]]
+      | index("settled")) == null
+  ' >/dev/null || fail "a settled captain hold was counted as withheld from the surface: $out"
+  pass "a captain hold reaches the surface whatever phase its work is in, and every withheld one is named"
+}
+
+# The predicate has produced false invisibility three times, each time because a
+# clause of it looked obviously right where it was written. Its defence is that
+# there is exactly ONE place to re-read: bin/fm-captain-actionable-lib.sh. A
+# second hand-spelled copy anywhere in bin/ would put the fourth instance
+# somewhere nobody thinks to look, so no other script may spell the audience
+# test itself: the snapshot sources the library and every downstream reader takes
+# the decided `captain_actionable` field rather than re-deriving it.
+test_captain_actionable_predicate_has_one_owner() {
+  local lib owner_hits
+  lib="$ROOT/bin/fm-captain-actionable-lib.sh"
+  [ -f "$lib" ] || fail "bin/fm-captain-actionable-lib.sh is missing"
+
+  # shellcheck disable=SC1090
+  . "$lib"
+  case "${FM_CAPTAIN_ACTIONABLE_JQ:-}" in
+    *fm_captain_actionable*) : ;;
+    *) fail "sourcing bin/fm-captain-actionable-lib.sh did not define the predicate program" ;;
+  esac
+
+  owner_hits=$(grep -rlF 'hold_kind == "captain"' "$ROOT/bin" | sed "s#^$ROOT/##" | sort | tr '\n' ' ')
+  [ "$owner_hits" = "bin/fm-captain-actionable-lib.sh " ] \
+    || fail "the captain-audience test is spelled outside its owner: $owner_hits"
+
+  grep -qF 'fm-captain-actionable-lib.sh' "$ROOT/bin/fm-fleet-snapshot.sh" \
+    || fail "bin/fm-fleet-snapshot.sh no longer sources the predicate owner"
+  grep -qF 'FM_CAPTAIN_ACTIONABLE_JQ' "$ROOT/bin/fm-fleet-snapshot.sh" \
+    || fail "bin/fm-fleet-snapshot.sh no longer splices the shared predicate program"
+  pass "the captain-actionable predicate has exactly one owner and the snapshot splices it"
+}
+
 # The canonical snapshot decides "is this blocker target real" across BOTH the
 # live backlog and the done archive, so a target that is real in neither is a
 # data-integrity fault the reader must surface, while a target still present as a
@@ -819,6 +922,8 @@ test_empty_fleet_json
 test_fixture_snapshot_json
 test_main_inventory_orphan_and_unstructured_disclosure
 test_normalized_roles_and_plural_blocker_readiness
+test_captain_hold_reaches_the_surface_whatever_phase_the_work_is_in
+test_captain_actionable_predicate_has_one_owner
 test_dangling_blocker_is_integrity_not_a_gate
 test_event_hints_follow_reconciled_current_state
 test_open_decision_survives_later_unrelated_event

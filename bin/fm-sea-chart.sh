@@ -130,25 +130,33 @@
 # destination is exactly the thing a chart is supposed to stop being.
 #
 # THE SILENT LOSS THIS EXISTS TO PREVENT - MEASURED, NOT ASSUMED
-# Captain-actionability is one predicate (bin/fm-fleet-snapshot.sh) and a decision
-# blocked by anything fails it. It then leaves `decisions_open` entirely and lands
+# Captain-actionability is one predicate (bin/fm-captain-actionable-lib.sh) and a
+# decision blocked by anything fails it. It then leaves `decisions_open` entirely and lands
 # in `gates`, which carries no kind - so it is indistinguishable from a blocked
 # ship task, on a surface that is already truncated. Measured on a two-decision
 # fixture: adding one `blocked-by` edge takes the reported inventory from
-# "records: 2 decisions kept: 2" to "records: 1 decisions kept: 1", with no
-# footnote anywhere. A chart built naively on that surface drops an open decision
-# and says nothing.
+# "records: 2 decisions kept: 2" to "records: 1 decisions kept: 1". A withheld
+# count and its reason now travel beside that number
+# (bin/fm-captain-actionable-lib.sh), so the drop is no longer silent - but the
+# count never says WHICH decision, so a chart built naively on that surface still
+# drops an open decision off its own page.
 # So this script never trusts that surface alone. It reads its own chart's
 # captain-gated records straight from the backlog and RECONCILES: any record
 # under this chart that the actionable surface did not return is reported in
 # `withheld[]`, named, counted, and given the reason it did not reach the
-# surface - blocked, in flight, or held some other way. A record the surface DID
+# surface - `blocked` by an unresolved record, `no-hold` with nothing recorded as
+# asked, `other-hold` for an audience that is not the captain, `stale-edge` or
+# `dangling-edge` where the only thing holding it is an edge that resolves to
+# nothing, or `not-returned` when none of those explains it. There is no
+# in-flight cause: the phase clause is gone from the predicate, so a record whose
+# work is under way reaches the decision list instead of arriving here.
+# A record the surface DID
 # return and the collapse rule then folded away without pairing it to any judge
 # ruling in its group is reported there too, as `unpaired-variant`: the fold
 # rests on an assumption nothing verifies, so a question only an analyst raised
 # must stay on the page rather than fall between the two surfaces. What makes a record
 # captain-gated is its KIND, never its name: what captain-actionability admits is
-# `hold-kind: captain` (bin/fm-fleet-snapshot.sh), and a captain record named
+# `hold-kind: captain` (bin/fm-captain-actionable-lib.sh), and a captain record named
 # without `-decision-` is exactly as lost when it is blocked. This chart draws its
 # own reconciliation baseline narrower, from records of `kind: captain` under this
 # chart, because those are the ones its sections can classify. An UNBLOCKED
@@ -251,7 +259,7 @@
 #   decisions[]        open decisions, after the board's collapse rule
 #   withheld[]         open captain-gated records this chart's decision list does
 #                      not carry, each with the `cause` that kept it off - blocked,
-#                      in-flight, no-hold, other-hold, stale-edge, dangling-edge,
+#                      no-hold, other-hold, stale-edge, dangling-edge,
 #                      unpaired-variant, folded-elsewhere, non-member-variant,
 #                      not-returned - and `why` in words; blocked
 #                      means a decision the fleet has lost, stale-edge and
@@ -590,11 +598,18 @@ CHART_JSON=$(printf '%s\n%s\n%s\n' "$LIVE" "$ARCH" "$INV" 2>/dev/null | jq -n \
     else null end;
 
   # Why a captain-gated record is not on the decision list of this chart. These are
-  # different pieces of news and must not share one sentence: a blocked record is
-  # one the fleet has lost track of, while an in-flight one is being worked right
-  # now. Captain-actionability (bin/fm-fleet-snapshot.sh) wants a queued record
-  # held with hold-kind captain and nothing unresolved against it, so each failing
-  # clause gets its own name and its own words.
+  # different pieces of news and must not share one sentence, so each failing
+  # clause gets its own name and its own words. Captain-actionability
+  # (bin/fm-captain-actionable-lib.sh) wants a non-terminal record held with
+  # hold-kind captain and nothing unresolved against it.
+  # There is deliberately NO in-flight clause. Until 2026-08-29 the predicate also
+  # required `queued`, and this function named that as a cause - which read as
+  # reassurance ("somebody is working it right now") for the one shape that is the
+  # opposite of reassuring: a question that did not merely precede the work, it
+  # STOPPED work already under way. That clause is gone from the predicate, so
+  # such a record now reaches the decision list and never arrives here at all; an
+  # in-flight record that still arrives here is held off by something else, and
+  # the clauses below name whichever it is rather than blaming the phase.
   # The unpaired-variant and folded-elsewhere clauses come FIRST, together,
   # because they are the two cases where the record DID reach the actionable
   # surface, so every sentence below them - each of which says the surface never
@@ -612,12 +627,9 @@ CHART_JSON=$(printf '%s\n%s\n%s\n' "$LIVE" "$ARCH" "$INV" 2>/dev/null | jq -n \
     elif (unresolved($done; $known) | length) > 0
     then {cause: "blocked",
           why: "blocked by another record that has not resolved, so it never reaches the actionable surface"}
-    elif .state != "queued"
-    then {cause: "in-flight",
-          why: "in flight rather than queued: somebody is working it right now, so it is not a decision lying unanswered"}
     elif .hold_reason == null
     then {cause: "no-hold",
-          why: "queued with no hold recorded, so nothing on the record states what the captain is being asked"}
+          why: "open with no hold recorded, so nothing on the record states what the captain is being asked"}
     elif .hold_kind != "captain"
     then {cause: "other-hold",
           why: (if .hold_kind == null
@@ -957,7 +969,7 @@ CHART_JSON=$(printf '%s\n%s\n%s\n' "$LIVE" "$ARCH" "$INV" 2>/dev/null | jq -n \
   # way not merely undercounted but invisible, every count reading zero - the same
   # silent loss this chart exists against, on a third flank.
   # This baseline stays narrower than the captain-actionable predicate, which
-  # admits any queued record held with `hold-kind: captain`. That is deliberate:
+  # admits any non-terminal record held with `hold-kind: captain`. That is deliberate:
   # an UNBLOCKED record of some other kind now reaches `decisions_open` on its own
   # and is drawn from the inventory, so naming it here would only reconcile it
   # against a surface that already carries it. A BLOCKED one reaches neither: the

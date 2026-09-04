@@ -35,6 +35,11 @@ It never tears down a task, merges a PR, dispatches new work, or mutates any tas
    The report uses the same four complete sections as the chat (see the chat-response contract below), in the same order, each always present, and adds the detail the chat omits:
    - **Title** - `# Bearings - <day> <YYYY-MM-DD>` (use "Morning status" only when the captain specifically asks for a morning brief), followed by two or three sentences framing where things stand.
    - **Captain's Call** - every open decision summarized with its options from the structured decision record, plus each PR ready to merge and each needed credential or login, every PR with the full `https://...` URL, never a bare `#number`.
+     Render the snapshot's `captain holds withheld from decisions_open` disclosure beside those decisions, its count and its reasons together.
+     `decisions_open` is the captain-actionable set, not the open set: a decision already settled as Done was never a candidate and is never counted as withheld, so the number means decisions this surface is not showing him rather than decisions that exist.
+     Read it with its reasons: a record he has already answered whose close is unfinished is counted under `answered_pending_close`, so the reasons beside the number are what separate the decisions still waiting on him from the ones he has already made.
+     Bearings is what makes that count fleet-wide, summing this home's disclosure with the same disclosure from every registered secondmate home, so a decision routed away from this home is counted no differently from one kept here.
+     Print the count and its reasons rather than only the caveat, because a count of two looked complete for nineteen days on one vessel purely because nothing beside it said what it was not counting.
    - **Recently Landed** - the bounded current recent-completions baseline from structured state across the main fleet and every registered secondmate home, rendered in full on every run.
    - **Underway** - each live direct report making progress, with its current state, and the plans / main pickup pointers worth reopening (`data/<id>/report.md` files, `.lavish/*.html` boards).
    - **Charted Next** - queued or gated work, including any main-inventory integrity warning and any `integrity`-array item shown as ready with its dangling-edge caution, with each item's blocker, date, or integrity reason.
@@ -52,6 +57,8 @@ This skill is the one owner of the `/bearings` chat-response format; the snapsho
 Every `/bearings` chat response renders EXACTLY these four sections, in THIS order, and nothing else structural (there is no At Anchor section):
 
 1. **Captain's Call** - ONLY items that need the captain's own action now: a decision to make, a PR to approve or merge, a credential or login to provide, or a blocker only the captain can clear.
+   The fleet-wide `captain holds withheld from decisions_open` disclosure renders here too, count and reasons together, on the terms the report-file section above states.
+   The chat digest is this skill's declared required minimum and is usually all the captain reads, so a disclosure printed only in the dated report file sits where he is not looking - which is the failure this count exists against.
    Empty-state: "Nothing needs your action right now."
 2. **Recently Landed** - the bounded current recent-completions baseline: merged PRs, completed scouts, and finished local-only merges across the main fleet and every registered secondmate home.
    Empty-state: "No recent completions are in the current baseline."
@@ -65,9 +72,13 @@ Rules that keep the contract unambiguous:
 - Every section ALWAYS renders, even when empty, with its short empty-state sentence; never omit a section.
 - Every report and chat digest is a complete current snapshot, never a delta against a prior report.
 - Recently Landed always renders the bounded current baseline, even when the same completions appeared in an earlier report.
-- The four buckets are mutually exclusive, so every item is forced into exactly one: needs-your-action is Captain's Call, done is Recently Landed, self-progressing is Underway, and not-yet-started work or an action-free fleet-integrity warning is Charted Next.
+- The four buckets are mutually exclusive over a single fact about a record, so each fact is forced into exactly one: needs-your-action is Captain's Call, done is Recently Landed, self-progressing is Underway, and not-yet-started work or an action-free fleet-integrity warning is Charted Next. Exclusivity sorts facts, not ids: one id that carries two distinct facts - work running AND a question asked about it - contributes one item to each of the two sections and is never dropped from either.
 - The strict boundary keeps action-free items OUT of Captain's Call: a working or validating task, a queued item blocked on another task or a date, landed work, a completed scout's report pointer, a declared `paused:` external wait, and a bare recorded PR with no merge-ready signal each belong to one of the other three sections, never Captain's Call.
-- A secondmate's own row appears Underway only for `active_child_work`; `externally_held` belongs in Charted Next, and `unknown` belongs there as an unavailable-state gate unless its reason requires the captain's action.
+- A secondmate's own row appears Underway when the projection puts it on `in_flight`, which it does on the home's running children rather than on the home's headline state; `externally_held` has no running children and belongs in Charted Next.
+- Such a row therefore carries whichever state the snapshot reached, including `captain_decision` and `unknown`, and the row is rendered under the state it carries rather than under `active_child_work`.
+- That is not a bucket collision, because a home is not an item: the running child work is the Underway item, while the captain decision routed out of that home is its own Captain's Call item from `decisions_open`, and an `unknown` state is its own unavailable-state gate in Charted Next unless its reason requires the captain's action.
+- A main-fleet record has the same shape: a record held for the captain whose own work is under way appears on `in_flight` because it is working, and in `decisions_open` because the captain is the one being asked. The running work is the Underway item and the hold is the Captain's Call item, so that one id legitimately appears under both headings.
+- Render both when both are present, and never drop the running work because a decision was asked about that home or that record - losing work already under way behind a question about it is the failure this surface was widened against.
 - Do not suppress separately projected decisions, landed records, or gates from a `partial-structured` home merely because that secondmate's own row is `unknown`.
 - The chat follows `AGENTS.md` section 9 and carries one scannable line per item, each PR as the full `https://...` URL; detailed decisions, plans, full gate reasons, and evidence live only in the report file, which the chat links to, so the chat stays materially shorter than that file.
 

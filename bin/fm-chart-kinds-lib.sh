@@ -29,7 +29,7 @@
 #
 # WHY THESE KINDS ARE SAFE BY CONSTRUCTION
 # Neither can ever be mistaken for a captain decision. Captain-actionability is
-# one predicate in bin/fm-fleet-snapshot.sh and it requires `hold_kind ==
+# one predicate in bin/fm-captain-actionable-lib.sh and it requires `hold_kind ==
 # "captain"`, which is the field that names who is being asked. Both kinds below
 # are filed with `hold --kind future`, so both read `captain_actionable: false`.
 # That is structure, not a rule in prose that drifts - but it is structure in the

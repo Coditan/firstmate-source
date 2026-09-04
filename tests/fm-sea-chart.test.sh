@@ -267,8 +267,14 @@ test_withheld_records_name_their_own_cause() {
   # Every open captain record under the chart is listed, which is the right
   # trade - but they are off the actionable surface for different reasons, and
   # one sentence covering all of them would be a small untruth in the one place
-  # this chart exists to be honest. A record somebody is working right now must
-  # not read like a decision the fleet has lost.
+  # this chart exists to be honest.
+  # A record somebody is working right now is not withheld at all any more. Until
+  # 2026-08-29 captain-actionability also required `queued`, so this chart named
+  # `in-flight` as a cause and said the record was "being worked right now, so it
+  # is not a decision lying unanswered" - reassurance about the one shape that is
+  # the opposite of reassuring, because such a question STOPPED work already under
+  # way. The predicate no longer gates on the phase, so voy-worked below is
+  # asserted onto the decision list and out of withheld[] in the same breath.
   local home cap out causes
   home=$(make_home causes)
   cat > "$home/data/backlog.md" <<'EOF'
@@ -292,13 +298,18 @@ EOF
 ## Archived 2026-07-20
 - [x] voy-setup - Long since finished (repo: r) (kind: ship) (done 2026-07-20)
 EOF
-  cap=$(capture causes)
+  # The capture carries voy-worked because the actionable surface now returns it:
+  # tests/fm-fleet-snapshot-view.test.sh pins the predicate and
+  # tests/fm-bearings-snapshot.test.sh pins the projection that fills a real one.
+  cap=$(capture causes voy-worked)
   out=$(chart_json "$home" voy "$cap")
   causes=$(printf '%s' "$out" | jq -r '[.withheld[]|{(.id): .cause}]|add|tojson')
   [ "$(printf '%s' "$causes" | jq -r '.["voy-blocked"]')" = "blocked" ] \
     || fail "a record held back by an unresolved blocker is the lost decision this chart exists for and must say so"
-  [ "$(printf '%s' "$causes" | jq -r '.["voy-worked"]')" = "in-flight" ] \
-    || fail "a captain record being worked right now must not be reported the same way as a lost one"
+  [ "$(printf '%s' "$out" | jq -r '[.decisions[].id]|index("voy-worked")')" != "null" ] \
+    || fail "a captain hold on work under way is a question that stopped that work: it must reach the chart's decision list, not be explained away by its phase"
+  [ "$(printf '%s' "$causes" | jq -r '.["voy-worked"]')" = "null" ] \
+    || fail "a record the actionable surface now returns must not also be reported as withheld from it"
   [ "$(printf '%s' "$causes" | jq -r '.["voy-unheld"]')" = "no-hold" ] \
     || fail "a queued captain record with no hold recorded has its own cause"
   [ "$(printf '%s' "$causes" | jq -r '.["voy-future"]')" = "other-hold" ] \
@@ -318,10 +329,21 @@ EOF
   assert_contains "$(printf '%s' "$out" | jq -r '.withheld[]|select(.id=="voy-plainhold")|.why')" "no hold kind recorded" \
     "a hold carrying no kind must say so in words"
   # The reasons in words must not collapse back into one shared sentence.
-  [ "$(printf '%s' "$out" | jq -r '[.withheld[].why]|unique|length')" = 6 ] \
-    || fail "six distinct situations must carry six distinct reasons, or the labels have silently collapsed"
+  [ "$(printf '%s' "$out" | jq -r '[.withheld[].why]|unique|length')" = 5 ] \
+    || fail "five distinct situations must carry five distinct reasons, or the labels have silently collapsed"
   assert_contains "$(printf '%s' "$out" | jq -r '.withheld[]|select(.id=="voy-blocked")|.held_by')" "voy-open" \
     "a blocked record must still name what is holding it"
+  # The renderer reads the skill, not the script, so a phase cause left standing in
+  # the prose would keep telling a reader that work under way explains the absence
+  # long after the script stopped producing that cause. The script's side is
+  # asserted behaviourally above: voy-worked is on the decision list with no
+  # withheld cause at all.
+  # Grep the CAUSE SPELLING, never the word: the skill discusses the removed clause
+  # in prose on purpose, and a guard that forbade the word would forbid the record
+  # of why it went.
+  # shellcheck disable=SC2016 # Backticks are literal Markdown in the expected text.
+  assert_no_grep '`in-flight`' "$ROOT/.agents/skills/sea-chart/SKILL.md" \
+    "the sea-chart skill must not document a phase as a withheld cause"
   pass "each withheld record names the cause that kept it off the actionable surface"
 }
 

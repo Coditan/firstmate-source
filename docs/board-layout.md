@@ -122,7 +122,7 @@ A declaration printed under the entries is one the captain reads after he has al
     </div>
 
 The block is available to any board that has something to declare.
-The one surface that currently **requires** it is the decision board, whose three sentences are owned by `.agents/skills/decisionboard`, in "What the board must not claim".
+The one surface that currently **requires** it is the decision board, whose declarations - the caveats and the count of what the surface withheld - are owned by `.agents/skills/decisionboard`, in "What the board must not claim".
 
 ### The register and its entries
 
