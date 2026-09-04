@@ -29,6 +29,20 @@
 # home's data/projects.md first, preserving their parsed skip lines for missing
 # or non-repository entries, then scans this home's projects dir for
 # unregistered directories only when they are git roots.
+# A registry that is PRESENT and cannot be read stops the whole-fleet form with
+# "fleet: STUCK: cannot read the project registry ..." on stdout and exit 3,
+# because a home that cannot tell which projects it has must not report that it
+# has none. It refuses on a registry that is not a regular file, one that cannot be
+# read or parsed, a dangling symlink, and a path whose own ABSENCE cannot be
+# established because an ancestor directory cannot be searched. An ABSENT registry
+# under a directory this process can look in is not a fault: the directory scan is
+# the whole answer for a home that registers nothing.
+# The directory scan is held to the same standard: a projects dir that is PRESENT
+# and cannot be listed - or one whose absence cannot be established - stops the
+# whole-fleet form with "fleet: STUCK: cannot list the projects directory ..." on
+# stdout and exit 3, because an unlistable dir would otherwise render as a home
+# holding no unregistered clones. An ABSENT projects dir is not a fault either, for
+# the same reason.
 # The single-project form accepts either a path (absolute, or relative to the
 # caller's cwd) or a bare "<name>"/"projects/<name>" form, resolved against
 # this home's projects dir ($FM_HOME/projects, or $FM_PROJECTS_OVERRIDE).
@@ -44,6 +58,8 @@ FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 REG="$DATA/projects.md"
 PROJECTS="${FM_PROJECTS_OVERRIDE:-$FM_HOME/projects}"
+# shellcheck source=bin/fm-absence-lib.sh
+. "$SCRIPT_DIR/fm-absence-lib.sh"
 # shellcheck source=bin/fm-lock-lib.sh
 . "$SCRIPT_DIR/fm-lock-lib.sh"
 FM_LOCK_LOG_PREFIX=fleet-sync
@@ -81,6 +97,86 @@ project_label() {
     projects/*) basename "$PROJ" ;;
     *) printf '%s\n' "$PROJ" ;;
   esac
+}
+
+# AN UNREADABLE REGISTRY IS NOT AN EMPTY ONE. registered_project_names is called in
+# a command substitution, so its exit status is discarded by the `for` that consumes
+# it: a parse that failed used to fall through to an empty name list, every
+# registered project dropped out of the run without a line, and the whole-fleet form
+# exited 0. Nothing downstream - bootstrap's relay included - could tell a home with
+# no projects from a home that could not look. So the readability of the registry is
+# established ONCE, before the walk, by a function that names the concrete cause.
+#
+# An ABSENT registry is not a fault: a home that registers no projects has no file,
+# and the directory scan below is the whole answer for it.
+registry_fault() {  # prints why the registry cannot be read, and returns 0 when so
+  # A symlink that does not resolve is a PRESENT registry that cannot be read, not
+  # an absent one: `test -e` follows the link and answers for the target, so this
+  # asks about the link itself before concluding the home simply has no file.
+  local unsearchable
+  if [ ! -e "$REG" ]; then
+    if [ -L "$REG" ]; then
+      printf 'broken symlink to %s\n' "$(readlink "$REG" 2>/dev/null || printf '%s' 'an unreadable target')"
+      return 0
+    fi
+    if unsearchable=$(fm_absence_unprovable "$REG"); then
+      printf 'cannot tell whether the registry exists: %s cannot be searched\n' "$unsearchable"
+      return 0
+    fi
+    return 1
+  fi
+  if [ ! -f "$REG" ]; then
+    printf 'not a regular file\n'
+    return 0
+  fi
+  if [ ! -r "$REG" ]; then
+    printf 'permission denied\n'
+    return 0
+  fi
+  # Readable by mode and still unreadable in fact - an I/O error, a dead network
+  # mount - is only visible by reading it.
+  if ! awk 'END { }' "$REG" 2>/dev/null; then
+    printf 'the registry could not be parsed\n'
+    return 0
+  fi
+  return 1
+}
+
+# The scan half of the same answer. `[ -d "$PROJECTS" ]` only stats, so a projects
+# dir that is present and cannot be listed left the glob unexpanded, every clone in
+# it dropped out of the run without a line, and the whole-fleet form exited 0 - the
+# same silence a home with no clones produces.
+#
+# An ABSENT projects dir is not a fault: a home that keeps no clones has no such
+# directory, and the registered walk above is the whole answer for it.
+projects_dir_fault() {  # prints why the projects dir cannot be listed, returns 0 when so
+  local unsearchable
+  if [ ! -e "$PROJECTS" ]; then
+    if [ -L "$PROJECTS" ]; then
+      printf 'broken symlink to %s\n' "$(readlink "$PROJECTS" 2>/dev/null || printf '%s' 'an unreadable target')"
+      return 0
+    fi
+    if unsearchable=$(fm_absence_unprovable "$PROJECTS"); then
+      printf 'cannot tell whether the projects directory exists: %s cannot be searched\n' "$unsearchable"
+      return 0
+    fi
+    return 1
+  fi
+  if [ ! -d "$PROJECTS" ]; then
+    printf 'not a directory\n'
+    return 0
+  fi
+  # Listing needs read, and stat-ing what the listing names needs search; without
+  # either one the walk sees nothing and cannot tell that from an empty dir.
+  if [ ! -r "$PROJECTS" ] || [ ! -x "$PROJECTS" ]; then
+    printf 'permission denied\n'
+    return 0
+  fi
+  if ! ls -A "$PROJECTS" >/dev/null 2>&1; then
+    printf 'the projects directory could not be listed\n'
+    return 0
+  fi
+  return 1
 }
 
 registered_project_names() {
@@ -454,6 +550,19 @@ sync_project() {
 if [ $# -eq 1 ]; then
   sync_project "$(resolve_project_arg "$1")"
   exit 0
+fi
+
+# The refusal goes to STDOUT and carries the "STUCK:" word its readers classify by:
+# bin/fm-bootstrap.sh relays this stream and discards stderr, so a registry fault
+# announced on stderr alone would be a fault nobody hears.
+if REG_FAULT=$(registry_fault); then
+  echo "fleet: STUCK: cannot read the project registry $REG: $REG_FAULT - this home cannot tell which projects it has, so it is not reporting that it has none - needs attention"
+  exit 3
+fi
+
+if PROJECTS_FAULT=$(projects_dir_fault); then
+  echo "fleet: STUCK: cannot list the projects directory $PROJECTS: $PROJECTS_FAULT - this home cannot tell which clones it holds, so it is not reporting that it holds none - needs attention"
+  exit 3
 fi
 
 for name in $(registered_project_names); do

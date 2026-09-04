@@ -130,6 +130,10 @@
 #   9. timing        - one line naming what this whole run cost, and the path of
 #                       state/session-start-timing.log, where the per-step
 #                       breakdown for this run and the previous ones was appended.
+#                       When no clock on this seat can be read, that line and the
+#                       logged one both say the duration is unreadable and name
+#                       that cause, rather than reporting the 0ms a substituted
+#                       clock read would otherwise present as a fast start.
 #                       A vessel had no way to see its own startup getting slower
 #                       as its in-flight count grew, and reconstructing it from
 #                       file timestamps afterwards is blind to every step that
@@ -210,12 +214,19 @@ TIMING_KEEP=${FM_SESSION_START_TIMING_KEEP:-200}
 case "$TIMING_KEEP" in ''|*[!0-9]*|0) TIMING_KEEP=200 ;; esac
 TIMING_MARKS=""
 
-# Always prints an integer. Timing must never be able to break a startup digest,
-# so every read is validated as digits before it is trusted and the last resort is
-# whole seconds. The fallback branch is the shell without EPOCHREALTIME - bash
-# before 4.4, which in practice means the system bash on macOS, where `date` is BSD
-# date: it does not implement %N, prints it literally, and still exits 0, so an
-# unvalidated read yields a non-numeric string that no `||` ever catches.
+# Prints an integer, or prints nothing and returns 1 when no clock here can be read.
+# Timing must never be able to break a startup digest, so every read is validated as
+# digits before it is trusted and the last resort is whole seconds. The fallback
+# branch is the shell without EPOCHREALTIME - bash before 4.4, which in practice
+# means the system bash on macOS, where `date` is BSD date: it does not implement
+# %N, prints it literally, and still exits 0, so an unvalidated read yields a
+# non-numeric string that no `||` ever catches.
+#
+# AND WHEN EVEN THAT LAST RESORT FAILS, IT SAYS SO. It used to substitute 0, which
+# an elapsed-time subtraction turns into "took 0ms" - the best result this
+# instrument can print, produced for a measurement it never took. A reading that
+# could not be taken must not render as a value, least of all as the ideal one, so
+# the failure travels as a status and timing_mark below latches it for the run.
 now_ms() {
   local micros nanos secs
   if [ -n "${EPOCHREALTIME:-}" ]; then
@@ -233,18 +244,34 @@ now_ms() {
     return 0
   fi
   secs=$(date +%s 2>/dev/null)
-  case "$secs" in ''|*[!0-9]*) secs=0 ;; esac
-  printf '%s' "$((10#$secs * 1000))"
+  case "$secs" in ''|*[!0-9]*) secs="" ;; esac
+  if [ -n "$secs" ]; then
+    printf '%s' "$((10#$secs * 1000))"
+    return 0
+  fi
+  return 1
 }
 
-TIMING_T0=$(now_ms)
+# One sentence, stated once, so the digest line and the latch cannot drift apart.
+TIMING_CLOCK_UNREADABLE="the system clock could not be read: EPOCHREALTIME held no digits and neither date +%s%N nor date +%s answered"
+TIMING_CLOCK_FAULT=""
+TIMING_T0=$(now_ms) || TIMING_CLOCK_FAULT=$TIMING_CLOCK_UNREADABLE
 TIMING_LAST=$TIMING_T0
 
+# ONE FAILED READ MAKES THE WHOLE RUN UNREADABLE, and that is deliberate rather than
+# conservative: every number here is an elapsed time between two reads, so a span
+# that starts or ends at a read nobody took has no value to report. The fault is
+# latched, each step from that point on records the word rather than a number, and
+# timing_report says the same thing the marks do.
 timing_mark() {  # <step-name>: record the elapsed time since the previous mark
   local now
-  now=$(now_ms)
-  TIMING_MARKS="$TIMING_MARKS${TIMING_MARKS:+ }$1=$((now - TIMING_LAST))ms"
-  TIMING_LAST=$now
+  if [ -z "$TIMING_CLOCK_FAULT" ] && now=$(now_ms); then
+    TIMING_MARKS="$TIMING_MARKS${TIMING_MARKS:+ }$1=$((now - TIMING_LAST))ms"
+    TIMING_LAST=$now
+    return 0
+  fi
+  [ -n "$TIMING_CLOCK_FAULT" ] || TIMING_CLOCK_FAULT=$TIMING_CLOCK_UNREADABLE
+  TIMING_MARKS="$TIMING_MARKS${TIMING_MARKS:+ }$1=unreadable"
 }
 
 # ROTATED once the log passes twice FM_SESSION_START_TIMING_KEEP runs, and this
@@ -259,9 +286,14 @@ timing_mark() {  # <step-name>: record the elapsed time since the previous mark
 # session waits on the other. Every step here stays best-effort: a startup digest
 # must never fail, or block, because it could not write or rotate a timing line.
 timing_report() {
-  local total lines
+  local total lines now total_field duration cause_field stamp
   timing_mark closing
-  total=$(( $(now_ms) - TIMING_T0 ))
+  if [ -n "$TIMING_CLOCK_FAULT" ] || ! now=$(now_ms); then
+    total=""
+    [ -n "$TIMING_CLOCK_FAULT" ] || TIMING_CLOCK_FAULT=$TIMING_CLOCK_UNREADABLE
+  else
+    total=$((now - TIMING_T0))
+  fi
   # `2>/dev/null` goes FIRST on both of these. A redirection is applied left to
   # right, so a failing `<` or `>>` announced before stderr is silenced puts a bare
   # shell error in the digest - which the very first start in a new home, where
@@ -273,13 +305,31 @@ timing_report() {
       mv -f "$TIMING_LOG" "$TIMING_LOG.1" 2>/dev/null || true
     fi
   fi
-  if printf '%s total=%sms %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$total" "$TIMING_MARKS" \
-       2>/dev/null >> "$TIMING_LOG"; then
-    printf 'SESSION START took %sms; per-step breakdown for this run and the previous ones: %s\n' \
-      "$total" "$TIMING_LOG"
+  # The log gets what the digest gets, cause included: a later reader of this file
+  # must not be able to mistake an unmeasured run for a run that cost nothing, and
+  # must be able to tell WHY it was unmeasured without a second source. The cause is
+  # the last field because it is a sentence; everything a reader parses positionally
+  # stays ahead of it. Phrased once here so the log and the digest cannot drift.
+  if [ -n "$total" ]; then
+    total_field="${total}ms"
+    duration="took ${total}ms"
+    cause_field=""
   else
-    printf 'SESSION START took %sms; the per-step breakdown could not be written to %s\n' \
-      "$total" "$TIMING_LOG"
+    total_field="unreadable"
+    duration="duration unreadable ($TIMING_CLOCK_FAULT)"
+    cause_field=" cause=$TIMING_CLOCK_FAULT"
+  fi
+  # The line's own timestamp comes from the same clock, so it gets the same word
+  # rather than an empty field that would leave the line starting with a space.
+  stamp=$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null) || stamp=""
+  [ -n "$stamp" ] || stamp=unreadable
+  if printf '%s total=%s %s%s\n' "$stamp" "$total_field" "$TIMING_MARKS" "$cause_field" \
+       2>/dev/null >> "$TIMING_LOG"; then
+    printf 'SESSION START %s; per-step breakdown for this run and the previous ones: %s\n' \
+      "$duration" "$TIMING_LOG"
+  else
+    printf 'SESSION START %s; the per-step breakdown could not be written to %s\n' \
+      "$duration" "$TIMING_LOG"
   fi
 }
 

@@ -19,7 +19,11 @@
 #                 "DECISION_LEDGER: <class> <id> - <what is unfinished about that captain decision record>",
 #                 "DECISION_LEDGER: baseline recorded|absent|rejected - <what the adoption baseline covers or refuses>",
 #                 "DECISION_LEDGER: and <n> more not shown here; run bin/fm-decision-ledger.sh --audit for the full list",
+#                 "DECISION_LEDGER: STUCK: this home's captain decision records could not be read: <the reader's own named cause>",
 #                 "FLEET_SYNC: <repo>: skipped|recovered|STUCK: <detail>",
+#                 "FLEET_SYNC: fleet: STUCK: cannot read the project registry <path>: <cause> ...",
+#                 "FLEET_SYNC: fleet: STUCK: cannot list the projects directory <path>: <cause> ...",
+#                 "FLEET_SYNC: fleet: refresh failed (exit <rc>); <what the outcomes above cover>",
 #                 "PR_CHECK_MIGRATION: <private remediation>",
 #                 "TANGLE: <remediation>",
 #                 "SELF_DRIFT: primary checkout default branch '<branch>' is <N> ahead, <M> behind origin/<branch> (<state>) - needs attention",
@@ -125,6 +129,8 @@ PROJECTS="${FM_PROJECTS_OVERRIDE:-$FM_HOME/projects}"
 CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
+# shellcheck source=bin/fm-absence-lib.sh disable=SC1091
+. "$SCRIPT_DIR/fm-absence-lib.sh"
 # shellcheck source=bin/fm-axi-path-lib.sh disable=SC1091
 . "$SCRIPT_DIR/fm-axi-path-lib.sh"
 fm_axi_prepend_path "$FM_HOME"
@@ -209,9 +215,24 @@ fleet_sync_relay_all_output() {
   done < "$tmp"
 }
 
+fleet_sync_path_may_speak() {  # <path>: false only when this path is provably absent
+  [ -e "$1" ] || [ -L "$1" ] || fm_absence_unprovable "$1" >/dev/null
+}
+
 fleet_sync() {
+  local rc
   [ -x "$FM_ROOT/bin/fm-fleet-sync.sh" ] || return 0
-  [ -d "$PROJECTS" ] || return 0
+  # A home that genuinely keeps no clones and registers no projects must still cost
+  # nothing here. Every other reading falls through: a path that is PRESENT as
+  # anything at all, a dangling symlink, and a path whose absence this process cannot
+  # establish are all readings fm-fleet-sync.sh refuses on, and returning 0 on any of
+  # them would swallow that refusal and hand the session start the same silence a
+  # home with nothing to sync produces. Only a provable absence skips, because only
+  # that one is an answer - and it has to be provable for BOTH paths that reader
+  # speaks about, since it refuses on the registry before it ever walks the clones.
+  fleet_sync_path_may_speak "$PROJECTS" \
+    || fleet_sync_path_may_speak "$DATA/projects.md" \
+    || return 0
 
   tmp=$(mktemp "${TMPDIR:-/tmp}/fm-fleet-sync.XXXXXX" 2>/dev/null) || return 0
   timeout=$(fleet_sync_bootstrap_timeout)
@@ -235,10 +256,17 @@ fleet_sync() {
     fi
     sleep 1
   done
-  wait "$pid" 2>/dev/null || true
+  rc=0
+  wait "$pid" 2>/dev/null || rc=$?
   [ "$monitor_was_on" -eq 1 ] || set +m 2>/dev/null || true
 
   fleet_sync_relay_filtered_output "$tmp"
+  # A REFRESH THAT DID NOT COMPLETE IS NOT A REFRESH. This status was thrown away,
+  # so a sync that stopped without producing a per-project line - the shape a home
+  # that cannot read its own project registry takes - reached a session start as
+  # silence, which reads exactly like a fleet with nothing to say.
+  [ "$rc" -eq 0 ] \
+    || echo "FLEET_SYNC: fleet: refresh failed (exit $rc); the outcomes above are only what it managed before stopping"
   rm -f "$tmp"
 }
 
@@ -1445,10 +1473,31 @@ fi
 # to skip are the fleet-mutating sweeps, not a private cache this home rewrites
 # from its own records.
 if command -v jq >/dev/null 2>&1; then
-  # Exit 1 means findings; 0 is clean and stays silent, and anything else is an
+  # Exit 1 means findings; 0 is clean and stays silent. A REFUSAL IS NOT A CLEAN
+  # HOME. That reader now stops with a named cause on stderr rather than reporting
+  # that a home whose records it could not read holds none, and discarding that
+  # status would put the refusal back where it started: a session start that looks
+  # exactly like a home with nothing unfinished. So a stderr line the reader itself
+  # spoke - its own `fm-decision-ledger.sh: <cause>` prefix - is relayed with the
+  # cause it names. Anything else, including a crash that named nothing, stays an
   # environment fault this step declines to turn into a false alarm.
   decision_rc=0
-  decision_audit=$("$SCRIPT_DIR/fm-decision-ledger.sh" --audit 2>/dev/null) || decision_rc=$?
+  decision_err=$(mktemp "${TMPDIR:-/tmp}/fm-decision-ledger-err.XXXXXX" 2>/dev/null) || decision_err=""
+  if [ -n "$decision_err" ]; then
+    decision_audit=$("$SCRIPT_DIR/fm-decision-ledger.sh" --audit 2>"$decision_err") || decision_rc=$?
+  else
+    decision_audit=$("$SCRIPT_DIR/fm-decision-ledger.sh" --audit 2>/dev/null) || decision_rc=$?
+  fi
+  if [ "$decision_rc" -ne 0 ] && [ "$decision_rc" -ne 1 ]; then
+    decision_cause=""
+    [ -z "$decision_err" ] \
+      || decision_cause=$(sed -n 's/^fm-decision-ledger\.sh: //p' "$decision_err" 2>/dev/null | head -n 1)
+    [ -z "$decision_cause" ] \
+      || echo "DECISION_LEDGER: STUCK: this home's captain decision records could not be read: $decision_cause"
+    unset decision_cause
+  fi
+  [ -z "$decision_err" ] || rm -f "$decision_err"
+  unset decision_err
   if [ "$decision_rc" -eq 1 ] && [ -n "$decision_audit" ]; then
     # BOUNDED, AND THE REMAINDER IS STATED. This home's audit stood at 58 findings
     # the day the check was written, and a startup digest that opens with dozens of

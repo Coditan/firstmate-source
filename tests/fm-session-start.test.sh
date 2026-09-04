@@ -1324,6 +1324,115 @@ EOF
   pass "the timing log rotates without ever naming a file it just renamed away"
 }
 
+# A CLOCK THAT CANNOT BE READ IS NOT A FAST RUN. Every clock read here fell back to
+# whole seconds and, when that failed too, to the literal 0 - so a vessel with no
+# readable clock printed "SESSION START took 0ms", the best result the instrument can
+# produce, for a measurement it never took. The one number a seat has for its own
+# startup cost read as perfect precisely when it was absent.
+#
+# The premise is arranged the way the shell actually loses its clock: EPOCHREALTIME
+# gone (bash before 4.4, which in practice is the system bash on macOS) and `date`
+# unable to answer either clock format. BASH_ENV is what removes EPOCHREALTIME from
+# the script's own shell - it cannot be unset from the environment, because bash
+# recreates it - and it unsets itself so the children of this run keep theirs.
+test_a_clock_that_cannot_be_read_is_never_reported_as_a_0ms_run() {
+  local rec root home fakebin out status=0 line
+  rec=$(new_world timing-unreadable-clock)
+  IFS='|' read -r root home fakebin <<EOF
+$rec
+EOF
+  make_fake_toolchain "$fakebin"
+  make_fake_ps_claude "$fakebin"
+
+  # A date that cannot answer either clock format and is otherwise itself, so this
+  # breaks the clock and nothing else.
+  cat > "$fakebin/date" <<'SH'
+#!/usr/bin/env bash
+for arg in "$@"; do
+  case "$arg" in
+    +%s%N|+%s) echo "date: cannot read the clock" >&2; exit 1 ;;
+  esac
+done
+exec /bin/date "$@"
+SH
+  chmod +x "$fakebin/date"
+  printf 'unset EPOCHREALTIME
+unset BASH_ENV
+' > "$home/no-clock.bashenv"
+
+  out=$(BASH_ENV="$home/no-clock.bashenv" run_session_start "$home" "$root" "$fakebin:$BASE_PATH" 2>/dev/null)     || status=$?
+
+  [ "$status" -eq 0 ] || fail "an unreadable clock must not fail the digest (exit $status)"
+  assert_contains "$out" "NEXT STEP" "the digest must still complete when the clock cannot be read"
+  assert_not_contains "$out" "SESSION START took 0ms" \
+    "a clock that could not be read must never render as the best possible measurement"
+  assert_contains "$out" "SESSION START duration unreadable" \
+    "the digest must say the duration could not be measured: $out"
+  assert_contains "$out" "the system clock could not be read" \
+    "the digest must name why the duration could not be measured: $out"
+
+  # The appended record must say the same thing the digest says, cause included: a
+  # later reader of this file cannot mistake this run for a run that cost nothing,
+  # and does not need a second source to learn why it was unmeasured.
+  line=$(tail -1 "$home/state/session-start-timing.log" 2>/dev/null || true)
+  case "$line" in
+    *"total=unreadable"*) ;;
+    *) fail "the timing log must record the run as unreadable, got: $line" ;;
+  esac
+  case "$line" in
+    *"cause=the system clock could not be read"*) ;;
+    *) fail "the timing log must name why the run was unmeasured, got: $line" ;;
+  esac
+  case "$line" in
+    *"=0ms"*) fail "no step may report 0ms from a clock that could not be read: $line" ;;
+  esac
+
+  pass "a clock that cannot be read is never reported as a 0ms run"
+}
+
+# THE LINE'S OWN TIMESTAMP COMES FROM THE SAME CLOCK. When date cannot answer at
+# all, that field rendered as the empty string and the record began with a space -
+# an unreadable reading printed as nothing rather than as unreadable, in the one
+# file this change added for a later reader.
+test_a_timing_record_never_opens_with_an_unread_timestamp() {
+  local rec root home fakebin out status=0 line
+  rec=$(new_world timing-dead-date)
+  IFS='|' read -r root home fakebin <<EOF
+$rec
+EOF
+  make_fake_toolchain "$fakebin"
+  make_fake_ps_claude "$fakebin"
+
+  # A date that cannot answer anything, which is what a shell with no usable clock
+  # at all has: the elapsed reads and the record's own stamp fail together.
+  cat > "$fakebin/date" <<'SH'
+#!/usr/bin/env bash
+echo "date: cannot read the clock" >&2
+exit 1
+SH
+  chmod +x "$fakebin/date"
+  printf 'unset EPOCHREALTIME
+unset BASH_ENV
+' > "$home/no-clock.bashenv"
+
+  out=$(BASH_ENV="$home/no-clock.bashenv" run_session_start "$home" "$root" "$fakebin:$BASE_PATH" 2>/dev/null) || status=$?
+
+  [ "$status" -eq 0 ] || fail "an unreadable clock must not fail the digest (exit $status)"
+  assert_contains "$out" "SESSION START duration unreadable" \
+    "the digest must still say the duration could not be measured: $out"
+
+  line=$(tail -1 "$home/state/session-start-timing.log" 2>/dev/null || true)
+  case "$line" in
+    " "*|"") fail "the record must not open with an empty timestamp field, got: [$line]" ;;
+  esac
+  case "$line" in
+    "unreadable total=unreadable"*) ;;
+    *) fail "a stamp this run could not read must render as unreadable, got: [$line]" ;;
+  esac
+
+  pass "a timing record never opens with an unread timestamp"
+}
+
 # EVERY TIMING STEP IS BEST-EFFORT. A startup digest reports; it is not a gate, and
 # it must not become one because a debug line could not be written.
 test_a_timing_log_that_cannot_be_written_does_not_fail_the_digest() {
@@ -1383,3 +1492,5 @@ test_pi_diagnostic_rejects_previous_session_loaded_marker
 test_the_digest_names_this_run_s_own_cost_and_where_the_breakdown_is
 test_the_timing_log_rotates_without_ever_naming_an_absent_file
 test_a_timing_log_that_cannot_be_written_does_not_fail_the_digest
+test_a_clock_that_cannot_be_read_is_never_reported_as_a_0ms_run
+test_a_timing_record_never_opens_with_an_unread_timestamp

@@ -82,6 +82,14 @@ Mark an axis not applicable only after inspecting its integration surface, and u
 For critical safety, routing, startup, and supervision infrastructure, prefer deterministic and idempotent enforcement over relying on agent memory alone.
 Keep instructions as the authority and discovery layer, but make repeated execution converge safely and make invalid or unsafe states fail closed wherever the runtime can enforce them.
 
+## A reading that could not be taken never renders as a value
+
+When a script reads something - a clock, a registry, a stored model, a remote answer - and the read fails, it must not substitute a value that a caller cannot distinguish from a real one.
+Not `0ms` for a clock nobody could read, not an empty list for a registry nobody could open, not "no records" for a store whose model would not parse.
+It renders as unreadable, it names the concrete cause, and its callers propagate that rather than discarding it into a default.
+The test for a substituted value is whether a reader can tell it apart from the same value legitimately measured: a home with no projects and a home that could not read its registry both printed nothing and exited 0, and that is the defect, not the wording.
+On 2026-08-31 three of these landed in this repository on one day - the session-start timing clock, the whole-fleet registry read, and the decision ledger's stored model - so a reviewer of this repo's own tooling should expect the class rather than be surprised by it.
+
 ## Repo style rules
 
 - Put one full sentence per line in tracked Markdown.

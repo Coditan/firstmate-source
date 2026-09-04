@@ -539,6 +539,348 @@ test_non_repo_directory_inside_enclosing_repo_skipped() {
   pass "non-repo container inside an enclosing repository is skipped cleanly"
 }
 
+# AN UNREADABLE REGISTRY IS NOT AN EMPTY ONE. Whole-fleet sync used to take a
+# registry it could not read as a home with nothing registered: the parse failed
+# into an empty name list, every registered project fell out of the run without a
+# line, and the command exited 0. Nothing downstream could tell "this home has no
+# projects" from "this home could not look".
+#
+# These two use a home of their own rather than new_home, because new_home is called
+# in a command substitution and every test in this file therefore shares home-1 with
+# its accumulated clones - which is fine for a per-project outcome and useless for a
+# whole-registry one.
+unreadable_registry_home() {  # <name>; echoes a home whose registry cannot be read
+  local home="$TMP_ROOT/$1"
+  rm -rf "$home"
+  mkdir -p "$home/data" "$home/projects"
+  printf -- '- registered-but-unreadable - test project (added 2026-08-31)\n' \
+    > "$home/data/projects.md"
+  chmod 000 "$home/data/projects.md" || return 1
+  # A root-run suite can still read it, and a test that cannot arrange its own
+  # premise says so instead of passing.
+  if head -c 1 "$home/data/projects.md" >/dev/null 2>&1; then
+    chmod 644 "$home/data/projects.md"
+    return 1
+  fi
+  printf '%s\n' "$home"
+}
+
+test_an_unreadable_registry_is_never_reported_as_an_empty_one() {
+  local home out rc=0
+  home=$(unreadable_registry_home registry-unreadable) || {
+    echo "skip: this environment can still read a mode-000 file (running as root?)"
+    return 0
+  }
+
+  out=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" "$ROOT/bin/fm-fleet-sync.sh" 2>/dev/null) || rc=$?
+  chmod 644 "$home/data/projects.md"
+
+  [ "$rc" -ne 0 ] \
+    || fail "a sync that could not read the registry must not report success: $out"
+  assert_contains "$out" "cannot read the project registry" \
+    "the refusal must name the registry as what could not be read: $out"
+  assert_contains "$out" "$home/data/projects.md" \
+    "the refusal must name the concrete file: $out"
+  assert_contains "$out" "permission denied" \
+    "the refusal must name why it could not be read: $out"
+  pass "an unreadable registry is never reported as an empty one"
+}
+
+# THE CALLER MAY NOT DISCARD IT EITHER. bin/fm-bootstrap.sh runs the whole-fleet
+# refresh in the background and threw its exit status away, so even once the sync
+# refuses, a session start would print nothing about the registry it could not read.
+test_bootstrap_surfaces_a_refresh_that_could_not_read_the_registry() {
+  local home out
+  home=$(unreadable_registry_home registry-unreadable-bootstrap) || {
+    echo "skip: this environment can still read a mode-000 file (running as root?)"
+    return 0
+  }
+
+  out=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" "$ROOT/bin/fm-bootstrap.sh" 2>/dev/null)
+  chmod 644 "$home/data/projects.md"
+
+  assert_contains "$out" "cannot read the project registry" \
+    "the session start must relay what the fleet refresh could not read: $out"
+  assert_contains "$out" "FLEET_SYNC: fleet: refresh failed" \
+    "the session start must say the refresh itself did not complete: $out"
+  pass "bootstrap surfaces a refresh that could not read the registry"
+}
+
+# A DANGLING SYMLINK IS A PRESENT REGISTRY, NOT AN ABSENT ONE. `test -e` follows
+# the link and answers for its target, so a data/projects.md symlinked into a
+# checkout that has since moved used to read as "this home registers nothing": the
+# registered walk printed no line and the whole-fleet form exited 0. The one case
+# this gate deliberately lets through is a home that has no registry file at all.
+test_a_dangling_registry_symlink_is_never_reported_as_an_empty_one() {
+  local home out rc=0
+  home="$TMP_ROOT/registry-dangling"
+  rm -rf "$home"
+  mkdir -p "$home/data" "$home/projects"
+  ln -s "$home/data/moved-away-projects.md" "$home/data/projects.md" \
+    || fail "could not stage a dangling registry symlink"
+
+  out=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" "$ROOT/bin/fm-fleet-sync.sh" 2>/dev/null) || rc=$?
+
+  [ "$rc" -ne 0 ] \
+    || fail "a sync that could not follow the registry link must not report success: $out"
+  assert_contains "$out" "cannot read the project registry" \
+    "the refusal must name the registry as what could not be read: $out"
+  assert_contains "$out" "broken symlink" \
+    "the cause must name the broken link, not permission or file type: $out"
+  assert_contains "$out" "moved-away-projects.md" \
+    "the cause must name the target the link no longer resolves to: $out"
+  pass "a dangling registry symlink is never reported as an empty one"
+}
+
+# The absent case stays a non-fault, because a home that registers no projects has
+# no file, and the directory scan is the whole answer for it.
+test_an_absent_registry_is_still_not_a_fault() {
+  local home out rc=0
+  home="$TMP_ROOT/registry-absent"
+  rm -rf "$home"
+  mkdir -p "$home/data" "$home/projects"
+
+  out=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" "$ROOT/bin/fm-fleet-sync.sh" 2>/dev/null) || rc=$?
+
+  [ "$rc" -eq 0 ] || fail "a home that registers nothing must sync cleanly, got exit $rc: $out"
+  assert_not_contains "$out" "cannot read the project registry" \
+    "an absent registry must not be reported as unreadable: $out"
+  pass "an absent registry is still not a fault"
+}
+
+# A PROJECTS DIRECTORY THAT CANNOT BE LISTED IS NOT AN EMPTY ONE. The registry half
+# of the whole-fleet answer is gated; this is the other half. `[ -d "$PROJECTS" ]`
+# only stats, so a present-but-unlistable projects dir left the glob unexpanded,
+# every clone in it fell out of the run without a line, and the command exited 0 -
+# the same silence a home holding no clones produces, relayed by bootstrap as a
+# fleet with nothing to say. The home here registers nothing, which is deliberately
+# not a fault, so the directory is the whole answer and its silence is the defect.
+test_a_projects_dir_that_cannot_be_listed_is_never_reported_as_an_empty_one() {
+  local home out rc=0 solo
+  home="$TMP_ROOT/projects-unlistable"
+  rm -rf "$home"
+  mkdir -p "$home/data" "$home/projects/a-clone" "$home/elsewhere"
+  solo="$home/elsewhere/solo"
+  git init -q -b main "$solo"
+  git -C "$solo" commit -q --allow-empty -m init
+  chmod 000 "$home/projects" || fail "could not make the projects directory unlistable"
+  # A root-run suite can still list it, and a test that cannot arrange its own
+  # premise says so instead of passing.
+  if ls -A "$home/projects" >/dev/null 2>&1; then
+    chmod 755 "$home/projects"
+    echo "skip: this environment can still list a mode-000 directory (running as root?)"
+    return 0
+  fi
+
+  out=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" "$ROOT/bin/fm-fleet-sync.sh" 2>/dev/null) || rc=$?
+
+  # The single-project form asks about one named clone and never walks the dir, so
+  # the new refusal must not reach it.
+  local solo_out solo_rc=0
+  solo_out=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" "$ROOT/bin/fm-fleet-sync.sh" "$solo" 2>/dev/null) || solo_rc=$?
+  chmod 755 "$home/projects"
+
+  [ "$rc" -eq 3 ] \
+    || fail "a sync that could not list the projects directory must refuse with exit 3, got $rc: $out"
+  assert_contains "$out" "STUCK: cannot list the projects directory" \
+    "the refusal must name the projects directory as what could not be read: $out"
+  assert_contains "$out" "$home/projects" \
+    "the refusal must name the concrete directory: $out"
+  assert_contains "$out" "permission denied" \
+    "the cause must be its own, distinct from the registry causes: $out"
+
+  [ "$solo_rc" -eq 0 ] \
+    || fail "the single-project form must be unaffected by the whole-fleet gate, got $solo_rc: $solo_out"
+  assert_contains "$solo_out" "solo" \
+    "the single-project form must still report on the clone it was asked about: $solo_out"
+
+  pass "a projects directory that cannot be listed is never reported as an empty one"
+}
+
+# ABSENCE IS A READING TOO. `test -e` is false whenever the stat FAILS, not only
+# when the file is missing, so a populated registry under a data/ this process
+# cannot search answered exactly like a home that registers nothing: the pre-walk
+# gate passed it through as the one case it deliberately allows, the registered walk
+# printed no line, and the whole-fleet form exited 0 with bootstrap relaying silence.
+test_a_registry_whose_absence_cannot_be_established_is_never_taken_as_absent() {
+  local home out rc=0
+  home="$TMP_ROOT/registry-unstatable"
+  rm -rf "$home"
+  mkdir -p "$home/data" "$home/projects"
+  printf -- '- a-clone - test project (added 2026-08-31)\n' > "$home/data/projects.md"
+  chmod 000 "$home/data" || fail "could not make the registry's directory unsearchable"
+  # A root-run suite can still traverse it, and a test that cannot arrange its own
+  # premise says so instead of passing.
+  if [ -r "$home/data/projects.md" ]; then
+    chmod 755 "$home/data"
+    echo "skip: this environment can still search a mode-000 directory (running as root?)"
+    return 0
+  fi
+
+  out=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" "$ROOT/bin/fm-fleet-sync.sh" 2>/dev/null) || rc=$?
+  chmod 755 "$home/data"
+
+  [ "$rc" -eq 3 ] \
+    || fail "a registry this home cannot even stat must refuse with exit 3, got $rc: $out"
+  assert_contains "$out" "STUCK: cannot read the project registry" \
+    "the refusal must name the registry as what could not be read: $out"
+  assert_contains "$out" "cannot tell whether the registry exists" \
+    "the cause must say the absence itself could not be established: $out"
+  assert_contains "$out" "$home/data" \
+    "the cause must name the directory that could not be searched: $out"
+  pass "a registry whose absence cannot be established is never taken as absent"
+}
+
+# The scan half holds the same line: a projects dir whose absence cannot be
+# established is not an absent one either. The registry here is genuinely absent
+# under a data/ this home can look in, so the deliberate non-fault still stands and
+# the directory is the whole answer - which makes its silence the defect.
+test_a_projects_dir_whose_absence_cannot_be_established_is_never_taken_as_absent() {
+  local home out rc=0
+  home="$TMP_ROOT/projects-unstatable"
+  rm -rf "$home"
+  mkdir -p "$home/data" "$home/outer/projects/a-clone"
+  chmod 000 "$home/outer" || fail "could not make the projects dir's parent unsearchable"
+  if [ -d "$home/outer/projects" ]; then
+    chmod 755 "$home/outer"
+    echo "skip: this environment can still search a mode-000 directory (running as root?)"
+    return 0
+  fi
+
+  out=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" \
+    FM_PROJECTS_OVERRIDE="$home/outer/projects" "$ROOT/bin/fm-fleet-sync.sh" 2>/dev/null) || rc=$?
+  chmod 755 "$home/outer"
+
+  [ "$rc" -eq 3 ] \
+    || fail "a projects dir this home cannot even stat must refuse with exit 3, got $rc: $out"
+  assert_contains "$out" "STUCK: cannot list the projects directory" \
+    "the refusal must name the projects directory as what could not be read: $out"
+  assert_contains "$out" "cannot tell whether the projects directory exists" \
+    "the cause must say the absence itself could not be established: $out"
+  assert_contains "$out" "$home/outer" \
+    "the cause must name the directory that could not be searched: $out"
+  pass "a projects dir whose absence cannot be established is never taken as absent"
+}
+
+# PROVING A NAMED CHILD ABSENT NEEDS SEARCH ON THE PARENT, NOT READ. A data/ that
+# is searchable and not readable still answers "there is no projects.md here", so a
+# home that simply registers nothing must sync exactly as it always did. Requiring
+# read as well turned that deliberate non-fault into a hard refusal at every session
+# start, which is a worse failure than the one the refusal exists to prevent.
+test_a_searchable_unreadable_data_dir_still_proves_an_absent_registry() {
+  local home out rc=0
+  home="$TMP_ROOT/registry-absent-unreadable-parent"
+  rm -rf "$home"
+  mkdir -p "$home/data" "$home/projects"
+  chmod 0111 "$home/data" || fail "could not make the registry's directory search-only"
+  # A root-run suite can still read it, and a test that cannot arrange its own
+  # premise says so instead of passing.
+  if ls "$home/data" >/dev/null 2>&1; then
+    chmod 755 "$home/data"
+    echo "skip: this environment can still read a search-only directory (running as root?)"
+    return 0
+  fi
+
+  out=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" "$ROOT/bin/fm-fleet-sync.sh" 2>/dev/null) || rc=$?
+  chmod 755 "$home/data"
+
+  [ "$rc" -eq 0 ] \
+    || fail "a home that registers nothing must sync cleanly, got exit $rc: $out"
+  assert_not_contains "$out" "STUCK" \
+    "an absence the parent directory does prove must not be reported as unreadable: $out"
+  pass "a searchable, unreadable data dir still proves an absent registry"
+}
+
+# THE CALLER MAY NOT SWALLOW THE REFUSAL EITHER. bin/fm-bootstrap.sh skips the
+# refresh entirely when the projects path is not a directory, and `test -d` is false
+# for a dangling symlink - so fm-fleet-sync.sh's own refusal never ran, and a home
+# with a present, populated registry reached the session start as silence at the one
+# caller that matters. A home that genuinely keeps no clones must still cost nothing.
+test_bootstrap_surfaces_a_projects_path_it_cannot_resolve() {
+  local home out
+  home="$TMP_ROOT/projects-dangling-bootstrap"
+  rm -rf "$home"
+  mkdir -p "$home/data"
+  ln -s "$home/gone-projects" "$home/projects" \
+    || fail "could not stage a dangling projects symlink"
+  printf -- '- a-clone - test project (added 2026-08-31)\n' > "$home/data/projects.md"
+
+  out=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" "$ROOT/bin/fm-bootstrap.sh" 2>/dev/null)
+
+  assert_contains "$out" "cannot list the projects directory" \
+    "the session start must relay the projects path the refresh could not resolve: $out"
+  assert_contains "$out" "broken symlink" \
+    "the relayed refusal must carry its own named cause: $out"
+  pass "bootstrap surfaces a projects path it cannot resolve"
+}
+
+# The same guard, the third reading it has to let through: a projects path present as
+# a REGULAR FILE. `test -d` is false, `test -L` is false, and its absence is provable
+# because the home is searchable - so all three clauses skipped, and a home with a
+# present, populated registry reached the session start as silence while the reader
+# it never ran refuses with 'not a directory'.
+test_bootstrap_surfaces_a_projects_path_that_is_not_a_directory() {
+  local home out
+  home="$TMP_ROOT/projects-regular-file-bootstrap"
+  rm -rf "$home"
+  mkdir -p "$home/data"
+  : > "$home/projects" || fail "could not stage a regular file at the projects path"
+  printf -- '- a-clone - test project (added 2026-08-31)\n' > "$home/data/projects.md"
+
+  out=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" "$ROOT/bin/fm-bootstrap.sh" 2>/dev/null)
+
+  assert_contains "$out" "cannot list the projects directory" \
+    "the session start must relay a projects path that is not a directory: $out"
+  assert_contains "$out" "not a directory" \
+    "the relayed refusal must carry its own named cause: $out"
+  pass "bootstrap surfaces a projects path that is not a directory"
+}
+
+# THE REGISTRY IS THE OTHER PATH THAT READER SPEAKS ABOUT, and it refuses on it
+# BEFORE it ever walks the clones. A guard keyed on the projects directory alone
+# therefore still swallowed a registry refusal whenever the projects directory was
+# provably absent - a home whose registry is present and populated and cannot be read
+# reached the session start as silence, which is the defect this whole change exists
+# to remove, at the one caller that matters.
+test_bootstrap_surfaces_an_unreadable_registry_when_it_keeps_no_clones() {
+  local home out reg
+  home="$TMP_ROOT/registry-unreadable-no-projects-dir"
+  rm -rf "$home"
+  mkdir -p "$home/data"
+  reg="$home/data/projects.md"
+  printf -- '- a-clone - test project (added 2026-08-31)\n' > "$reg"
+  chmod 000 "$reg" || fail "could not make the registry unreadable"
+  if head -c 1 "$reg" >/dev/null 2>&1; then
+    chmod 644 "$reg"
+    echo "skip: this environment can still read a mode-000 file (running as root?)"
+    return 0
+  fi
+
+  out=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" "$ROOT/bin/fm-bootstrap.sh" 2>/dev/null)
+  chmod 644 "$reg"
+
+  assert_contains "$out" "cannot read the project registry" \
+    "the session start must relay a registry the refresh could not read, even with no projects dir: $out"
+  assert_contains "$out" "permission denied" \
+    "the relayed refusal must carry its own named cause: $out"
+  pass "bootstrap surfaces an unreadable registry when it keeps no clones"
+}
+
+# The guard it falls through is still a guard: a home with no projects directory at
+# all must not pay for a refresh walk, and must say nothing about a fleet it has.
+test_bootstrap_stays_silent_for_a_home_that_keeps_no_clones() {
+  local home out
+  home="$TMP_ROOT/projects-absent-bootstrap"
+  rm -rf "$home"
+  mkdir -p "$home/data"
+
+  out=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" "$ROOT/bin/fm-bootstrap.sh" 2>/dev/null)
+
+  assert_not_contains "$out" "FLEET_SYNC" \
+    "a home that keeps no clones must not report on a fleet refresh at all: $out"
+  pass "bootstrap stays silent for a home that keeps no clones"
+}
+
 test_bootstrap_relays_recovered_and_stuck() {
   local home stuck rec out
   home=$(new_home)
@@ -714,6 +1056,18 @@ test_whole_fleet_registered_non_repo_project_still_reports
 test_whole_fleet_unregistered_clone_still_syncs
 test_non_repo_directory_inside_enclosing_repo_skipped
 test_bootstrap_relays_recovered_and_stuck
+test_an_unreadable_registry_is_never_reported_as_an_empty_one
+test_bootstrap_surfaces_a_refresh_that_could_not_read_the_registry
+test_a_dangling_registry_symlink_is_never_reported_as_an_empty_one
+test_an_absent_registry_is_still_not_a_fault
+test_a_projects_dir_that_cannot_be_listed_is_never_reported_as_an_empty_one
+test_a_registry_whose_absence_cannot_be_established_is_never_taken_as_absent
+test_a_projects_dir_whose_absence_cannot_be_established_is_never_taken_as_absent
+test_a_searchable_unreadable_data_dir_still_proves_an_absent_registry
+test_bootstrap_surfaces_a_projects_path_it_cannot_resolve
+test_bootstrap_surfaces_a_projects_path_that_is_not_a_directory
+test_bootstrap_surfaces_an_unreadable_registry_when_it_keeps_no_clones
+test_bootstrap_stays_silent_for_a_home_that_keeps_no_clones
 test_orphaned_stale_packed_refs_lock_recovers
 test_live_packed_refs_lock_is_never_removed
 test_live_git_cwd_in_clone_dir_blocks_removal
