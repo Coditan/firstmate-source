@@ -47,10 +47,15 @@
 #               re-derived address would name a listener the caller is not on.
 #               A recorded `untested` is nothing to carry as a verdict - it
 #               says that allocation established neither reach nor its absence -
-#               so only its address travels, and a carried loopback address on a
-#               node that can serve sends this run to the publish block, where a
-#               --serving caller may settle the reach the carried record could
-#               not. The reason then says whose answer the emitted reach is.
+#               so only its address travels. A carried BIND address of loopback
+#               on a node that can serve sends this run to the publish block
+#               whatever verdict came with it, which is the same condition a run
+#               that walked into that state uses, so a --serving caller retries
+#               the publish instead of a single refusal pinning a live board to
+#               the verdict it produced. A refusal there leaves a carried
+#               `loopback` standing, because a publish that was refused tested
+#               nothing that contradicts a no-reach a real probe established.
+#               The reason then says whose answer the emitted reach is.
 #   --serving   this run WILL leave a service listening on the returned port.
 #               It is the only thing that authorises publishing a proxy under
 #               reachability=tailnet-proxied, and it is the caller's statement to
@@ -721,14 +726,16 @@ else
       # having been made yet: the allocation that opened this board fell back to
       # loopback, so a route is still the one way off this machine and the
       # publish either never ran or did not take. That is the condition the walk
-      # fallback above already uses to reach the publish block, applied to the
-      # resolution this run carries instead of the one it walked, so a --serving
-      # run on a live board retries the publish rather than restating untested
-      # until the server idles out.
+      # fallback above already uses to reach the publish block - a loopback bind
+      # and a tailscale that can serve, and nothing about what any record says -
+      # applied to the resolution this run carries instead of the one it walked.
+      # The recorded VERDICT does not gate it, because it cannot: a run that
+      # walked this same state attempts the publish whatever the record holds,
+      # and one transient refusal would otherwise pin a live board to the
+      # verdict that refusal produced until its server idles out.
       if [ "$REACHABILITY" = tailnet-proxied ]; then
         PROXY_CANDIDATE=1
-      elif [ "$ADDR" = 127.0.0.1 ] && [ "$REACHABILITY" = untested ] \
-        && fm_tailnet_serve_available; then
+      elif [ "$ADDR" = 127.0.0.1 ] && fm_tailnet_serve_available; then
         PROXY_CANDIDATE=1
       fi
     fi
@@ -766,6 +773,14 @@ if [ "$PROXY_CANDIDATE" -eq 1 ]; then
       set_reachability_or_die loopback probed
       DNSNAME=""
       add_reason "publishing port $PORT onto $TAILADDR with tailscale serve failed, so this board is reachable only on this machine"
+    elif [ "$REACHABILITY" = loopback ] && [ "$REACHABILITY_EVIDENCE" = carried ]; then
+      # This run is holding a tested no-reach a previous allocation established
+      # by a real probe of this host. A refused publish tests nothing that
+      # contradicts it - it is not evidence the address became bindable - so
+      # lowering it to untested would erase a tested verdict on the strength of
+      # a non-test, which is the same defect in the opposite direction.
+      DNSNAME=""
+      add_reason "publishing port $PORT onto $TAILADDR with tailscale serve failed, and this run established nothing about that address itself, so the tested no-reach a previous allocation established stands rather than being unsaid by a refusal that tested nothing"
     else
       # The publish is the only thing this run tested, and it failed. Whether
       # the address itself binds was never established, so the route's absence

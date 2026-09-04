@@ -852,6 +852,59 @@ assert_contains "$carryl" "the address and reach a previous allocation establish
 : > "$FM_TEST_TS_SERVE_LOG"
 pass "a carry that really carries the reach still says so"
 
+# One refused publish must not pin a live board to the verdict that refusal
+# produced. The board is up on loopback with a recorded loopback, every later
+# open comes back through --mine, and a run that WALKED into this same state
+# attempts the publish whatever any record says - so the carry must attempt it
+# too, and a refusal must leave the tested no-reach it carried standing rather
+# than erasing it on the strength of a non-test.
+: > "$FM_TEST_TS_SERVE_STATE"
+: > "$FM_TEST_TS_SERVE_LOG"
+refusedretry=$(PATH="$NOWALK:$PATH" FM_TEST_TS_MODE=userspace FM_TEST_TS_SERVE=broken \
+  FM_HOME="$HOME_PU" FM_SERVICE_PORT_RANGE=4901-4902 \
+  "$ROOT/bin/fm-service-port.sh" lavish --mine "$pu_port" --serving 2>/dev/null)
+expect_code 0 "$?" "a serving run on that live board still resolves"
+grep -q -- "--http=$pu_port http://127.0.0.1:$pu_port" "$FM_TEST_TS_SERVE_LOG" \
+  || fail "the publish must be attempted on a carried loopback board: $(cat "$FM_TEST_TS_SERVE_LOG")"
+[ "$(field reachability "$refusedretry")" = loopback ] \
+  || fail "a refused publish tests nothing that erases a tested no-reach, got '$(field reachability "$refusedretry")'"
+[ "$(field reachability_evidence "$refusedretry")" = carried ] \
+  || fail "and the verdict is still the one that allocation established, got '$(field reachability_evidence "$refusedretry")'"
+[ -z "$(field route "$refusedretry")" ] \
+  || fail "no route exists off that verdict, got '$(field route "$refusedretry")'"
+[ "$(field addr "$refusedretry")" = 127.0.0.1 ] \
+  || fail "the board keeps the address it is listening on, got '$(field addr "$refusedretry")'"
+assert_contains "$refusedretry" "the tested no-reach a previous allocation established stands" \
+  "and the reason says why the refusal did not move the verdict"
+assert_grep "reachability=loopback" "$HOME_PU/state/service-port.lavish" \
+  "the record keeps the tested answer too"
+: > "$FM_TEST_TS_SERVE_STATE"
+: > "$FM_TEST_TS_SERVE_LOG"
+pass "a refused retry on a carried loopback board leaves the tested verdict standing"
+
+# And once serve is healthy again the same run settles it, which is the whole
+# point of retrying: the reach is established by this run's own publish and
+# rises through the one door on probed evidence.
+: > "$FM_TEST_TS_SERVE_STATE"
+: > "$FM_TEST_TS_SERVE_LOG"
+goodretry=$(PATH="$NOWALK:$PATH" FM_TEST_TS_MODE=userspace FM_HOME="$HOME_PU" \
+  FM_SERVICE_PORT_RANGE=4901-4902 \
+  "$ROOT/bin/fm-service-port.sh" lavish --mine "$pu_port" --serving 2>/dev/null)
+expect_code 0 "$?" "a serving run on that live board still resolves"
+[ "$(field reachability "$goodretry")" = tailnet-proxied ] \
+  || fail "the retried publish settles what the refusal could not, got '$(field reachability "$goodretry")'"
+[ "$(field reachability_evidence "$goodretry")" = probed ] \
+  || fail "and this run's own publish established it, got '$(field reachability_evidence "$goodretry")'"
+[ "$(field route "$goodretry")" = published ] \
+  || fail "which this run actually made, got '$(field route "$goodretry")'"
+assert_contains "$goodretry" "the reach on that address is this run's own answer" \
+  "so the reason names whose answer it is, matching the evidence beside it"
+assert_not_contains "$goodretry" "the address and reach a previous allocation established" \
+  "rather than calling a reach this run published carried forward"
+: > "$FM_TEST_TS_SERVE_STATE"
+: > "$FM_TEST_TS_SERVE_LOG"
+pass "a healthy retry on a carried loopback board raises the verdict through the one door"
+
 # The errno the walk actually met, read back from the probe rather than guessed.
 # Exit 4 also covers EAFNOSUPPORT and EINVAL, and the walk stops at the FIRST
 # address-scoped verdict rather than trying every candidate.
@@ -1082,8 +1135,10 @@ assert_not_contains "$u1" "no tailnet on this host" \
   "nor that it has no tailnet, which it plainly has"
 assert_contains "$u1" "nothing has established whether" \
   "the captain is told which of the two it is: neither"
-assert_contains "$u1" "the next open settles the rest" \
-  "and that trying again resolves it, which on this vessel it does"
+assert_contains "$u1" "no tailscale serve route onto 192.0.2.1 has been established yet" \
+  "and what this run met is named without predicting what a later one will do"
+assert_not_contains "$u1" "the next open settles the rest" \
+  "because a publish can be refused durably while tailscale status keeps reporting Running"
 : > "$FM_TEST_TS_SERVE_STATE"
 : > "$FM_TEST_TS_SERVE_LOG"
 pass "a run that established nothing says so rather than picking the flattering answer"
