@@ -8,8 +8,18 @@
 #   fm-delivery-service.sh restart
 #   fm-delivery-service.sh install-unit
 #   fm-delivery-service.sh publish-endpoint
-#   fm-delivery-service.sh status
+#   fm-delivery-service.sh status [--format=prose|machine]
 #   fm-delivery-service.sh repair-command
+#
+# status prints one line and exits 0 when wakes can reach the model turn
+# (idle, delivering, away) and 1 when they cannot (down, stalled,
+# undeliverable).  The default prose line opens with the verdict word; with
+# --format=machine the same classification is rendered as space-separated
+# key=value pairs for a consumer that must not match prose.  Both read the one
+# vocabulary in bin/fm-delivery-lib.sh, and docs/wake-delivery.md
+# "Machine-readable status contract" is the consumer-facing contract.  An
+# unknown status flag is a usage error (exit 2) named on stdout, never
+# silently ignored.
 #
 # This is the companion of bin/fm-watcher-service.sh: the watcher owns the loop
 # that DETECTS wakes, this owns the listener that DELIVERS them.  Both are
@@ -513,6 +523,43 @@ restart_selected() {
   esac
 }
 
+status_report() {  # [--format=prose|machine] [--format <value>] [--help]
+  local format=prose arg
+  while [ "$#" -gt 0 ]; do
+    arg=$1
+    shift
+    case "$arg" in
+      --format=*) format=${arg#--format=} ;;
+      --format)
+        [ "$#" -gt 0 ] || { status_usage_error "--format needs a value"; return 2; }
+        format=$1
+        shift
+        ;;
+      -h|--help)
+        printf 'usage: %s status [--format=prose|machine]\n' "$(basename "$0")"
+        printf 'prose (default): one sentence opening with the verdict word, for humans\n'
+        printf 'machine: one line of key=value pairs, see docs/wake-delivery.md "Machine-readable status contract"\n'
+        printf 'exit 0 when wakes can reach the model turn (idle, delivering, away); 1 when they cannot (down, stalled, undeliverable)\n'
+        return 0
+        ;;
+      *) status_usage_error "unknown flag $arg for status"; return 2 ;;
+    esac
+  done
+  case "$format" in
+    prose) fm_delivery_report "$STATE" "$DELIVERY" "$GRACE" "$FM_HOME" ;;
+    machine) fm_delivery_report_machine "$STATE" "$DELIVERY" "$GRACE" "$FM_HOME" ;;
+    *) status_usage_error "unknown --format value '$format'"; return 2 ;;
+  esac
+}
+
+# A usage error goes to stdout in the same shape a consumer reads, so an agent
+# that passed the wrong flag sees the fix in the same read, and its exit status
+# (2) can never be mistaken for a delivery verdict (0 or 1).
+status_usage_error() {  # <message>
+  printf 'error: %s\n' "$1"
+  printf 'help: %s status [--format=prose|machine]\n' "$(basename "$0")"
+}
+
 repair_command() {
   local unit
   if [ "$(select_backend)" = systemd ] && unit=$(unit_instance); then
@@ -529,7 +576,7 @@ case "${1:-}" in
   restart) restart_selected ;;
   install-unit) install_systemd ;;
   publish-endpoint) publish_endpoint ;;
-  status) fm_delivery_report "$STATE" "$DELIVERY" "$GRACE" "$FM_HOME" ;;
+  status) shift; status_report "$@" ;;
   repair-command) repair_command ;;
   *)
     echo "usage: $(basename "$0") {select|bootstrap|ensure|restart|install-unit|publish-endpoint|status|repair-command}" >&2
