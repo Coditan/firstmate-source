@@ -184,6 +184,15 @@
 # nonzero --audit status is what lets a caller treat "nothing is half-closed" as a
 # checkable condition.
 #
+# A READ THIS COMMAND COULD NOT TAKE IS NEVER REPORTED AS AN EMPTY ONE. Every view
+# here, `--records` included, refuses with exit 2 and one `fm-decision-ledger.sh:
+# <cause>` line on stderr rather than printing nothing and exiting 0, because a home
+# whose records could not be read and a home holding none are otherwise the same
+# output. That distinction is the contract this command's two callers stand on:
+# bin/fm-decision-hold.sh's intake gate will not file a record against a set it could
+# not read, and bin/fm-bootstrap.sh relays that stderr cause as a DECISION_LEDGER:
+# STUCK: line instead of a silent, clean-looking session start.
+#
 # Output contract: `fm-decision-ledger.v1`.
 #   settled[]  id, origin, key, title, repo, door, closed, source, routed[],
 #              decision (verbatim), digest, verbatim (digest re-check)

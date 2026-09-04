@@ -130,6 +130,10 @@
 #   9. timing        - one line naming what this whole run cost, and the path of
 #                       state/session-start-timing.log, where the per-step
 #                       breakdown for this run and the previous ones was appended.
+#                       When no clock on this seat can be read, that line and the
+#                       logged one both say the duration is unreadable and name
+#                       that cause, rather than reporting the 0ms a substituted
+#                       clock read would otherwise present as a fast start.
 #                       A vessel had no way to see its own startup getting slower
 #                       as its in-flight count grew, and reconstructing it from
 #                       file timestamps afterwards is blind to every step that

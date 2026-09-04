@@ -78,6 +78,9 @@
 # question. The refusal lists them, so the filer sees the open questions AND the
 # recorded answers before it attests. The gate is on the answer as well as the
 # question, because an answer that cannot fold what it settles leaves it standing.
+# That set is read through `bin/fm-decision-ledger.sh --records`, and a read that
+# could not be taken is not an empty set: both commands refuse with the reader's own
+# named cause rather than filing a record against records this home could not read.
 #
 # `complete` is the shared investigation and visual-review completion gate.
 # `--none` is an explicit semantic attestation that the just-reviewed surface has
