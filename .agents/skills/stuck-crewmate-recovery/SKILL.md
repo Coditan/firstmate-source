@@ -21,7 +21,7 @@ The target window's harness is recorded as `harness=` in `state/<id>.meta`.
 This procedure covers ordinary `kind=ship` and `kind=scout` direct reports.
 Load `secondmate-provisioning` instead for `kind=secondmate` recovery.
 
-Treat the digest's endpoint result as a presence signal, not proof that the task's work or validation run is gone.
+Treat the digest's endpoint result as a reading of the endpoint, not proof that the task's work or validation run is gone.
 Read the targeted current state with `bin/fm-crew-state.sh <id>` before deciding to relaunch.
 If that read answers `degraded` in its `state:` field, stop this procedure, whatever its `source:` and `cause:` say.
 The condition is the state token alone and never a particular source or cause, so a source or cause added later is covered by this rule without amending it.

@@ -108,11 +108,20 @@
 #                       read-only, always runs. The status tail is labeled as
 #                       wake-EVENT history rather than current state, and prints
 #                       the full log path so a deeper read is one command away.
-#                       The liveness line is a PRESENCE check, not a state read:
-#                       it answers "is the endpoint there", never "what run step
-#                       is this crew on". bin/fm-crew-state.sh answers the
-#                       second, and the digest deliberately skips that slower
-#                       read for every task so startup stays fast and bounded.
+#                       The liveness line asks two questions and prints only
+#                       what it measured: whether the endpoint is there, and,
+#                       when it is, what the backend says is running inside it.
+#                       A confirmed agent reads alive; a window with nothing
+#                       behind it reads NO AGENT in words no tired reader can
+#                       take for a live worker; a gone endpoint reads dead;
+#                       anything the agent probe cannot confirm - an unreadable
+#                       read, or a backend with no agent probe at all (zellij,
+#                       Orca, and cmux today) - reads unknown and names what was
+#                       unreadable, never the reassuring word. It still never
+#                       answers "what run step is this crew on":
+#                       bin/fm-crew-state.sh answers that, and the digest
+#                       deliberately skips that slower read for every task so
+#                       startup stays fast and bounded.
 #                       It ALSO prints the captain decisions this home has already
 #                       settled, in his own words, from bin/fm-decision-ledger.sh.
 #                       That read is what makes a reset survivable: a decision he

@@ -19,7 +19,8 @@
 #   - per-task endpoint-liveness lines for a live and a dead recorded target,
 #     tmux and herdr both, plus the reading in between them: a window that is
 #     still there with no agent left in it is never rendered as "alive", and
-#     neither is one on a backend that cannot answer the agent question at all
+#     neither is one on a backend that cannot answer the agent question at all,
+#     nor one whose backend could not be asked whether the endpoint is there
 #   - composition: the script invokes the real fm-lock.sh/fm-bootstrap.sh/
 #     fm-wake-drain.sh (their real, distinctive output appears verbatim), it
 #     does not reimplement their logic
@@ -883,6 +884,45 @@ EOF
   pass "an endpoint on a backend with no agent probe reports unknown, never alive"
 }
 
+# The third branch of the same three-way read, and the one the endpoint status
+# capture protects: fm_backend_target_exists answers 2 - it could not ask the
+# backend at all - so nothing about this endpoint is known, not even whether it
+# is still there. It must say so, and it must not be confused with the pane
+# that exists with no agent in it.
+test_endpoint_unreadable_existence_is_reported_unknown() {
+  local rec root home fakebin out
+  rec=$(new_world liveness-existence-unreadable)
+  IFS='|' read -r root home fakebin <<EOF
+$rec
+EOF
+  make_fake_toolchain "$fakebin"
+  make_fake_ps_claude "$fakebin"
+  # A herdr server that answers neither pane_not_found nor a pane: the
+  # classifier reports `unknown`, and the existence check turns that into "could
+  # not be asked" rather than present or absent.
+  cat > "$fakebin/herdr" <<'SH'
+#!/usr/bin/env bash
+set -u
+printf '{"error":{"code":"server_unreachable"}}\n' >&2
+exit 1
+SH
+  chmod +x "$fakebin/herdr"
+
+  printf 'window=sess:p-opaque\nkind=ship\nbackend=herdr\n' > "$home/state/task-a.meta"
+
+  out=$(run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+  assert_not_contains "$out" "endpoint: alive" \
+    "an endpoint whose backend could not be asked at all was reported alive"
+  assert_not_contains "$out" "endpoint: dead" \
+    "an endpoint whose backend could not be asked at all was reported dead"
+  assert_not_contains "$out" "endpoint: NO AGENT" \
+    "an unreadable endpoint was reported as a window with no agent in it"
+  assert_contains "$out" "endpoint: unknown (backend=herdr window=sess:p-opaque unreadable)" \
+    "an endpoint whose existence could not be read was not reported unknown"
+
+  pass "an endpoint whose backend cannot be asked at all reports unknown, never alive or dead"
+}
+
 # --- composition: real scripts run, not reimplemented ------------------------
 
 test_composition_invokes_real_scripts() {
@@ -1616,6 +1656,7 @@ test_endpoint_liveness_herdr
 test_endpoint_pane_without_agent_is_not_alive_herdr
 test_endpoint_pane_without_agent_is_not_alive_tmux
 test_endpoint_unreadable_agent_state_is_not_alive
+test_endpoint_unreadable_existence_is_reported_unknown
 test_composition_invokes_real_scripts
 test_backlog_compact_tasks_axi_omits_bodies_and_keeps_metadata
 test_backlog_compact_manual_backend_skips_indented_bodies
