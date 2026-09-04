@@ -711,6 +711,15 @@ grep -q -- "--http=$pf_port http://127.0.0.1:$pf_port" "$FM_TEST_TS_SERVE_LOG" \
   || fail "the port it is listening on is the port it published: $(cat "$FM_TEST_TS_SERVE_LOG")"
 assert_grep "reachability=tailnet-proxied" "$HOME_PF/state/service-port.lavish" \
   "and the record stops saying nothing was established"
+# The reason prints verbatim to the captain under this verdict, so it may not
+# describe as carried a reach the evidence field beside it calls probed. The
+# ADDRESS was carried; the reach is this run's own publish.
+[ "$(field reachability_evidence "$retry")" = probed ] \
+  || fail "this run established the reach itself, got '$(field reachability_evidence "$retry")'"
+assert_contains "$retry" "the reach on that address is this run's own answer" \
+  "so the reason says whose answer the emitted reach is"
+assert_not_contains "$retry" "address and reach a previous allocation established" \
+  "rather than calling a reach this run published carried forward"
 : > "$FM_TEST_TS_SERVE_STATE"
 : > "$FM_TEST_TS_SERVE_LOG"
 pass "a serving run on a live loopback board retries the publish rather than restating untested"
@@ -740,6 +749,70 @@ assert_contains "$carryu" "nothing credible has tested" \
 : > "$FM_TEST_TS_SERVE_STATE"
 : > "$FM_TEST_TS_SERVE_LOG"
 pass "a recorded untested is nothing to carry, so one state has one shape"
+
+# The same rule at the OTHER carry, the one a --mine run takes. A recorded
+# untested has no verdict in it to raise there either - but the address that
+# allocation BOUND is a fact it did establish, and the retry above depends on
+# it, so the address travels while the non-answer stays a non-answer.
+: > "$FM_TEST_TS_SERVE_STATE"
+: > "$FM_TEST_TS_SERVE_LOG"
+MINEDOWN="$TMP_ROOT/mine-down-bin"
+mkdir -p "$MINEDOWN"
+MINE_DOWN_MARKER="$TMP_ROOT/mine-tailscaled-down"
+rm -f "$MINE_DOWN_MARKER"
+# Takes the backend down at the address probe, which is after the identity read
+# that resolved the address and before the carry decides whether a route could
+# still be published, so this carry never reaches the publish block.
+cat > "$MINEDOWN/node" <<SH
+#!/usr/bin/env bash
+if [ "\${2:-}" = addr ]; then
+  : > "\${FM_TEST_TS_DOWN_MARKER:-/dev/null}"
+  exit 1
+fi
+exec "$REAL_NODE" "\$@"
+SH
+chmod +x "$MINEDOWN/node"
+cu_port=$(field port "$carryu")
+minecarry=$(PATH="$MINEDOWN:$PATH" FM_TEST_TS_MODE=userspace \
+  FM_TEST_TS_DOWN_MARKER="$MINE_DOWN_MARKER" FM_HOME="$HOME_CU" \
+  FM_SERVICE_PORT_RANGE=4903-4904 \
+  "$ROOT/bin/fm-service-port.sh" lavish --mine "$cu_port" 2>/dev/null)
+expect_code 0 "$?" "a --mine run on that home still resolves"
+[ -e "$MINE_DOWN_MARKER" ] || fail "this case needs the backend to have gone down during the run"
+[ "$(field addr "$minecarry")" = 127.0.0.1 ] \
+  || fail "the address that allocation bound still travels, got '$(field addr "$minecarry")'"
+[ "$(field reachability "$minecarry")" = untested ] \
+  || fail "and the non-answer it recorded is still a non-answer, got '$(field reachability "$minecarry")'"
+[ "$(field reachability_evidence "$minecarry")" = none ] \
+  || fail "which is not something carried, got '$(field reachability_evidence "$minecarry")'"
+rm -f "$MINE_DOWN_MARKER"
+: > "$FM_TEST_TS_SERVE_STATE"
+: > "$FM_TEST_TS_SERVE_LOG"
+pass "a --mine carry takes the address a recorded untested established without raising its verdict"
+
+# And the sentence a carry prints is unchanged wherever the reach really was
+# carried: a recorded loopback is a tested no-reach the previous allocation
+# established, this run tests nothing, and the evidence beside it says carried.
+: > "$FM_TEST_TS_SERVE_STATE"
+: > "$FM_TEST_TS_SERVE_LOG"
+assert_grep "reachability=loopback" "$HOME_PU/state/service-port.lavish" \
+  "this case starts from a home whose record is a tested no-reach"
+pu_port=$(field port "$provenfail")
+carryl=$(PATH="$NOWALK:$PATH" FM_TEST_TS_MODE=userspace FM_HOME="$HOME_PU" \
+  FM_SERVICE_PORT_RANGE=4901-4902 \
+  "$ROOT/bin/fm-service-port.sh" lavish --mine "$pu_port" 2>/dev/null)
+expect_code 0 "$?" "a --mine run on that home still resolves"
+[ "$(field reachability "$carryl")" = loopback ] \
+  || fail "the tested no-reach is carried, got '$(field reachability "$carryl")'"
+[ "$(field reachability_evidence "$carryl")" = carried ] \
+  || fail "and says so, got '$(field reachability_evidence "$carryl")'"
+[ "$(field addr "$carryl")" = 127.0.0.1 ] \
+  || fail "on the address it was established at, got '$(field addr "$carryl")'"
+assert_contains "$carryl" "the address and reach a previous allocation established" \
+  "and the reason describes both as carried, because both were"
+: > "$FM_TEST_TS_SERVE_STATE"
+: > "$FM_TEST_TS_SERVE_LOG"
+pass "a carry that really carries the reach still says so"
 
 # The errno the walk actually met, read back from the probe rather than guessed.
 # Exit 4 also covers EAFNOSUPPORT and EINVAL, and the walk stops at the FIRST
@@ -990,12 +1063,13 @@ assert_not_contains "$u2" "not reachable off this machine" \
 : > "$FM_TEST_TS_SERVE_LOG"
 pass "only the vessel a later run can settle is told to try again"
 
-# The third producer of untested, and the promise is untrue for it too: this
-# node's identity WAS read, so the sentence above would fire, but its tailscale
-# went down before a route could be published onto that address. Publishing one
-# is the only thing left that could settle the question, so no later open
-# settles anything until tailscale can serve again - and the captain is told
-# that rather than sent round a loop.
+# The third producer of untested, and the promise above is untrue for it too:
+# this node's identity WAS read, so that sentence would fire, but its tailscale
+# went down before a route could be published onto that address. What blocked
+# the route is named and the sentence stops there. It may NOT tell the captain
+# that nothing further can be settled either: this state is not durable, and the
+# very next run resolves a definite verdict - the same unbacked claim as the
+# promise, only inverted.
 : > "$FM_TEST_TS_SERVE_STATE"
 : > "$FM_TEST_TS_SERVE_LOG"
 DOWNBIN="$TMP_ROOT/down-bin"
@@ -1025,16 +1099,30 @@ assert_contains "$u3" "nothing has established whether" \
   "neither reach nor its absence was established, and that is what is said"
 assert_not_contains "$u3" "the next open settles the rest" \
   "without promising a further open resolves what no further open can"
-assert_contains "$u3" "while tailscale cannot serve here" \
-  "the cause that blocks settling it is named"
-assert_contains "$u3" "publishing a route onto 192.0.2.1" \
-  "along with what could not be established"
+assert_contains "$u3" "no route could be published onto 192.0.2.1" \
+  "what could not be established is named"
+assert_contains "$u3" "tailscale could not serve here just now" \
+  "along with the cause that blocked it"
+assert_not_contains "$u3" "nothing more can be settled" \
+  "and nothing is claimed about what a later run will meet"
 assert_not_contains "$u3" "not reachable off this machine" \
   "nor claiming the vessel was shown unreachable"
+
+# Why that claim would have been untrue: the state is not durable. With the
+# backend still down, the very next run reads it as down from the start and
+# settles a definite verdict, which is the opposite of nothing more being
+# settleable.
+u3next=$(PATH="$DOWNBIN:$PATH" FM_TEST_TS_MODE=userspace FM_TEST_TS_DOWN_MARKER="$DOWN_MARKER" \
+  FM_HOME="$HOME_U3" FM_SERVICE_PORT_RANGE=4905-4906 \
+  "$ROOT/bin/fm-lavish.sh" end "$HOME_U3/.lavish/board.html" 2>&1)
+assert_contains "$u3next" "no tailnet on this host" \
+  "the next run settles it, so the run before it may not say nothing more can be settled"
+assert_not_contains "$u3next" "nothing has established whether" \
+  "and stops calling the answer unestablished once it has one"
 rm -f "$DOWN_MARKER"
 : > "$FM_TEST_TS_SERVE_STATE"
 : > "$FM_TEST_TS_SERVE_LOG"
-pass "a vessel whose tailscale cannot serve is told what blocks the answer, not to try again"
+pass "a vessel whose tailscale cannot serve is told what blocked the route and nothing more"
 
 # --- entry point: a run that opens nothing publishes no route ----------------
 #

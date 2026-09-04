@@ -669,24 +669,24 @@ if [ "$NEEDS_PORT" -eq 1 ]; then
     untested)
       # Neither reach nor its absence has been established, and saying either
       # would be the same unbacked assertion in opposite directions. Which
-      # sentence applies turns on what a LATER run could still settle, because
-      # only one of these states is one a further open resolves.
+      # sentence applies turns on what this run met, because that is the only
+      # thing it has actually established.
       #
-      # Publishing a route is the only thing left that can settle it, so the
+      # Publishing a route is the only thing left that could settle it, so the
       # question is asked of the same library that would do the publishing. A
-      # vessel whose address is known and whose tailscale can serve gets that
-      # route from the next open, which publishes. A vessel whose tailscale
-      # could not be read at all, and one whose tailscale cannot serve, both
-      # return the same non-answer every time, so promising that a further open
-      # resolves it would be the false-concrete-diagnosis class the reason lines
-      # exist to avoid; each says instead what could not be established and what
-      # is blocking it.
+      # host whose tailscale can serve gets that route from the next open, which
+      # publishes, and that is a promise this run can keep. A host whose
+      # tailscale could not be READ at all returns the same non-answer on every
+      # later run, which is a fact about the read rather than a prediction. A
+      # host whose tailscale merely could not serve just now is neither: what
+      # blocked the route is named and nothing is claimed about what a later run
+      # will meet, because this run has established nothing about that either.
       if [ -z "$TAILADDR" ]; then
         note "nothing here could read whether this vessel has any reach off this machine (${REASON:-reason unavailable}) - this board certainly opens here, and nothing more can be settled until that can be read."
       elif fm_tailnet_serve_available; then
         note "nothing has established whether this vessel is reachable off this machine (${REASON:-reason unavailable}) - this board certainly opens here, and the next open settles the rest."
       else
-        note "nothing has established whether this vessel is reachable off this machine (${REASON:-reason unavailable}) - this board certainly opens here, and nothing more can be settled while tailscale cannot serve here, because publishing a route onto $TAILADDR is the only thing left that could settle it."
+        note "nothing has established whether this vessel is reachable off this machine (${REASON:-reason unavailable}) - this board certainly opens here, and no route could be published onto $TAILADDR because tailscale could not serve here just now."
       fi
       ;;
     *)

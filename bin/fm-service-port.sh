@@ -45,6 +45,12 @@
 #               carried forward together rather than re-derived from a probe
 #               that answered nothing, because the two are one fact and a
 #               re-derived address would name a listener the caller is not on.
+#               A recorded `untested` is nothing to carry as a verdict - it
+#               says that allocation established neither reach nor its absence -
+#               so only its address travels, and a carried loopback address on a
+#               node that can serve sends this run to the publish block, where a
+#               --serving caller may settle the reach the carried record could
+#               not. The reason then says whose answer the emitted reach is.
 #   --serving   this run WILL leave a service listening on the returned port.
 #               It is the only thing that authorises publishing a proxy under
 #               reachability=tailnet-proxied, and it is the caller's statement to
@@ -319,6 +325,7 @@ ROUTE=""
 REASON=""
 PROXY_CANDIDATE=0
 ADDR_UNBINDABLE=0
+CARRIED_ADDR=0
 
 # Every write below is made immediately after the test that backs it, so the
 # door can only refuse one if this sequence has been reordered wrongly. That is
@@ -690,13 +697,22 @@ else
   # established is carried forward whole: the verdict through the same door,
   # which refuses anything this run has ruled out, and the address it was
   # established on with it.
+  #
+  # A recorded `untested` is the one verdict with nothing in it to raise: it
+  # says the previous allocation established neither reach nor its absence,
+  # which is what this run already holds, so it is left at untested/none rather
+  # than restated as something `carried`. The ADDRESS it recorded is carried
+  # either way, because where that allocation BOUND is a fact it established
+  # whatever it could not establish about reach.
   if [ -n "$TAILADDR" ] && [ "$ADDR" = "$TAILADDR" ] \
     && [ "$REACHABILITY" = untested ]; then
     PRIOR=$(recorded_reachability)
     PRIOR_ADDR=$(recorded_addr)
     if [ -n "$PRIOR" ] && [ -n "$PRIOR_ADDR" ] \
-      && fm_set_reachability "$PRIOR" carried 2>/dev/null; then
+      && { [ "$PRIOR" = untested ] \
+        || fm_set_reachability "$PRIOR" carried 2>/dev/null; }; then
       ADDR=$PRIOR_ADDR
+      CARRIED_ADDR=1
       # A carried tailnet-proxied says a route is the one way off this machine,
       # which is what the publish block below is for. Reaching it is how this
       # run reports the route as it stands rather than dropping a live one.
@@ -715,7 +731,6 @@ else
         && fm_tailnet_serve_available; then
         PROXY_CANDIDATE=1
       fi
-      add_reason "this run bound no port of its own, so the address and reach a previous allocation established for $SERVICE are carried forward rather than re-derived from a probe that answered nothing"
     fi
   fi
 fi
@@ -809,6 +824,21 @@ fi
 # loopback paths above would otherwise disagree about the same field: the
 # publish failure leaves it empty and the carry-forward leaves it populated.
 [ "$REACHABILITY" = tailnet-proxied ] || ROUTE=""
+
+# Said here rather than where the carry happened, because what a carry-forward
+# run ends up carrying is not settled until the publish block above has had its
+# say. A carried address can reach that block and come back with a verdict this
+# run established itself - a route it published, or one it found, or the
+# absence of both - and a sentence written before that would describe the reach
+# as carried while the evidence field beside it says probed. The evidence is
+# what decides which sentence is true, so it is what selects it.
+if [ "$CARRIED_ADDR" -eq 1 ]; then
+  if [ "$REACHABILITY_EVIDENCE" = carried ]; then
+    add_reason "this run bound no port of its own, so the address and reach a previous allocation established for $SERVICE are carried forward rather than re-derived from a probe that answered nothing"
+  else
+    add_reason "this run bound no port of its own, so the address a previous allocation established for $SERVICE is carried forward rather than re-derived from a probe that answered nothing, and the reach on that address is this run's own answer rather than that allocation's"
+  fi
+fi
 
 # --- published record -------------------------------------------------------
 #
