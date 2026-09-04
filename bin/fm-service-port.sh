@@ -700,7 +700,19 @@ else
       # A carried tailnet-proxied says a route is the one way off this machine,
       # which is what the publish block below is for. Reaching it is how this
       # run reports the route as it stands rather than dropping a live one.
+      #
+      # A carried address of 127.0.0.1 says the same thing without the route
+      # having been made yet: the allocation that opened this board fell back to
+      # loopback, so a route is still the one way off this machine and the
+      # publish either never ran or did not take. That is the condition the walk
+      # fallback above already uses to reach the publish block, applied to the
+      # resolution this run carries instead of the one it walked, so a --serving
+      # run on a live board retries the publish rather than restating untested
+      # until the server idles out.
       if [ "$REACHABILITY" = tailnet-proxied ]; then
+        PROXY_CANDIDATE=1
+      elif [ "$ADDR" = 127.0.0.1 ] && [ "$REACHABILITY" = untested ] \
+        && fm_tailnet_serve_available; then
         PROXY_CANDIDATE=1
       fi
       add_reason "this run bound no port of its own, so the address and reach a previous allocation established for $SERVICE are carried forward rather than re-derived from a probe that answered nothing"
@@ -771,8 +783,15 @@ if [ "$PROXY_CANDIDATE" -eq 1 ]; then
     # refusal is what sends this to the untested arm. Deciding which recorded
     # values are still credible is the door's rule to apply, not a case arm's to
     # remember.
+    #
+    # A recorded `untested` is the one value with nothing in it to carry: it
+    # says a previous allocation established neither reach nor its absence,
+    # which is exactly what this run holds already. Carrying it would emit the
+    # same state under `carried` evidence and a reason naming a route that was
+    # never established, so it is left to the arm below that says so plainly.
     PRIOR=$(recorded_reachability)
-    if [ -n "$PRIOR" ] && fm_set_reachability "$PRIOR" carried 2>/dev/null; then
+    if [ -n "$PRIOR" ] && [ "$PRIOR" != untested ] \
+      && fm_set_reachability "$PRIOR" carried 2>/dev/null; then
       if [ "$REACHABILITY" != tailnet-proxied ]; then
         DNSNAME=""
         add_reason "no tailscale serve route onto $TAILADDR has been established for $SERVICE, so no reach off this machine is claimed until one is"

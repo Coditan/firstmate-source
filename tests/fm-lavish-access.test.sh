@@ -58,7 +58,10 @@ command -v jq >/dev/null 2>&1 || fail "jq is required for the tailnet identity r
 # FM_TEST_TS_SERVE_LOG, so a test can assert that the proxy path was taken - or,
 # just as importantly, that it was NOT. FM_TEST_TS_SERVE=broken makes every
 # serve mutation fail, which is the vessel that has the unbindable address and
-# no way around it.
+# no way around it. FM_TEST_TS_DOWN_MARKER names a file whose existence makes
+# every LATER `tailscale status --json` report a stopped backend, so a tailscaled
+# that goes down partway through a run - after its identity was read and before
+# a route could be published onto it - is reproducible rather than hypothetical.
 make_fake_tailscale() {
   local bin=$1
   cat > "$bin/tailscale" <<'SH'
@@ -93,6 +96,10 @@ if [ "${1:-}" = serve ]; then
 fi
 [ "${1:-}" = status ] || exit 1
 [ "${2:-}" = --json ] || { echo "127.0.0.1 fake"; exit 0; }
+if [ -n "${FM_TEST_TS_DOWN_MARKER:-}" ] && [ -e "$FM_TEST_TS_DOWN_MARKER" ]; then
+  printf '{"BackendState":"Stopped","MagicDNSSuffix":"","Self":{}}\n'
+  exit 0
+fi
 case "${FM_TEST_TS_MODE:-running}" in
   running)
     printf '{"BackendState":"Running","MagicDNSSuffix":"","Self":{"HostName":"localhost","DNSName":"localhost.","TailscaleIPs":["127.0.0.1","fd7a::1"]}}\n'
@@ -676,6 +683,64 @@ provenfail=$(FM_TEST_TS_MODE=userspace FM_TEST_TS_SERVE=broken FM_HOME="$HOME_PU
 : > "$FM_TEST_TS_SERVE_LOG"
 pass "a failed publish claims a tested no-reach only where the address was tested"
 
+# The board that failed publish left behind is still up on loopback, and every
+# later run for it comes back through --mine, which walks nothing and so tests
+# nothing of its own. Carrying the resolution forward is right; restating it
+# forever is not. The carried address IS the statement that this board is on
+# loopback with a route the one way off this machine, which is the same
+# condition the walk fallback uses to reach the publish, so a serving run gets
+# to try again rather than waiting for the server to idle out.
+: > "$FM_TEST_TS_SERVE_STATE"
+: > "$FM_TEST_TS_SERVE_LOG"
+assert_grep "addr=127.0.0.1" "$HOME_PF/state/service-port.lavish" \
+  "this case starts from the loopback board that failed publish left behind"
+pf_port=$(field port "$pubfail")
+retry=$(PATH="$NOWALK:$PATH" FM_TEST_TS_MODE=userspace FM_HOME="$HOME_PF" \
+  FM_SERVICE_PORT_RANGE=4898-4899 \
+  "$ROOT/bin/fm-service-port.sh" lavish --mine "$pf_port" --serving 2>/dev/null)
+expect_code 0 "$?" "a later serving run on that live board still resolves"
+[ "$(field port "$retry")" = "$pf_port" ] \
+  || fail "the board keeps the port it is listening on, got '$(field port "$retry")'"
+[ "$(field addr "$retry")" = 127.0.0.1 ] \
+  || fail "and the loopback address it is listening on, got '$(field addr "$retry")'"
+[ "$(field reachability "$retry")" = tailnet-proxied ] \
+  || fail "the retried publish settles what the failed one could not, got '$(field reachability "$retry")'"
+[ "$(field route "$retry")" = published ] \
+  || fail "and this run actually made the route, got '$(field route "$retry")'"
+grep -q -- "--http=$pf_port http://127.0.0.1:$pf_port" "$FM_TEST_TS_SERVE_LOG" \
+  || fail "the port it is listening on is the port it published: $(cat "$FM_TEST_TS_SERVE_LOG")"
+assert_grep "reachability=tailnet-proxied" "$HOME_PF/state/service-port.lavish" \
+  "and the record stops saying nothing was established"
+: > "$FM_TEST_TS_SERVE_STATE"
+: > "$FM_TEST_TS_SERVE_LOG"
+pass "a serving run on a live loopback board retries the publish rather than restating untested"
+
+# `untested` is the one recorded value with nothing in it to carry: it says a
+# previous allocation established neither reach nor its absence, which is what
+# this run already holds. Carrying it would dress that non-answer in `carried`
+# evidence and a reason naming a route nothing ever established, so the same
+# state must not come out in two shapes depending on whether a record exists.
+: > "$FM_TEST_TS_SERVE_STATE"
+: > "$FM_TEST_TS_SERVE_LOG"
+HOME_CU=$(make_home "$TMP_ROOT/vessel-cu")
+PATH="$NOWALK:$PATH" FM_TEST_TS_MODE=userspace FM_TEST_TS_SERVE=broken \
+  FM_HOME="$HOME_CU" FM_SERVICE_PORT_RANGE=4903-4904 \
+  "$ROOT/bin/fm-service-port.sh" lavish --serving >/dev/null 2>&1
+assert_grep "reachability=untested" "$HOME_CU/state/service-port.lavish" \
+  "this case needs a home whose record says nothing was established"
+carryu=$(FM_TEST_TS_MODE=userspace FM_HOME="$HOME_CU" FM_SERVICE_PORT_RANGE=4903-4904 \
+  "$ROOT/bin/fm-service-port.sh" lavish)
+expect_code 0 "$?" "a non-serving run on that home still gets a port"
+[ "$(field reachability "$carryu")" = untested ] \
+  || fail "nothing was established and nothing carried changes that, got '$(field reachability "$carryu")'"
+[ "$(field reachability_evidence "$carryu")" = none ] \
+  || fail "a verdict that says nothing was established carries no evidence, got '$(field reachability_evidence "$carryu")'"
+assert_contains "$carryu" "nothing credible has tested" \
+  "and it reads the same as the home that had no record at all"
+: > "$FM_TEST_TS_SERVE_STATE"
+: > "$FM_TEST_TS_SERVE_LOG"
+pass "a recorded untested is nothing to carry, so one state has one shape"
+
 # The errno the walk actually met, read back from the probe rather than guessed.
 # Exit 4 also covers EAFNOSUPPORT and EINVAL, and the walk stops at the FIRST
 # address-scoped verdict rather than trying every candidate.
@@ -924,6 +989,52 @@ assert_not_contains "$u2" "not reachable off this machine" \
 : > "$FM_TEST_TS_SERVE_STATE"
 : > "$FM_TEST_TS_SERVE_LOG"
 pass "only the vessel a later run can settle is told to try again"
+
+# The third producer of untested, and the promise is untrue for it too: this
+# node's identity WAS read, so the sentence above would fire, but its tailscale
+# went down before a route could be published onto that address. Publishing one
+# is the only thing left that could settle the question, so no later open
+# settles anything until tailscale can serve again - and the captain is told
+# that rather than sent round a loop.
+: > "$FM_TEST_TS_SERVE_STATE"
+: > "$FM_TEST_TS_SERVE_LOG"
+DOWNBIN="$TMP_ROOT/down-bin"
+mkdir -p "$DOWNBIN"
+DOWN_MARKER="$TMP_ROOT/tailscaled-down"
+rm -f "$DOWN_MARKER"
+# Takes the backend down at the moment the walk on the tailnet address fails,
+# which is between the identity read that resolved that address and the
+# availability read that decides whether a route can still be published onto it.
+cat > "$DOWNBIN/node" <<SH
+#!/usr/bin/env bash
+[ "\${2:-}" = addr ] && exit 1
+if [ "\${2:-}" = bind ] && [ "\${3:-}" = 192.0.2.1 ]; then
+  : > "\${FM_TEST_TS_DOWN_MARKER:-/dev/null}"
+  printf 'fm-service-port-probe: refused\\n' >&2
+  exit 5
+fi
+exec "$REAL_NODE" "\$@"
+SH
+chmod +x "$DOWNBIN/node"
+HOME_U3=$(make_home "$TMP_ROOT/vessel-u3")
+u3=$(PATH="$DOWNBIN:$PATH" FM_TEST_TS_MODE=userspace FM_TEST_TS_DOWN_MARKER="$DOWN_MARKER" \
+  FM_HOME="$HOME_U3" FM_SERVICE_PORT_RANGE=4905-4906 \
+  "$ROOT/bin/fm-lavish.sh" end "$HOME_U3/.lavish/board.html" 2>&1)
+[ -e "$DOWN_MARKER" ] || fail "this case needs the backend to have gone down during the run"
+assert_contains "$u3" "nothing has established whether" \
+  "neither reach nor its absence was established, and that is what is said"
+assert_not_contains "$u3" "the next open settles the rest" \
+  "without promising a further open resolves what no further open can"
+assert_contains "$u3" "while tailscale cannot serve here" \
+  "the cause that blocks settling it is named"
+assert_contains "$u3" "publishing a route onto 192.0.2.1" \
+  "along with what could not be established"
+assert_not_contains "$u3" "not reachable off this machine" \
+  "nor claiming the vessel was shown unreachable"
+rm -f "$DOWN_MARKER"
+: > "$FM_TEST_TS_SERVE_STATE"
+: > "$FM_TEST_TS_SERVE_LOG"
+pass "a vessel whose tailscale cannot serve is told what blocks the answer, not to try again"
 
 # --- entry point: a run that opens nothing publishes no route ----------------
 #
