@@ -224,7 +224,7 @@ Shared captain preferences that apply across secondmate domains live only in the
 ## Operational learnings (data/learnings.md)
 
 Fleet-local operational knowledge is created lazily and routed through its owner among per-home, gitignored files.
-`data/learnings.md` is the half printed after the captain-preference files in the session-start context digest and follows the same dated, evidence-backed, curated style as `data/captain.md`: inspect the current file first, then rewrite or prune stale entries instead of appending forever.
+`data/learnings.md` is the half printed after the captain-preference files in the session-start context digest; whichever file its owner selects follows the same curated style as `data/captain.md`, with existing entries rewritten or pruned instead of appended forever.
 There is no shared learnings file by captain decision.
 The same home also carries `data/learnings-reference.md`, read only when searched, and `data/learnings-archive.md` for entries kept for the record; the [`stow` skill](../.agents/skills/stow/SKILL.md) owns which of them a new learning is written to.
 
