@@ -130,16 +130,23 @@ delivery_body() {  # <queue-depth>
 # Attempt one submit.  Prints nothing; returns 0 when the backend confirmed the
 # submit, and sets SUBMIT_REASON to the concrete blocker otherwise so the caller
 # can name it rather than falling silent.
+# SUBMIT_TOKEN carries the same blocker as one token from the reason vocabulary
+# in bin/fm-delivery-lib.sh, recorded beside the prose so the machine verdict
+# is never derived from the sentence.
 SUBMIT_REASON=
+SUBMIT_TOKEN=
 attempt_submit() {  # <backend> <target> <tmux-server> <queue-depth>
   local backend=$1 target=$2 tmux_server=$3 depth=$4 composer verdict encoded body
   SUBMIT_REASON=
+  SUBMIT_TOKEN=
   if ! fm_backend_list_contains "$SUPPORTED_BACKENDS" "$backend"; then
+    SUBMIT_TOKEN='backend-unsupported'
     SUBMIT_REASON="the published endpoint names backend '$backend', which this listener has no verified composer primitives for"
     return 1
   fi
   if [ "$backend" = tmux ]; then
     if ! fm_delivery_tmux_server_valid "$tmux_server"; then
+      SUBMIT_TOKEN='endpoint-unproven-server'
       SUBMIT_REASON="the published tmux endpoint carries no provable server identity; a pane id alone is ambiguous"
       return 1
     fi
@@ -150,14 +157,15 @@ attempt_submit() {  # <backend> <target> <tmux-server> <queue-depth>
     :
   else
     case $? in
-      1) SUBMIT_REASON="the published pane $target no longer exists" ;;
-      125) SUBMIT_REASON="the published tmux server identity does not match the server at its recorded socket" ;;
-      126) SUBMIT_REASON="the published tmux server could not be verified" ;;
-      *) SUBMIT_REASON="the published pane $target could not be verified" ;;
+      1) SUBMIT_TOKEN='pane-missing'; SUBMIT_REASON="the published pane $target no longer exists" ;;
+      125) SUBMIT_TOKEN='server-mismatch'; SUBMIT_REASON="the published tmux server identity does not match the server at its recorded socket" ;;
+      126) SUBMIT_TOKEN='server-unverifiable'; SUBMIT_REASON="the published tmux server could not be verified" ;;
+      *) SUBMIT_TOKEN='pane-unverified'; SUBMIT_REASON="the published pane $target could not be verified" ;;
     esac
     return 1
   fi
   if pane_is_busy "$target" "$backend"; then
+    SUBMIT_TOKEN='mid-turn'
     SUBMIT_REASON="the session pane is mid-turn; delivery waits rather than typing into a working agent"
     return 1
   fi
@@ -169,15 +177,16 @@ attempt_submit() {  # <backend> <target> <tmux-server> <queue-depth>
   composer=$(fm_backend_composer_state "$backend" "$target" 2>/dev/null)
   if [ "$composer" != empty ]; then
     case "$composer" in
-      pending) SUBMIT_REASON="the session composer holds unsubmitted text; delivery waits rather than merging with it" ;;
-      server-mismatch) SUBMIT_REASON="the published tmux server identity does not match the server at its recorded socket" ;;
-      server-unverifiable) SUBMIT_REASON="the published tmux server could not be verified" ;;
-      *) SUBMIT_REASON="the session composer could not be confirmed empty (state=${composer:-unknown}: dead shell prompt or unreadable pane)" ;;
+      pending) SUBMIT_TOKEN='composer-pending'; SUBMIT_REASON="the session composer holds unsubmitted text; delivery waits rather than merging with it" ;;
+      server-mismatch) SUBMIT_TOKEN='server-mismatch'; SUBMIT_REASON="the published tmux server identity does not match the server at its recorded socket" ;;
+      server-unverifiable) SUBMIT_TOKEN='server-unverifiable'; SUBMIT_REASON="the published tmux server could not be verified" ;;
+      *) SUBMIT_TOKEN='composer-unknown'; SUBMIT_REASON="the session composer could not be confirmed empty (state=${composer:-unknown}: dead shell prompt or unreadable pane)" ;;
     esac
     return 1
   fi
   body=$(delivery_body "$depth")
   if ! fm_operational_input_encode watcher "$body" encoded; then
+    SUBMIT_TOKEN='encode-failed'
     SUBMIT_REASON="the delivery message could not be encoded"
     return 1
   fi
@@ -189,13 +198,16 @@ attempt_submit() {  # <backend> <target> <tmux-server> <queue-depth>
     return 0
   fi
   if [ "$verdict" = server-mismatch ]; then
+    SUBMIT_TOKEN='server-mismatch'
     SUBMIT_REASON="the published tmux server identity does not match the server at its recorded socket"
     return 1
   fi
   if [ "$verdict" = server-unverifiable ]; then
+    SUBMIT_TOKEN='server-unverifiable'
     SUBMIT_REASON="the published tmux server could not be verified"
     return 1
   fi
+  SUBMIT_TOKEN='submit-unconfirmed'
   SUBMIT_REASON="the submit was not confirmed (verdict=${verdict:-unknown}); the text may be sitting in the composer"
   return 1
 }
@@ -246,7 +258,7 @@ cycle() {
   log_condition "blocked:$SUBMIT_REASON" "undeliverable: $depth wake(s) pending but $SUBMIT_REASON"
   # Publish the outside-visible verdict only after its audit record exists.
   # Report readers may observe the outcome immediately after its atomic rename.
-  fm_delivery_attempt_outcome_write_blocked "$STATE" "$SUBMIT_REASON" || true
+  fm_delivery_attempt_outcome_write_blocked "$STATE" "$SUBMIT_REASON" "$SUBMIT_TOKEN" || true
   return 0
 }
 
