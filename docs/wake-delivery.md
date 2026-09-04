@@ -80,7 +80,7 @@ A listener that is not running and a listener with nothing to deliver both produ
 If the only observable were "no wake arrived", the fleet could not tell a healthy quiet home from a dead listener, and the failure this work removes would have moved house rather than gone.
 
 So the outside view is never a boolean.
-`bin/fm-delivery-service.sh status` prints one line whose first word is the verdict:
+`bin/fm-delivery-service.sh status` prints one line whose first word is the verdict, and `--format=machine` renders the same classification as `key=value` pairs under the contract in "Machine-readable status contract" below:
 
 | Verdict | Means |
 | --- | --- |
@@ -102,6 +102,79 @@ A frozen host cannot touch the beacon while the process stays alive, so a suspen
 
 Each of those conditions is created on purpose in `tests/fm-delivery.test.sh` and the matching verdict is required back.
 Asserting only the healthy path would let the whole distinguishability property rot without a single test failing, which is the defect this section exists to prevent.
+
+## Machine-readable status contract
+
+The prose line above is for humans.
+A consumer on another repository that matched its first word held a contract that lived in two repositories and was owned by neither: the Coditan vessel's health probe did exactly that until this section existed.
+The captain's decision of 2026-09-03 (vessel sweep, decision 3) places that contract in firstmate-source, and `tests/fm-delivery-status-contract.test.sh` is the test that holds it.
+
+The consumer call is:
+
+```sh
+FM_HOME=<home> bin/fm-delivery-service.sh status --format=machine
+```
+
+It prints exactly one line of space-separated `key=value` pairs and exits with the verdict's exit status.
+The parser is: split the line on spaces, then split each pair once on the first `=`.
+No value ever contains whitespace, every key is always present, and the key order is stable.
+An unknown flag or format value is a usage error: the command prints `error: ...` and a `help:` line on stdout and exits 2, which no verdict ever uses, so a consumer never mistakes a mistyped flag for a delivery reading.
+
+| Key | Meaning | Stability |
+| --- | --- | --- |
+| `verdict` | one of the six verdict words below | stable; the set only grows, and a consumer must treat an unknown word as not idle |
+| `exit` | the exit status the verdict carries, restated so a consumer that lost it through a pipe still has it | stable |
+| `listener_pid` | the live, identity-matched listener's pid, or empty when there is none | stable |
+| `pending` | the number of wakes in the durable queue | stable |
+| `beacon_age_seconds` | seconds since the listener last beat; `999999` when it never has | stable |
+| `grace_seconds` | the staleness bar the beacon was judged by | stable |
+| `backend` | the published endpoint's backend once the endpoint validates, else empty | stable |
+| `target` | the published endpoint's pane or terminal id once the endpoint validates, else empty | stable |
+| `reason` | one token naming why the verdict is not `delivering`, or empty for `idle` and `delivering` | stable for the tokens listed in `bin/fm-delivery-lib.sh`; new tokens may be added, and a consumer must treat an unknown token as a fault, except that it must never read `mid-turn` as one |
+
+The verdict vocabulary and its exit statuses are defined once, in `bin/fm-delivery-lib.sh`, and both the prose line and the machine line are rendered from that one classification, so the two cannot drift.
+
+| Verdict | Exit | A consumer reads it as |
+| --- | --- | --- |
+| `idle` | 0 | the seat is idle: listening, nothing pending |
+| `delivering` | 0 | healthy and busy: wakes pending and reaching the model turn |
+| `away` | 0 | healthy: the away daemon owns delivery and the listener stands down |
+| `undeliverable` | 1 | a live listener that cannot submit; `reason` says why, and `mid-turn` is a wait, not a fault |
+| `stalled` | 1 | a process fault: the listener is alive but has stopped beating |
+| `down` | 1 | a process fault: no live, identity-matched listener |
+
+"Seat is idle" is decided from `verdict=idle` alone.
+"Seat is healthy" is decided from the exit status alone, or equivalently from `exit=0`.
+Nothing else in the line is needed for either decision, and nothing in the prose line ever is.
+
+The reason token is recorded by the listener beside its prose the moment it records a blocked attempt, so the machine line never derives a token from a sentence.
+A blocked-attempt record written by a listener older than this contract carries prose only and is reported as `reason=attempt-blocked`.
+
+### Worked example: the Coditan vessel's health probe
+
+`vessel/health.sh` in coditan-bridge matches the prose prefix with a shell `case`, and singles out the mid-turn wait by matching the sentence.
+Its replacement reads the machine line instead; the decision logic is the same, only the evidence is structured:
+
+```sh
+delivery=$(FM_HOME="$VESSEL_FIRSTMATE_HOME" \
+  "$VESSEL_FIRSTMATE_HOME/bin/fm-delivery-service.sh" status --format=machine 2>/dev/null)
+delivery_rc=$?
+verdict=; reason=
+for pair in $delivery; do
+  case "$pair" in
+    verdict=*) verdict=${pair#verdict=} ;;
+    reason=*) reason=${pair#reason=} ;;
+  esac
+done
+case "$verdict:$reason" in
+  undeliverable:mid-turn) ;;
+  undeliverable:*) degraded delivery "delivery is blocked: $reason" ;;
+  idle:*|delivering:*|away:*) [ "$delivery_rc" -eq 0 ] || fail delivery "delivery status exited $delivery_rc" ;;
+  *) fail delivery "delivery path is not ready: ${delivery:-no status returned}" ;;
+esac
+```
+
+Changing that file is the vessel's own follow-up (`coditan-vessel-drain-consults-delivery-status`), not firstmate's; the vessel's stop drain is the next consumer of the same line.
 
 ## Refusing an unsafe pane
 
