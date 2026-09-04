@@ -509,6 +509,8 @@ expect_code 0 "$?" "a refused carry is a resolution, not a failure"
   || fail "a record this run disproved must not be carried, got '$(field reachability "$disproved")'"
 [ "$(field reachability_evidence "$disproved")" = none ] \
   || fail "and nothing is left claiming to back it, got '$(field reachability_evidence "$disproved")'"
+assert_contains "$disproved" "nothing credible has tested" \
+  "and the reason it prints says exactly that, rather than describing a record it refused"
 # The half-applied record the whole mechanism exists to prevent: a tailnet
 # verdict sitting beside a loopback bind address.
 [ "$(field addr "$disproved")" = 127.0.0.1 ] \
@@ -542,6 +544,8 @@ expect_code 0 "$?" "a pre-read whose probe gave no verdict still resolves identi
   || fail "an address no bind was proved on must not be reported as reach, got '$(field reachability "$unprobed")'"
 [ "$(field reachability_evidence "$unprobed")" = none ] \
   || fail "and must not borrow a tested label, got '$(field reachability_evidence "$unprobed")'"
+assert_contains "$unprobed" "the address probe did not answer" \
+  "and the reason names why nothing was established rather than asserting an answer"
 : > "$FM_TEST_TS_SERVE_STATE"
 : > "$FM_TEST_TS_SERVE_LOG"
 pass "reading a node's identity establishes its address, never that anything can reach it"
@@ -785,10 +789,44 @@ expect_code 0 "$?" "a --mine run on that home still resolves"
   || fail "and the non-answer it recorded is still a non-answer, got '$(field reachability "$minecarry")'"
 [ "$(field reachability_evidence "$minecarry")" = none ] \
   || fail "which is not something carried, got '$(field reachability_evidence "$minecarry")'"
+# The reason is what the wrapper prints to the captain inside "nothing has
+# established whether this vessel is reachable off this machine (<reason>)", so
+# a run holding no evidence may speak about the address it carried and about
+# nothing else. An answer claimed here contradicts the sentence around it.
+assert_contains "$minecarry" "the address a previous allocation established for lavish is carried forward" \
+  "the reason speaks about the address this run carried"
+assert_not_contains "$minecarry" "this run's own answer" \
+  "and claims no answer about a reach this run never established"
 rm -f "$MINE_DOWN_MARKER"
 : > "$FM_TEST_TS_SERVE_STATE"
 : > "$FM_TEST_TS_SERVE_LOG"
 pass "a --mine carry takes the address a recorded untested established without raising its verdict"
+
+# The other arm that reaches the publish block on a carried address and comes
+# back holding nothing: the retry above with the publish refused. Its own reason
+# says neither reach nor its absence is claimed, so the carry sentence beside it
+# may not claim one either.
+: > "$FM_TEST_TS_SERVE_STATE"
+: > "$FM_TEST_TS_SERVE_LOG"
+retryfail=$(PATH="$NOWALK:$PATH" FM_TEST_TS_MODE=userspace FM_TEST_TS_SERVE=broken \
+  FM_HOME="$HOME_CU" FM_SERVICE_PORT_RANGE=4903-4904 \
+  "$ROOT/bin/fm-service-port.sh" lavish --mine "$cu_port" --serving 2>/dev/null)
+expect_code 0 "$?" "a refused publish on a carried address still resolves"
+[ "$(field addr "$retryfail")" = 127.0.0.1 ] \
+  || fail "the carried address still travels, got '$(field addr "$retryfail")'"
+[ "$(field reachability "$retryfail")" = untested ] \
+  || fail "a refused publish on an untested address establishes nothing, got '$(field reachability "$retryfail")'"
+[ "$(field reachability_evidence "$retryfail")" = none ] \
+  || fail "and nothing backs it, got '$(field reachability_evidence "$retryfail")'"
+assert_contains "$retryfail" "neither reach nor its absence is claimed" \
+  "the publish failure says nothing was established"
+assert_contains "$retryfail" "the address a previous allocation established for lavish is carried forward" \
+  "and the carry beside it speaks about the address alone"
+assert_not_contains "$retryfail" "this run's own answer" \
+  "so the two halves of one reason cannot contradict each other"
+: > "$FM_TEST_TS_SERVE_STATE"
+: > "$FM_TEST_TS_SERVE_LOG"
+pass "a carried address whose publish was refused claims no answer in either half of its reason"
 
 # And the sentence a carry prints is unchanged wherever the reach really was
 # carried: a recorded loopback is a tested no-reach the previous allocation
@@ -843,6 +881,8 @@ expect_code 0 "$?" "a vessel whose tailscale will not answer still gets a local 
   || fail "an unreadable status establishes nothing either way, got '$(field reachability "$unread")'"
 [ "$(field reachability_evidence "$unread")" = none ] \
   || fail "and nothing backs it, got '$(field reachability_evidence "$unread")'"
+assert_contains "$unread" "tailscale status could not be read as JSON" \
+  "and the reason names the read that failed rather than claiming an answer"
 [ "$(field addr "$unread")" = 127.0.0.1 ] \
   || fail "the board still binds somewhere, got '$(field addr "$unread")'"
 assert_grep "reachability=untested" "$HOME_UR/state/service-port.lavish" \
@@ -1024,6 +1064,10 @@ expect_code 0 "$?" "a first run that will not serve still gets a port"
   || fail "with nothing tested and nothing to carry, neither answer may be asserted, got '$(field reachability "$first")'"
 [ "$(field reachability_evidence "$first")" = none ] \
   || fail "untested carries no evidence, got '$(field reachability_evidence "$first")'"
+assert_contains "$first" "nothing credible has tested" \
+  "and the reason claims neither reach nor its absence"
+assert_not_contains "$first" "carried forward" \
+  "with nothing to carry, nothing is described as carried"
 [ -z "$(field route "$first")" ] \
   || fail "route describes a proxied route and must be empty off that value, got '$(field route "$first")'"
 [ -z "$(field dnsname "$first")" ] || fail "no name is offered where nothing was established"

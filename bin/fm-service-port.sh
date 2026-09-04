@@ -828,15 +828,22 @@ fi
 # Said here rather than where the carry happened, because what a carry-forward
 # run ends up carrying is not settled until the publish block above has had its
 # say. A carried address can reach that block and come back with a verdict this
-# run established itself - a route it published, or one it found, or the
-# absence of both - and a sentence written before that would describe the reach
-# as carried while the evidence field beside it says probed. The evidence is
-# what decides which sentence is true, so it is what selects it.
+# run established itself - a route it published, or one it found - and a
+# sentence written before that would describe the reach as carried while the
+# evidence field beside it says probed. The evidence is what decides which
+# sentence is true, so it is what selects it, and only `probed` licenses saying
+# whose answer the reach is: under `none` this run established nothing, so the
+# address is all there is to speak about. Claiming an answer there would
+# contradict the very reasons this same run adds beside it - "neither reach nor
+# its absence is claimed", "nothing credible has tested" - and the wrapper's own
+# "nothing has established whether ..." that prints this sentence inside it.
 if [ "$CARRIED_ADDR" -eq 1 ]; then
   if [ "$REACHABILITY_EVIDENCE" = carried ]; then
     add_reason "this run bound no port of its own, so the address and reach a previous allocation established for $SERVICE are carried forward rather than re-derived from a probe that answered nothing"
-  else
+  elif [ "$REACHABILITY_EVIDENCE" = probed ]; then
     add_reason "this run bound no port of its own, so the address a previous allocation established for $SERVICE is carried forward rather than re-derived from a probe that answered nothing, and the reach on that address is this run's own answer rather than that allocation's"
+  else
+    add_reason "this run bound no port of its own, so the address a previous allocation established for $SERVICE is carried forward rather than re-derived from a probe that answered nothing"
   fi
 fi
 
