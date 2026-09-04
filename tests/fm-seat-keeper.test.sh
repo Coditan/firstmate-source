@@ -46,6 +46,22 @@ SH
   chmod +x "$path"
 }
 
+# A delivery service that answers one scripted verdict per reading, so a single
+# keeper run can be driven across an onset, a recovery and a second onset the way
+# a real queue changes under it. Reading N answers line N of the case's verdicts
+# file.
+write_scripted_delivery() {
+  local path=$1 dirvar=$2
+  cat > "$path" <<SH
+#!/usr/bin/env bash
+n=\$(cat "$dirvar/reading-count" 2>/dev/null || printf '0')
+n=\$((n + 1))
+printf '%s\n' "\$n" > "$dirvar/reading-count"
+sed -n "\${n}p" "$dirvar/verdicts"
+SH
+  chmod +x "$path"
+}
+
 # A delivery service that answers from the state directory it is told to read,
 # which is how bin/fm-delivery-service.sh derives its own state: FM_STATE_OVERRIDE
 # first, then FM_HOME/state.
@@ -92,6 +108,7 @@ session_creations() {  # <case-dir>
 
 DEAD_PANE='undeliverable: listener pid 1 is up with 1 wake(s) pending, but the published pane %9 no longer exists'
 COMPOSER_UNKNOWN='undeliverable: listener pid 1 is up with 1 wake(s) pending, but the session composer could not be confirmed empty (state=unknown: dead shell prompt or unreadable pane)'
+HEALTHY='idle: listener pid 1 is up and the durable queue is empty'
 
 # The composer-unknown verdict is the one death verdict whose restore destroys
 # work: it replaces an existing firstmate window. These two cases stand the
@@ -99,6 +116,12 @@ COMPOSER_UNKNOWN='undeliverable: listener pid 1 is up with 1 wake(s) pending, bu
 kill_calls() {  # <case-dir>
   local n
   n=$(grep -cE 'kill-window' "$1/tmux.log" 2>/dev/null) || n=0
+  printf '%s\n' "$n"
+}
+
+refusal_lines() {  # <case-dir>
+  local n
+  n=$(grep -cF 'kill refused' "$1/home/state/.seat-keeper.log" 2>/dev/null) || n=0
   printf '%s\n' "$n"
 }
 
@@ -461,7 +484,24 @@ test_composer_unknown_does_not_kill_a_live_seat() {
     "the refused kill was not logged"
   assert_grep "pane_current_command=node" "$dir/home/state/.seat-keeper.log" \
     "the refusal did not name what it read"
-  pass "a composer-unknown verdict over a live pane leaves the seat alone and says why"
+
+  dir=$(make_live_session_case composer-unknown-live-twice '0:node')
+  {
+    printf '%s\n' "$COMPOSER_UNKNOWN"
+    printf '%s\n' "$COMPOSER_UNKNOWN"
+    printf '%s\n' "$HEALTHY"
+    printf '%s\n' "$COMPOSER_UNKNOWN"
+    printf '%s\n' "$COMPOSER_UNKNOWN"
+  } > "$dir/verdicts"
+  write_scripted_delivery "$dir/fake-delivery" "$dir"
+  FM_SEAT_KEEPER_DELIVERY_SERVICE="$dir/fake-delivery" \
+    run_keeper "$dir" "" 5 || fail "keeper exited non-zero across two composer-unknown onsets"
+  [ "$(cat "$dir/reading-count")" = 5 ] || fail "the scripted delivery service was not read five times"
+  [ "$(kill_calls "$dir")" = 0 ] \
+    || fail "the keeper killed a live firstmate window across the two onsets"
+  [ "$(refusal_lines "$dir")" = 2 ] \
+    || fail "the refusal was not logged once per onset; got $(refusal_lines "$dir") line(s) for two onsets"
+  pass "a composer-unknown verdict over a live pane leaves the seat alone and says why, once per onset"
 }
 
 test_composer_unknown_over_a_dead_shell_still_relaunches() {

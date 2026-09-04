@@ -457,6 +457,7 @@ main() {
       fi
       last_verdict=stay-down
       seen=0
+      LAST_KILL_REFUSAL=''
     else
       status=$(delivery_status)
       seat_death_verdict "$status"
@@ -481,6 +482,7 @@ main() {
           clear_episode
           last_verdict=''
           seen=0
+          LAST_KILL_REFUSAL=''
           ;;
         *)
           if [ "$last_verdict" != unrecognised ]; then
