@@ -104,7 +104,45 @@ test_the_give_up_finding_is_filed_once_per_condition() {
   pass "an exhausted condition is filed once, and a new condition is filed again"
 }
 
+# A give-up marker can outlive the condition it names: the exhausted episode's
+# marker stays on disk while the guarded condition changes and the successor
+# starts counting its own attempts. Lifting the marker must not spend those.
+test_a_lifted_marker_leaves_a_successors_mid_episode_record_alone() {
+  local home record giveup before out rc=0
+  home=$(make_home foreign-marker)
+  record="$home/state/.attempts"
+  giveup="$home/state/.giveup"
+
+  FM_HOME="$home" FM_ROOT="$ROOT" FM_FINDINGS_DIR="$home/data/findings" \
+    fm_retry_giveup_emit "$giveup" exhausted-condition fm-test-officer \
+    "A test supervisor exhausted its attempts." "tests/fm-retry-episode.test.sh" \
+    "undeliverable: the published pane no longer exists" >/dev/null \
+    || fail "the give-up finding for the exhausted condition could not be filed"
+  [ -f "$giveup" ] || fail "the give-up marker was not recorded"
+  fm_retry_write_attempts "$record" successor-condition 1 1750000000 \
+    || fail "could not write the successor's attempt record"
+  before=$(cat "$record")
+
+  out=$(fm_retry_clear_exhausted_episode "$record" "$giveup" 5) || rc=$?
+  [ "$rc" = 0 ] || fail "lifting a filed episode did not report a filed clear; got $rc"
+  [ "$out" = exhausted-condition ] || fail "the lift named the wrong condition: $out"
+  [ ! -e "$giveup" ] || fail "the lift left the give-up marker behind"
+  [ -f "$record" ] || fail "the lift wiped the successor's mid-episode record"
+  [ "$(cat "$record")" = "$before" ] \
+    || fail "the lift changed the successor's count or backoff spacing: $(cat "$record")"
+
+  fm_retry_write_attempts "$record" successor-condition 5 1750000000 \
+    || fail "could not write the successor's exhausted record"
+  printf 'key=exhausted-condition\n' > "$giveup"
+  fm_retry_clear_exhausted_episode "$record" "$giveup" 5 >/dev/null \
+    || fail "lifting a filed episode over an exhausted successor failed"
+  [ ! -e "$record" ] \
+    || fail "a successor already at the bound was carried across the hand-start"
+  pass "lifting a filed episode spares a successor mid-episode and still lifts one at the bound"
+}
+
 test_backoff_doubles_from_the_base_and_stops_at_the_maximum
 test_a_different_condition_starts_a_fresh_episode
+test_a_lifted_marker_leaves_a_successors_mid_episode_record_alone
 test_clearing_an_episode_removes_both_records
 test_the_give_up_finding_is_filed_once_per_condition

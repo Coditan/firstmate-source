@@ -99,16 +99,27 @@ fm_retry_clear_episode() {  # <record-file> <giveup-file>
 # which it lifted through the exit status, because an operator reading the log
 # has to know a bound was reached whose finding never reached him. An attempts
 # record still below the bound is mid-episode and is deliberately left alone,
-# count and backoff spacing intact.
+# count and backoff spacing intact - including when it belongs to a condition
+# other than the one the give-up marker names, because a marker outliving its
+# own condition must not spend the successor's attempts.
 #
 # Returns 0 when a filed episode was lifted, 2 when an exhausted-but-unfiled one
 # was, and 1 when there was no exhausted episode to lift.
 fm_retry_clear_exhausted_episode() {  # <record-file> <giveup-file> <max-attempts>
-  local record=$1 giveup=$2 max=$3 key count
+  local record=$1 giveup=$2 max=$3 key count bound record_key
+  bound=$max
+  case "$bound" in ''|*[!0-9]*) bound=0 ;; esac
   if [ -f "$giveup" ]; then
     key=$(fm_retry_kv_get "$giveup" key 2>/dev/null || true)
     [ -n "$key" ] || key=unknown
-    fm_retry_clear_episode "$record" "$giveup"
+    record_key=$(fm_retry_kv_get "$record" key 2>/dev/null || true)
+    count=$(fm_retry_kv_get "$record" count 2>/dev/null || true)
+    case "$count" in ''|*[!0-9]*) count=0 ;; esac
+    if [ "$record_key" = "$key" ] || { [ "$bound" -gt 0 ] && [ "$count" -ge "$bound" ]; }; then
+      fm_retry_clear_episode "$record" "$giveup"
+    else
+      rm -f "$giveup"
+    fi
     printf '%s\n' "$key"
     return 0
   fi

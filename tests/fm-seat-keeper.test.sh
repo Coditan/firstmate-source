@@ -504,6 +504,54 @@ test_composer_unknown_does_not_kill_a_live_seat() {
   pass "a composer-unknown verdict over a live pane leaves the seat alone and says why, once per onset"
 }
 
+# The onset boundary is crossed by more than a healthy verdict: another death
+# condition and an unreadable answer from the delivery service both end an onset
+# and start a new one, so the refusal has to be announced again on each.
+test_the_kill_refusal_is_announced_again_after_another_death_condition() {
+  local dir
+  dir=$(make_live_session_case refusal-across-another-condition '0:node')
+  {
+    printf '%s\n' "$COMPOSER_UNKNOWN"
+    printf '%s\n' "$COMPOSER_UNKNOWN"
+    printf '%s\n' "$DEAD_PANE"
+    printf '%s\n' "$DEAD_PANE"
+    printf '%s\n' "$COMPOSER_UNKNOWN"
+    printf '%s\n' "$COMPOSER_UNKNOWN"
+  } > "$dir/verdicts"
+  write_scripted_delivery "$dir/fake-delivery" "$dir"
+  FM_SEAT_KEEPER_DELIVERY_SERVICE="$dir/fake-delivery" \
+    run_keeper "$dir" "" 6 || fail "keeper exited non-zero across an intervening death condition"
+  [ "$(cat "$dir/reading-count")" = 6 ] || fail "the scripted delivery service was not read six times"
+  [ "$(kill_calls "$dir")" = 0 ] \
+    || fail "the keeper killed a live firstmate window across the two onsets"
+  [ "$(refusal_lines "$dir")" = 2 ] \
+    || fail "the refusal was not announced again after another death condition; got $(refusal_lines "$dir") line(s)"
+  pass "a death condition between two composer-unknown onsets does not silence the second refusal"
+}
+
+test_the_kill_refusal_is_announced_again_after_an_unrecognised_verdict() {
+  local dir
+  dir=$(make_live_session_case refusal-across-unrecognised '0:node')
+  {
+    printf '%s\n' "$COMPOSER_UNKNOWN"
+    printf '%s\n' "$COMPOSER_UNKNOWN"
+    printf '%s\n' 'surprise: a verdict this keeper has never seen'
+    printf '%s\n' "$COMPOSER_UNKNOWN"
+    printf '%s\n' "$COMPOSER_UNKNOWN"
+  } > "$dir/verdicts"
+  write_scripted_delivery "$dir/fake-delivery" "$dir"
+  FM_SEAT_KEEPER_DELIVERY_SERVICE="$dir/fake-delivery" \
+    run_keeper "$dir" "" 5 || fail "keeper exited non-zero across an intervening unrecognised verdict"
+  [ "$(cat "$dir/reading-count")" = 5 ] || fail "the scripted delivery service was not read five times"
+  [ "$(kill_calls "$dir")" = 0 ] \
+    || fail "the keeper killed a live firstmate window across the two onsets"
+  assert_grep "unrecognised delivery verdict" "$dir/home/state/.seat-keeper.log" \
+    "the intervening unrecognised verdict was not reached"
+  [ "$(refusal_lines "$dir")" = 2 ] \
+    || fail "the refusal was not announced again after an unrecognised verdict; got $(refusal_lines "$dir") line(s)"
+  pass "an unrecognised verdict between two composer-unknown onsets does not silence the second refusal"
+}
+
 test_composer_unknown_over_a_dead_shell_still_relaunches() {
   local dir
   dir=$(make_live_session_case composer-unknown-dead '0:bash')
@@ -541,6 +589,8 @@ test_the_state_dir_argument_wins_over_the_environment
 test_a_state_dir_that_is_not_the_homes_own_is_refused
 test_a_keeper_on_the_targets_own_server_is_refused
 test_composer_unknown_does_not_kill_a_live_seat
+test_the_kill_refusal_is_announced_again_after_another_death_condition
+test_the_kill_refusal_is_announced_again_after_an_unrecognised_verdict
 test_composer_unknown_over_a_dead_shell_still_relaunches
 test_composer_unknown_over_an_unreadable_pane_is_refused
 test_the_delivery_verdict_is_read_for_the_home_given

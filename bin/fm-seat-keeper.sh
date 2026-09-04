@@ -402,6 +402,14 @@ clear_episode() {
   fm_retry_clear_episode "$ATTEMPTS" "$GIVEUP"
 }
 
+# One onset boundary, one writer. last_verdict is what every once-per-onset
+# notice is keyed on, so the notices that must be re-announced when the guarded
+# condition changes are reset here rather than at each branch that changes it.
+set_onset() {  # <verdict-identity>
+  last_verdict=$1
+  LAST_KILL_REFUSAL=''
+}
+
 emit_giveup_finding() {  # <key> <status-line>
   local key=$1 status_line=$2 out rc=0
   out=$(fm_retry_giveup_emit "$GIVEUP" "$key" fm-seat-keeper \
@@ -455,9 +463,8 @@ main() {
       if [ "$last_verdict" != stay-down ]; then
         log "stay-down marker present; leaving seat down"
       fi
-      last_verdict=stay-down
+      set_onset stay-down
       seen=0
-      LAST_KILL_REFUSAL=''
     else
       status=$(delivery_status)
       seat_death_verdict "$status"
@@ -471,7 +478,7 @@ main() {
           if [ "$verdict_key" = "$last_verdict" ]; then
             seen=$((seen + 1))
           else
-            last_verdict=$verdict_key
+            set_onset "$verdict_key"
             seen=1
           fi
           if [ "$seen" -ge 2 ]; then
@@ -480,15 +487,14 @@ main() {
           ;;
         1)
           clear_episode
-          last_verdict=''
+          set_onset ''
           seen=0
-          LAST_KILL_REFUSAL=''
           ;;
         *)
           if [ "$last_verdict" != unrecognised ]; then
             log "unrecognised delivery verdict; resetting consecutive seat-death evidence: $status"
           fi
-          last_verdict=unrecognised
+          set_onset unrecognised
           seen=0
           ;;
       esac
