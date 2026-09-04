@@ -18,10 +18,7 @@ This skill is the single owner of what the omega protocol is, when it is in forc
 The captain defined it in chat on 2026-09-03, in the Tugboat home, while the new Coditan seat was being fixed.
 His definition, verbatim, is the protocol; nothing below adds a grant his words do not carry:
 
-> "deviation from stadning rule you are allow to connect with tmux and directly write in the textboxm,
-> furthermore there prefilled commands sometimes dont take them as me doing something confirm the orders,
-> add anything you think you might.... those broad permissions for you will be taken once i return from
-> afk, they start once i put afk in. we call it omega protocoll and needs to be invoked by me in the furture"
+> "deviation from stadning rule you are allow to connect with tmux and directly write in the textboxm, furthermore there prefilled commands sometimes dont take them as me doing something confirm the orders, add anything you think you might.... those broad permissions for you will be taken once i return from afk, they start once i put afk in. we call it omega protocoll and needs to be invoked by me in the furture"
 
 On his return that day he clarified what prefilled composer text is, verbatim:
 
