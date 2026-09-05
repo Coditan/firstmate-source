@@ -162,6 +162,37 @@ test_a_launch_failure_is_not_pending() {
   pass "a launch failure is distinguishable from a genuinely running check"
 }
 
+test_a_dead_unfinished_generation_is_reported() {
+  local home dir out
+  home=$(new_home dead-generation)
+  dir="$home/state/.deferred/dead/run-abandoned"
+  mkdir -p "$dir"
+  printf 'run-abandoned\n' > "$home/state/.deferred/dead/current"
+  printf '99999999\n' > "$dir/pid"
+  out=$(FM_HOME="$home" "$DEFER" start dead -- printf 'fresh result\n')
+  assert_contains "$out" 'DEFERRED_CHECK_FAILED: dead: previous runner exited before publishing a result' \
+    "an abandoned current generation must be reported before replacement"
+  pass "a dead unfinished generation receives an explicit terminal result"
+}
+
+test_pid_publication_failure_leaves_no_runner() {
+  local home fake_bin marker queue rc=0
+  home=$(new_home pid-publication-failure)
+  fake_bin="$home/fake-bin"
+  marker="$home/command-ran"
+  mkdir -p "$fake_bin"
+  printf '#!/usr/bin/env bash\n/bin/mv "$@" || exit\ncase "${!#}" in */current) generation=$(cat "${!#}"); mkdir "$(dirname "${!#}")/$generation/pid" ;; esac\n' > "$fake_bin/mv"
+  chmod +x "$fake_bin/mv"
+  PATH="$fake_bin:$PATH" FM_HOME="$home" "$DEFER" start handshake -- \
+    bash -c 'printf ran > "$1"' _ "$marker" >/dev/null 2>&1 || rc=$?
+  [ "$rc" -eq 1 ] || fail "a failed pid publication should report launch failure, got $rc"
+  sleep 1
+  [ ! -e "$marker" ] || fail "the command ran after pid publication failed"
+  queue=$(cat "$home/state/.wake-queue" 2>/dev/null || true)
+  [ -z "$queue" ] || fail "a failed launch left a runner able to wake: $queue"
+  pass "pid publication failure terminates the unready runner"
+}
+
 test_generations_isolate_previous_handoffs() {
   local home old_dir out queue rc=0
   home=$(new_home generation-handoffs)
@@ -278,6 +309,8 @@ test_a_long_nonzero_result_keeps_failure_visible
 test_a_nonzero_inline_result_reports_failure
 test_a_missing_output_is_reported_as_failure
 test_a_launch_failure_is_not_pending
+test_a_dead_unfinished_generation_is_reported
+test_pid_publication_failure_leaves_no_runner
 test_generations_isolate_previous_handoffs
 test_publication_failure_still_wakes
 test_start_does_not_hold_the_callers_stdout

@@ -104,6 +104,8 @@ case "$PAYLOAD_MAX" in ''|0|*[!0-9]*) PAYLOAD_MAX=600 ;; esac
 HANDOFF_TIMEOUT=${FM_DEFERRED_CHECK_HANDOFF_TIMEOUT:-120}
 case "$HANDOFF_TIMEOUT" in ''|*[!0-9]*) HANDOFF_TIMEOUT=120 ;; esac
 HANDOFF_POLL=${FM_DEFERRED_CHECK_HANDOFF_POLL:-0.2}
+LAUNCH_HANDOFF_POLLS=${FM_DEFERRED_CHECK_LAUNCH_HANDOFF_POLLS:-100}
+case "$LAUNCH_HANDOFF_POLLS" in ''|0|*[!0-9]*) LAUNCH_HANDOFF_POLLS=100 ;; esac
 
 usage() {
   echo "usage: fm-deferred-check.sh start|collect|run|status <name> [-- <command> [arg...]]" >&2
@@ -191,7 +193,7 @@ cmd_status() {  # <name>
 }
 
 cmd_start() {  # <name> <command> [arg...]
-  local name=$1 base dir generation leftover old
+  local name=$1 base dir generation leftover old failure runner_pid
   shift
   base=$(check_dir "$name")
   dir=$(current_dir "$name" 2>/dev/null || true)
@@ -201,6 +203,15 @@ cmd_start() {  # <name> <command> [arg...]
   # otherwise block this check from ever being started again.
   if [ -n "$dir" ] && [ ! -f "$dir/done" ] && runner_alive "$dir"; then
     return 3
+  fi
+
+  if [ -n "$dir" ] && [ ! -f "$dir/done" ]; then
+    failure="DEFERRED_CHECK_FAILED: $name: previous runner exited before publishing a result"
+    printf '%s\n' "$failure"
+    printf '%s\n' "$failure" > "$dir/out" 2>/dev/null || true
+    printf '1\n' > "$dir/status" 2>/dev/null || true
+    : > "$dir/done" 2>/dev/null || true
+    mkdir "$dir/delivered" 2>/dev/null || true
   fi
 
   # A finished result nobody took is printed HERE rather than discarded, which
@@ -232,7 +243,17 @@ cmd_start() {  # <name> <command> [arg...]
   # mechanism exists to stop waiting for - the deferral would silently do
   # nothing. tests/fm-deferred-check.test.sh pins that.
   ( "$SCRIPT_DIR/fm-deferred-check.sh" run "$name" "$generation" -- "$@" ) </dev/null >/dev/null 2>&1 &
-  printf '%s\n' "$!" > "$dir/pid" || return 1
+  runner_pid=$!
+  if ! printf '%s\n' "$runner_pid" > "$dir/pid"; then
+    kill "$runner_pid" 2>/dev/null || true
+    wait "$runner_pid" 2>/dev/null || true
+    return 1
+  fi
+  if ! : > "$dir/ready"; then
+    kill "$runner_pid" 2>/dev/null || true
+    wait "$runner_pid" 2>/dev/null || true
+    return 1
+  fi
   return 0
 }
 
@@ -258,10 +279,15 @@ runner_failure() {  # <name> <dir> <detail>
 }
 
 cmd_run() {  # <name> <generation> <command> [arg...]
-  local name=$1 generation=$2 dir rc=0 out payload summary
+  local name=$1 generation=$2 dir rc=0 out payload summary waited=0
   shift 2
   dir="$(check_dir "$name")/$generation"
   [ -d "$dir" ] || { runner_failure "$name" "$dir" "generation directory is unavailable"; return $?; }
+  while [ ! -f "$dir/ready" ] && [ "$waited" -lt "$LAUNCH_HANDOFF_POLLS" ]; do
+    sleep 0.05
+    waited=$((waited + 1))
+  done
+  [ -f "$dir/ready" ] || return 1
 
   "$@" > "$dir/command.out.part" 2>&1 || rc=$?
   printf '%s\n' "$rc" > "$dir/status" 2>/dev/null \
