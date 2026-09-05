@@ -70,8 +70,10 @@ AXI_SUITE_PENDING: the suite currency check is still running, so this digest doe
 
 state/.wake-queue:
 check  fleet-sync  check: fleet-sync: finished after session start: FLEET_SYNC: fleet: skipped: bootstrap
-  refresh timed out (timeout=20s elapsed=20s) (full output: .../state/.deferred/fleet-sync/out)
+  refresh timed out (timeout=20s elapsed=20s) (full output path elided; see note below)
 ```
+
+That transcript predates per-run generation directories; current wakes name `state/.deferred/<name>/run-*/out` under the generation identified by the check's `current` pointer.
 
 ## The rule this was built around
 
