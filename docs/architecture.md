@@ -174,6 +174,7 @@ Codex launches additionally thread the tracked `.codex/config.toml` profile as C
 A Codex direct report's launch line also carries a per-task signal writable root, with public `state/<id>.status` and `state/<id>.turn-ended` paths symlinked into it; [codex-status-signalling.md](codex-status-signalling.md) owns the status incident evidence and the symlink watcher implication, while [codex-completion-gate.md](codex-completion-gate.md) owns the completion-gate attestation evidence.
 A Codex crewmate's launch line carries three crewmate-only sandbox grants that the tracked profile does not hold and a Codex secondmate does not receive.
 [`codex-sandbox-network.md`](codex-sandbox-network.md) owns the network grant that lets it reach the local no-mistakes daemon socket, [`codex-sandbox-git-directory.md`](codex-sandbox-git-directory.md) owns the git-directory writable root that lets it write linked-worktree refs while leaving the project working tree refused, and [`codex-sandbox-gate-repo.md`](codex-sandbox-gate-repo.md) owns the gate-repository writable root that lets its pipeline push reach the gate while leaving the daemon and every other project's gate refused.
+[`codex-sandbox-unavailable.md`](codex-sandbox-unavailable.md) owns the other host shape: where the kernel refuses to start a sandbox at all, what the launch degrades to there, and why the tracked profile every other host reads is never rewritten for it.
 
 ## Optional secondmates
 

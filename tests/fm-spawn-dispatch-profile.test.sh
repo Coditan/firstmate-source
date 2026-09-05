@@ -174,6 +174,12 @@ make_seeded_secondmate_home() {
   printf 'charter for %s\n' "$id" > "$home/data/charter.md"
 }
 
+# Every case pins the host-sandbox probe rather than inheriting the real host, so
+# the whole suite's workspace-write expectations state "on a host whose sandbox
+# starts" instead of quietly meaning "on whatever host CI happens to run on" - the
+# machine this was written on fails that probe, and an unpinned suite would have
+# read its degraded launch line as the shipped one. A case that wants the other
+# host shape exports FM_CODEX_SANDBOX_PROBE around its own call.
 run_spawn() {
   local home=$1 wt=$2 fakebin=$3 launchlog=$4
   shift 4
@@ -182,6 +188,7 @@ run_spawn() {
     FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
     FM_PROJECTS_OVERRIDE="$home/projects" FM_CONFIG_OVERRIDE="$home/config" \
     FM_SPAWN_NO_GUARD=1 FM_FAKE_PANE_PATH="$wt" TMUX="fake,1,0" \
+    FM_CODEX_SANDBOX_PROBE="${FM_CODEX_SANDBOX_PROBE:-yes}" \
     FM_FAKE_LAUNCH_LOG="$launchlog" GROK_HOME="$home/grok-home" PATH="$fakebin:$PATH" \
     "$SPAWN" "$@" 2>&1
 }
@@ -1165,6 +1172,75 @@ test_tracked_codex_profile_leaves_launch_grants_to_the_launch_line() {
   pass "the tracked Codex profile leaves dynamic grants to the launch line"
 }
 
+# The two host shapes for Codex's sandbox. On a host whose kernel refuses to start
+# an unprivileged user namespace, every sandboxed command fails before it runs -
+# including the worktree-isolation assertion a ship brief demands first, and
+# including apply_patch, so such a worker cannot even edit a file. The launch
+# degrades to danger-full-access there and says so; the shipped profile and every
+# host whose sandbox starts are untouched (docs/codex-sandbox-unavailable.md).
+test_codex_sandboxable_host_keeps_the_shipped_workspace_write() {
+  local rec id out status launch
+  id=profile-codex-sandbox-ok-z40
+  rec=$(make_spawn_case profile-codex-sandbox-ok codex "$id")
+  read_case_record "$rec"
+
+  out=$(FM_CODEX_SANDBOX_PROBE=yes run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR")
+  status=$?
+  expect_code 0 "$status" "codex spawn on a sandboxable host should succeed"
+  launch=$(cat "$LAUNCH_LOG")
+  assert_contains "$launch" "-c 'sandbox_mode=\"workspace-write\"'" \
+    "a host whose sandbox starts did not get the shipped workspace-write sandbox"
+  assert_not_contains "$launch" 'danger-full-access' \
+    "a host whose sandbox starts was launched unsandboxed anyway"
+  assert_not_contains "$out" 'cannot start a sandbox' \
+    "a host whose sandbox starts announced a degradation it did not take"
+  pass "a host that can start a sandbox keeps workspace-write exactly as shipped"
+}
+
+test_codex_unsandboxable_host_launches_unsandboxed_and_says_so() {
+  local rec id out status launch
+  id=profile-codex-sandbox-blocked-z41
+  rec=$(make_spawn_case profile-codex-sandbox-blocked codex "$id")
+  read_case_record "$rec"
+
+  out=$(FM_CODEX_SANDBOX_PROBE=no run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR")
+  status=$?
+  expect_code 0 "$status" "codex spawn on a host that cannot sandbox should still launch"
+  launch=$(cat "$LAUNCH_LOG")
+  assert_contains "$launch" "-c 'sandbox_mode=\"danger-full-access\"'" \
+    "a host that cannot start a sandbox was still launched sandboxed, so its worker cannot run a command or edit a file"
+  assert_not_contains "$launch" 'workspace-write"' \
+    "the degraded launch still carries the sandbox mode the host cannot start"
+  assert_contains "$launch" "-c 'approval_policy=\"on-request\"'" \
+    "the degradation changed approval_policy, which is not host-conditional"
+  assert_contains "$launch" "-c 'approvals_reviewer=\"auto_review\"'" \
+    "the degradation changed approvals_reviewer, which is not host-conditional"
+  assert_contains "$launch" "$CODEX_CREW_NETWORK_FLAG" \
+    "the degraded launch dropped the crewmate network grant"
+  assert_contains "$out" 'cannot start a sandbox' \
+    "the degradation was silent; a weaker launch must announce itself"
+  assert_contains "$(cat "$ROOT/.codex/config.toml")" 'sandbox_mode = "workspace-write"' \
+    "the degradation rewrote the tracked profile that ships to every other host"
+  pass "a host that cannot start a sandbox launches unsandboxed, announced, with the shipped profile untouched"
+}
+
+test_codex_unreadable_sandbox_probe_keeps_the_sandbox() {
+  local rec id out status launch
+  id=profile-codex-sandbox-unknown-z42
+  rec=$(make_spawn_case profile-codex-sandbox-unknown codex "$id")
+  read_case_record "$rec"
+
+  out=$(FM_CODEX_SANDBOX_PROBE=unknown run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR")
+  status=$?
+  expect_code 0 "$status" "codex spawn with an unreadable probe should succeed"
+  launch=$(cat "$LAUNCH_LOG")
+  assert_contains "$launch" "-c 'sandbox_mode=\"workspace-write\"'" \
+    "a probe nobody could take bought a weaker launch"
+  assert_contains "$out" 'could not test whether this host can start a sandbox' \
+    "an unreadable probe passed silently as a healthy one"
+  pass "a sandbox probe that could not be taken keeps the sandbox and says it could not be taken"
+}
+
 test_grok_threads_model_and_reasoning_effort() {
   local rec id out status launch
   id=profile-grok-z5
@@ -1377,6 +1453,9 @@ test_codex_non_bare_gate_destination_refuses_the_launch
 test_non_codex_crewmate_acquires_no_gate_grant
 test_non_codex_crewmate_acquires_no_sandbox_network_grant
 test_tracked_codex_profile_leaves_launch_grants_to_the_launch_line
+test_codex_sandboxable_host_keeps_the_shipped_workspace_write
+test_codex_unsandboxable_host_launches_unsandboxed_and_says_so
+test_codex_unreadable_sandbox_probe_keeps_the_sandbox
 test_grok_threads_model_and_reasoning_effort
 test_grok_omits_invalid_max_reasoning_effort
 test_grok_omits_invalid_xhigh_reasoning_effort
