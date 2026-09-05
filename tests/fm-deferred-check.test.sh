@@ -25,11 +25,19 @@ new_home() {  # <name> -> home path
 # Wait, in real time, for a runner to finish. Bounded so a wedged runner fails
 # the case instead of hanging the suite.
 wait_for_done() {  # <home> <name>
-  local home=$1 name=$2 waited=0
-  while [ ! -f "$home/state/.deferred/$name/done" ] && [ "$waited" -lt 200 ]; do
+  local home=$1 name=$2 waited=0 dir
+  while [ "$waited" -lt 200 ]; do
+    dir=$(current_generation "$home" "$name")
+    [ -z "$dir" ] || [ ! -f "$dir/done" ] || return 0
     sleep 0.1
     waited=$((waited + 1))
   done
+}
+
+current_generation() {  # <home> <name>
+  local home=$1 name=$2 generation
+  generation=$(cat "$home/state/.deferred/$name/current" 2>/dev/null || true)
+  [ -z "$generation" ] || printf '%s\n' "$home/state/.deferred/$name/$generation"
 }
 
 wait_for_wake() {  # <home>
@@ -65,7 +73,7 @@ test_a_pending_run_reports_pending_and_delivers_by_wake() {
   queue=$(cat "$home/state/.wake-queue" 2>/dev/null || true)
   assert_contains "$queue" 'check	slow' "the late result should arrive as a check wake keyed by the check name"
   assert_contains "$queue" 'SLOW: a finding nobody may lose' "the wake payload should carry the finding"
-  assert_contains "$queue" "$home/state/.deferred/slow/out" "the wake should name where the full output lives"
+  assert_contains "$queue" "$home/state/.deferred/slow/run-" "the wake should name the result generation"
   pass "a run that outlives the digest reports pending and then delivers its finding as a wake"
 }
 
@@ -100,9 +108,9 @@ test_a_nonzero_late_result_reports_failure() {
 test_a_long_nonzero_result_keeps_failure_visible() {
   local home dir queue out rc=0
   home=$(new_home long-failed-late)
-  dir="$home/state/.deferred/failed"
   FM_DEFERRED_CHECK_PAYLOAD_MAX=100 FM_HOME="$home" "$DEFER" start failed -- \
     bash -c 'sleep 2; head -c 1000 /dev/zero | tr "\\0" x; exit 27' >/dev/null
+  dir=$(current_generation "$home" failed)
   FM_HOME="$home" "$DEFER" collect failed >/dev/null || rc=$?
   [ "$rc" -eq 3 ] || fail "expected pending, got $rc"
   wait_for_wake "$home"
@@ -130,8 +138,9 @@ test_a_nonzero_inline_result_reports_failure() {
 test_a_missing_output_is_reported_as_failure() {
   local home dir out rc=0
   home=$(new_home missing-output)
-  dir="$home/state/.deferred/missing"
-  mkdir -p "$dir"
+  mkdir -p "$home/state/.deferred/missing/run-manual"
+  printf 'run-manual\n' > "$home/state/.deferred/missing/current"
+  dir="$home/state/.deferred/missing/run-manual"
   printf '0\n' > "$dir/status"
   : > "$dir/done"
   out=$(FM_HOME="$home" "$DEFER" collect missing) || rc=$?
@@ -153,22 +162,39 @@ test_a_launch_failure_is_not_pending() {
   pass "a launch failure is distinguishable from a genuinely running check"
 }
 
-test_a_stale_delivery_marker_prevents_launch() {
-  local home dir fake_bin rc=0 collect_rc=0
-  home=$(new_home stale-delivery)
-  dir="$home/state/.deferred/stale"
+test_generations_isolate_previous_handoffs() {
+  local home old_dir out queue rc=0
+  home=$(new_home generation-handoffs)
+  FM_DEFERRED_CHECK_HANDOFF_TIMEOUT=10 FM_HOME="$home" "$DEFER" start same -- printf 'OLD RESULT\n' >/dev/null
+  wait_for_done "$home" same
+  old_dir=$(current_generation "$home" same)
+  out=$(FM_HOME="$home" "$DEFER" start same -- bash -c 'sleep 2; printf "NEW RESULT\\n"')
+  assert_contains "$out" 'OLD RESULT' "the next start should carry the prior undelivered result"
+  FM_HOME="$home" "$DEFER" collect same >/dev/null || rc=$?
+  [ "$rc" -eq 3 ] || fail "the new generation should be pending, got $rc"
+  wait_for_wake "$home"
+  queue=$(cat "$home/state/.wake-queue" 2>/dev/null || true)
+  assert_contains "$queue" 'NEW RESULT' "the new generation should deliver its own result"
+  assert_not_contains "$queue" 'OLD RESULT' "the old runner must not cross into the new handoff"
+  [ -d "$old_dir/delivered" ] || fail "the old generation should retain its own delivery claim"
+  pass "each generation owns an isolated handoff"
+}
+
+test_publication_failure_still_wakes() {
+  local home fake_bin queue rc=0
+  home=$(new_home publication-failure)
   fake_bin="$home/fake-bin"
-  mkdir -p "$dir/delivered" "$fake_bin"
-  printf '0\n' > "$dir/status"
-  printf 'old result\n' > "$dir/out"
-  : > "$dir/done"
-  printf '#!/usr/bin/env bash\nexit 1\n' > "$fake_bin/rm"
-  chmod +x "$fake_bin/rm"
-  PATH="$fake_bin:$PATH" FM_HOME="$home" "$DEFER" start stale -- true >/dev/null 2>&1 || rc=$?
-  [ "$rc" -eq 1 ] || fail "a stale run directory that cannot be removed should refuse launch, got $rc"
-  PATH="$fake_bin:$PATH" FM_HOME="$home" "$DEFER" collect stale >/dev/null 2>&1 || collect_rc=$?
-  [ "$collect_rc" -eq 4 ] || fail "the stale result should remain delivered, got $collect_rc"
-  pass "a surviving delivery marker prevents a new run from launching into stale state"
+  mkdir -p "$fake_bin"
+  printf '#!/usr/bin/env bash\ncase "$*" in *out.part*out*) exit 1 ;; esac\nexec /bin/mv "$@"\n' > "$fake_bin/mv"
+  chmod +x "$fake_bin/mv"
+  PATH="$fake_bin:$PATH" FM_HOME="$home" "$DEFER" start broken -- bash -c 'sleep 2; printf "COMMAND RAN\\n"' >/dev/null
+  PATH="$fake_bin:$PATH" FM_HOME="$home" "$DEFER" collect broken >/dev/null || rc=$?
+  [ "$rc" -eq 3 ] || fail "the running check should initially report pending, got $rc"
+  wait_for_wake "$home"
+  queue=$(cat "$home/state/.wake-queue" 2>/dev/null || true)
+  assert_contains "$queue" 'DEFERRED_CHECK_FAILED: broken: runner could not publish its result' \
+    "a publication failure must resolve the pending result by wake"
+  pass "a runner publication failure still delivers a terminal answer"
 }
 
 test_start_does_not_hold_the_callers_stdout() {
@@ -189,8 +215,9 @@ test_start_does_not_hold_the_callers_stdout() {
 test_a_result_left_by_a_killed_runner_is_picked_up_by_the_next_start() {
   local home dir out
   home=$(new_home orphaned-result)
-  dir="$home/state/.deferred/orphan"
-  mkdir -p "$dir"
+  mkdir -p "$home/state/.deferred/orphan/run-orphan"
+  printf 'run-orphan\n' > "$home/state/.deferred/orphan/current"
+  dir="$home/state/.deferred/orphan/run-orphan"
   # A runner that wrote its result and was killed before it could queue its
   # wake: a complete answer with no messenger.
   printf 'ORPHAN: a finding from a run nobody collected\n' > "$dir/out"
@@ -251,7 +278,8 @@ test_a_long_nonzero_result_keeps_failure_visible
 test_a_nonzero_inline_result_reports_failure
 test_a_missing_output_is_reported_as_failure
 test_a_launch_failure_is_not_pending
-test_a_stale_delivery_marker_prevents_launch
+test_generations_isolate_previous_handoffs
+test_publication_failure_still_wakes
 test_start_does_not_hold_the_callers_stdout
 test_a_result_left_by_a_killed_runner_is_picked_up_by_the_next_start
 test_a_second_start_never_runs_two_copies_of_the_same_check

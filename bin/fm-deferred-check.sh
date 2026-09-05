@@ -25,12 +25,13 @@
 #
 # THE HANDOFF. The digest gets first refusal, because a result printed in the
 # digest is one the session already has and a wake is a second turn. So a
-# finished runner does not deliver on its own: it waits until `collect` either
+# Each start creates a fresh generation and publishes it as the check's current
+# generation. A finished runner waits until `collect` either
 # takes the result (a `delivered` claim) or states that it will not (a
-# `released` marker), and only then queues the wake. Both sides then settle it
-# with one atomic mkdir, so a run that completes in the instant between those
-# two steps is delivered once, never twice and never zero times. A runner whose
-# digest never returns at all - a bootstrap killed mid-run - waits
+# `released` marker) in that generation, and only then queues the wake. Both
+# sides settle that generation with one atomic mkdir, so a run that completes
+# in the instant between those two steps is delivered once, never twice and
+# never zero times. A runner whose digest never returns at all waits
 # FM_DEFERRED_CHECK_HANDOFF_TIMEOUT seconds (default 120) and then delivers
 # anyway, late rather than lost.
 #
@@ -54,7 +55,7 @@
 #          the result to the runner to deliver. Exit 4 = finished, but the runner
 #          had already taken delivery, so the result is arriving as a wake. Exit
 #          1 = no runner exists and no result can arrive.
-#        fm-deferred-check.sh run <name> -- <command> [arg...]
+#        fm-deferred-check.sh run <name> <generation> -- <command> [arg...]
 #          The runner body. Started by `start`; not called directly.
 #        fm-deferred-check.sh status <name>
 #          One line: running, finished-undelivered, delivered, or absent. Read
@@ -76,8 +77,9 @@
 # exposure the previous code already had, where the refresh was likewise a
 # background child of a bootstrap that could be killed.
 #
-# State lives in $STATE/.deferred/<name>/ (pid, out, done, released, delivered/)
-# and is machinery: bin/fm-deferred-check.sh is the only thing that writes it.
+# State lives in $STATE/.deferred/<name>/current and run-*/ directories holding
+# pid, status, out, done, released, and delivered/. The current file points to
+# one generation. bin/fm-deferred-check.sh is the only thing that writes it.
 # docs/session-start-deferral.md carries the measurements this was built from,
 # including the two checks that were deliberately NOT deferred and why.
 set -u
@@ -119,6 +121,17 @@ valid_name() {  # <name>
 
 check_dir() {  # <name>
   printf '%s\n' "$DEFERRED_ROOT/$1"
+}
+
+current_dir() {  # <name>
+  local base generation
+  base=$(check_dir "$1")
+  generation=$(cat "$base/current" 2>/dev/null || true)
+  case "$generation" in
+    run-* ) case "$generation" in *[!a-zA-Z0-9.-]*) return 1 ;; esac ;;
+    * ) return 1 ;;
+  esac
+  printf '%s\n' "$base/$generation"
 }
 
 # Claim delivery of a finished run. mkdir is atomic on every filesystem this
@@ -165,7 +178,7 @@ runner_alive() {  # <dir>
 
 cmd_status() {  # <name>
   local dir
-  dir=$(check_dir "$1")
+  dir=$(current_dir "$1") || { echo absent; return 0; }
   if [ -f "$dir/done" ] && [ -d "$dir/delivered" ]; then
     echo delivered
   elif [ -f "$dir/done" ]; then
@@ -178,29 +191,39 @@ cmd_status() {  # <name>
 }
 
 cmd_start() {  # <name> <command> [arg...]
-  local name=$1 dir leftover
+  local name=$1 base dir generation leftover old
   shift
-  dir=$(check_dir "$name")
+  base=$(check_dir "$name")
+  dir=$(current_dir "$name" 2>/dev/null || true)
 
   # A finished run is finished whatever its recorded pid says now: pids are
   # reused, and a stale one that happened to match a live process would
   # otherwise block this check from ever being started again.
-  if [ ! -f "$dir/done" ] && runner_alive "$dir"; then
+  if [ -n "$dir" ] && [ ! -f "$dir/done" ] && runner_alive "$dir"; then
     return 3
   fi
 
   # A finished result nobody took is printed HERE rather than discarded, which
   # is the one case the wake path cannot cover: a runner killed between writing
   # its result and queueing its wake leaves a complete answer and no messenger.
-  if [ -f "$dir/done" ] && [ ! -d "$dir/delivered" ] && claim_delivery "$dir"; then
+  if [ -n "$dir" ] && [ -f "$dir/done" ] && [ ! -d "$dir/delivered" ] && claim_delivery "$dir"; then
     leftover=$(read_result "$name" "$dir")
     [ -z "$leftover" ] || printf '%s\n' "$leftover"
   fi
 
-  rm -rf "$dir" 2>/dev/null || return 1
-  [ ! -e "$dir" ] || return 1
-  mkdir -p "$DEFERRED_ROOT" || return 1
+  mkdir -p "$base" || return 1
+  for old in "$base"/run-*; do
+    [ -d "$old" ] || continue
+    [ "$old" != "$dir" ] || continue
+    if [ -f "$old/done" ] && [ -d "$old/delivered" ] && ! runner_alive "$old"; then
+      rm -rf "$old" 2>/dev/null || true
+    fi
+  done
+  generation="run-$(date +%s%N)-$$"
+  dir="$base/$generation"
   mkdir "$dir" || return 1
+  printf '%s\n' "$generation" > "$base/current.part" || return 1
+  mv "$base/current.part" "$base/current" || return 1
 
   # DETACHED FROM THE CALLER'S STDOUT, AND THIS IS LOAD-BEARING. Session start
   # reads bootstrap through a command substitution, which does not return until
@@ -208,31 +231,58 @@ cmd_start() {  # <name> <command> [arg...]
   # would keep the pipe open and make the digest wait for exactly the work this
   # mechanism exists to stop waiting for - the deferral would silently do
   # nothing. tests/fm-deferred-check.test.sh pins that.
-  ( "$SCRIPT_DIR/fm-deferred-check.sh" run "$name" -- "$@" ) </dev/null >/dev/null 2>&1 &
+  ( "$SCRIPT_DIR/fm-deferred-check.sh" run "$name" "$generation" -- "$@" ) </dev/null >/dev/null 2>&1 &
   printf '%s\n' "$!" > "$dir/pid" || return 1
   return 0
 }
 
-cmd_run() {  # <name> <command> [arg...]
-  local name=$1 dir rc=0 out payload summary
-  shift
-  dir=$(check_dir "$name")
-  [ -d "$dir" ] || mkdir -p "$dir" || return 1
+runner_failure() {  # <name> <dir> <detail>
+  local name=$1 dir=$2 detail=$3 failure payload durable=0
+  failure="DEFERRED_CHECK_FAILED: $name: runner could not publish its result: $detail"
+  if printf '%s\n' "$failure" > "$dir/out.failure.part" 2>/dev/null \
+    && mv "$dir/out.failure.part" "$dir/out" 2>/dev/null \
+    && printf '1\n' > "$dir/status" 2>/dev/null \
+    && : > "$dir/done.part" 2>/dev/null \
+    && mv "$dir/done.part" "$dir/done" 2>/dev/null; then
+    durable=1
+    await_handoff "$dir"
+    claim_delivery "$dir" || return 0
+  fi
+  payload="check: $name: finished after session start: $failure"
+  [ "$durable" -eq 0 ] || payload="$payload (full output: $dir/out)"
+  if ! fm_wake_append check "$name" "$payload"; then
+    [ "$durable" -eq 0 ] || rmdir "$dir/delivered" 2>/dev/null || true
+    return 1
+  fi
+  return 0
+}
+
+cmd_run() {  # <name> <generation> <command> [arg...]
+  local name=$1 generation=$2 dir rc=0 out payload summary
+  shift 2
+  dir="$(check_dir "$name")/$generation"
+  [ -d "$dir" ] || { runner_failure "$name" "$dir" "generation directory is unavailable"; return $?; }
 
   "$@" > "$dir/command.out.part" 2>&1 || rc=$?
-  printf '%s\n' "$rc" > "$dir/status" 2>/dev/null || return 1
+  printf '%s\n' "$rc" > "$dir/status" 2>/dev/null \
+    || { runner_failure "$name" "$dir" "exit status could not be recorded"; return $?; }
   {
     if [ "$rc" -ne 0 ]; then
       printf 'DEFERRED_CHECK_FAILED: %s: command exited with status %s\n' "$name" "$rc"
     fi
     cat "$dir/command.out.part"
-  } > "$dir/out.part" 2>/dev/null || return 1
-  rm "$dir/command.out.part" 2>/dev/null || return 1
-  mv "$dir/out.part" "$dir/out" 2>/dev/null || return 1
+  } > "$dir/out.part" 2>/dev/null \
+    || { runner_failure "$name" "$dir" "result could not be assembled"; return $?; }
+  rm "$dir/command.out.part" 2>/dev/null \
+    || { runner_failure "$name" "$dir" "intermediate output could not be removed"; return $?; }
+  mv "$dir/out.part" "$dir/out" 2>/dev/null \
+    || { runner_failure "$name" "$dir" "result could not be published"; return $?; }
   # The done marker goes down LAST and by rename, so a reader sees either no
   # result or a whole one, never a half-written one it would report as complete.
-  : > "$dir/done.part" 2>/dev/null || return 1
-  mv "$dir/done.part" "$dir/done" 2>/dev/null || return 1
+  : > "$dir/done.part" 2>/dev/null \
+    || { runner_failure "$name" "$dir" "completion marker could not be created"; return $?; }
+  mv "$dir/done.part" "$dir/done" 2>/dev/null \
+    || { runner_failure "$name" "$dir" "completion marker could not be published"; return $?; }
 
   await_handoff "$dir"
   claim_delivery "$dir" || return 0
@@ -256,7 +306,7 @@ cmd_run() {  # <name> <command> [arg...]
 
 cmd_collect() {  # <name> [grace-seconds]
   local dir grace deadline
-  dir=$(check_dir "$1")
+  dir=$(current_dir "$1") || return 1
   grace=${2:-0}
   case "$grace" in ''|*[!0-9]*) grace=0 ;; esac
   # A grace is not the wait this mechanism removed: it is a fraction of a second
@@ -293,8 +343,16 @@ case "$ACTION" in
     cmd_start "$NAME" "$@"
     ;;
   run)
+    [ $# -ge 2 ] || { usage; exit 1; }
+    GENERATION=$1
+    shift
+    case "$GENERATION" in
+      run-* ) case "$GENERATION" in *[!a-zA-Z0-9.-]*) exit 1 ;; esac ;;
+      * ) exit 1 ;;
+    esac
+    if [ "${1:-}" = "--" ]; then shift; fi
     [ $# -ge 1 ] || { usage; exit 1; }
-    cmd_run "$NAME" "$@"
+    cmd_run "$NAME" "$GENERATION" "$@"
     ;;
   collect)
     cmd_collect "$NAME" "${1:-0}"
