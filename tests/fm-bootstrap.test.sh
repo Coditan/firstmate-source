@@ -167,13 +167,19 @@ add_no_origin_projects() {
 # racing the collect call and calling the loser a regression. Bounded in real
 # time, and it uses `command sleep` because these cases replace `sleep` with a
 # simulated clock.
+current_generation() {  # <home> <name>
+  local home=$1 name=$2 generation
+  generation=$(cat "$home/state/.deferred/$name/current" 2>/dev/null || true)
+  [ -z "$generation" ] || printf '%s\n' "$home/state/.deferred/$name/$generation"
+}
+
 append_deferred_fleet_sync_result() {  # <home> <bootstrap-output>
   local home=$1 out=$2 dir waited=0
   case "$out" in
     *"FLEET_SYNC: fleet: pending:"*) ;;
     *) return 0 ;;
   esac
-  dir="$home/state/.deferred/fleet-sync"
+  dir=$(current_generation "$home" fleet-sync)
   while [ ! -f "$dir/done" ] && [ "$waited" -lt 300 ]; do
     command sleep 0.1
     waited=$((waited + 1))
