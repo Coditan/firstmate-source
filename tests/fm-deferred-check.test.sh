@@ -175,6 +175,24 @@ test_a_dead_unfinished_generation_is_reported() {
   pass "a dead unfinished generation receives an explicit terminal result"
 }
 
+test_a_reused_pid_is_reported_as_abandoned() {
+  local home dir out sleeper
+  home=$(new_home reused-pid)
+  dir="$home/state/.deferred/reused/run-abandoned"
+  mkdir -p "$dir"
+  sleep 10 &
+  sleeper=$!
+  printf 'run-abandoned\n' > "$home/state/.deferred/reused/current"
+  printf '%s\n' "$sleeper" > "$dir/pid"
+  printf 'linux-starttime=0\n' > "$dir/pid-identity"
+  out=$(FM_HOME="$home" "$DEFER" start reused -- printf 'fresh result\n')
+  kill "$sleeper" 2>/dev/null || true
+  wait "$sleeper" 2>/dev/null || true
+  assert_contains "$out" 'DEFERRED_CHECK_FAILED: reused: previous runner exited before publishing a result' \
+    "a live reused pid with the wrong incarnation must take the abandoned path"
+  pass "a mismatched runner incarnation is not reported as pending"
+}
+
 test_pid_publication_failure_leaves_no_runner() {
   local home fake_bin marker queue rc=0
   home=$(new_home pid-publication-failure)
@@ -310,6 +328,7 @@ test_a_nonzero_inline_result_reports_failure
 test_a_missing_output_is_reported_as_failure
 test_a_launch_failure_is_not_pending
 test_a_dead_unfinished_generation_is_reported
+test_a_reused_pid_is_reported_as_abandoned
 test_pid_publication_failure_leaves_no_runner
 test_generations_isolate_previous_handoffs
 test_publication_failure_still_wakes

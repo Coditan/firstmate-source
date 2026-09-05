@@ -78,8 +78,9 @@
 # background child of a bootstrap that could be killed.
 #
 # State lives in $STATE/.deferred/<name>/current and run-*/ directories holding
-# pid, status, out, done, released, and delivered/. The current file points to
-# one generation. bin/fm-deferred-check.sh is the only thing that writes it.
+# pid, pid-identity, status, out, done, released, and delivered/. The current
+# file points to one generation. bin/fm-deferred-check.sh is the only thing that
+# writes it.
 # docs/session-start-deferral.md carries the measurements this was built from,
 # including the two checks that were deliberately NOT deferred and why.
 set -u
@@ -170,12 +171,14 @@ await_handoff() {  # <dir>
 }
 
 runner_alive() {  # <dir>
-  local pid
+  local pid recorded current
   pid=$(cat "$1/pid" 2>/dev/null || true)
   case "$pid" in
     ''|*[!0-9]*) return 1 ;;
   esac
-  fm_pid_alive "$pid"
+  recorded=$(cat "$1/pid-identity" 2>/dev/null || true)
+  current=$(fm_pid_incarnation "$pid" 2>/dev/null) || return 1
+  fm_pid_incarnation_matches_record "$current" "$recorded"
 }
 
 cmd_status() {  # <name>
@@ -193,7 +196,7 @@ cmd_status() {  # <name>
 }
 
 cmd_start() {  # <name> <command> [arg...]
-  local name=$1 base dir generation leftover old failure runner_pid
+  local name=$1 base dir generation leftover old failure runner_pid runner_identity
   shift
   base=$(check_dir "$name")
   dir=$(current_dir "$name" 2>/dev/null || true)
@@ -244,7 +247,17 @@ cmd_start() {  # <name> <command> [arg...]
   # nothing. tests/fm-deferred-check.test.sh pins that.
   ( "$SCRIPT_DIR/fm-deferred-check.sh" run "$name" "$generation" -- "$@" ) </dev/null >/dev/null 2>&1 &
   runner_pid=$!
+  if ! runner_identity=$(fm_pid_incarnation "$runner_pid" 2>/dev/null); then
+    kill "$runner_pid" 2>/dev/null || true
+    wait "$runner_pid" 2>/dev/null || true
+    return 1
+  fi
   if ! printf '%s\n' "$runner_pid" > "$dir/pid"; then
+    kill "$runner_pid" 2>/dev/null || true
+    wait "$runner_pid" 2>/dev/null || true
+    return 1
+  fi
+  if ! printf '%s\n' "$runner_identity" > "$dir/pid-identity"; then
     kill "$runner_pid" 2>/dev/null || true
     wait "$runner_pid" 2>/dev/null || true
     return 1
