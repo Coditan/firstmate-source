@@ -129,14 +129,12 @@ claim_delivery() {  # <dir>
 }
 
 read_result() {  # <name> <dir>
-  local name=$1 dir=$2 status
+  local name=$1 dir=$2
+  if ! cat "$dir/status" >/dev/null 2>&1; then
+    printf 'DEFERRED_CHECK_FAILED: %s: recorded exit status is unreadable or missing (%s/status)\n' "$name" "$dir"
+  fi
   if ! cat "$dir/out" 2>/dev/null; then
     printf 'DEFERRED_CHECK_FAILED: %s: recorded output is unreadable or missing (%s/out)\n' "$name" "$dir"
-  fi
-  if ! status=$(cat "$dir/status" 2>/dev/null); then
-    printf 'DEFERRED_CHECK_FAILED: %s: recorded exit status is unreadable or missing (%s/status)\n' "$name" "$dir"
-  elif [ "$status" != 0 ]; then
-    printf 'DEFERRED_CHECK_FAILED: %s: command exited with status %s\n' "$name" "$status"
   fi
 }
 
@@ -199,8 +197,10 @@ cmd_start() {  # <name> <command> [arg...]
     [ -z "$leftover" ] || printf '%s\n' "$leftover"
   fi
 
-  rm -rf "$dir" 2>/dev/null || true
-  mkdir -p "$dir" || return 1
+  rm -rf "$dir" 2>/dev/null || return 1
+  [ ! -e "$dir" ] || return 1
+  mkdir -p "$DEFERRED_ROOT" || return 1
+  mkdir "$dir" || return 1
 
   # DETACHED FROM THE CALLER'S STDOUT, AND THIS IS LOAD-BEARING. Session start
   # reads bootstrap through a command substitution, which does not return until
@@ -219,8 +219,15 @@ cmd_run() {  # <name> <command> [arg...]
   dir=$(check_dir "$name")
   [ -d "$dir" ] || mkdir -p "$dir" || return 1
 
-  "$@" > "$dir/out.part" 2>&1 || rc=$?
-  printf '%s\n' "$rc" > "$dir/status" 2>/dev/null || true
+  "$@" > "$dir/command.out.part" 2>&1 || rc=$?
+  printf '%s\n' "$rc" > "$dir/status" 2>/dev/null || return 1
+  {
+    if [ "$rc" -ne 0 ]; then
+      printf 'DEFERRED_CHECK_FAILED: %s: command exited with status %s\n' "$name" "$rc"
+    fi
+    cat "$dir/command.out.part"
+  } > "$dir/out.part" 2>/dev/null || return 1
+  rm "$dir/command.out.part" 2>/dev/null || return 1
   mv "$dir/out.part" "$dir/out" 2>/dev/null || return 1
   # The done marker goes down LAST and by rename, so a reader sees either no
   # result or a whole one, never a half-written one it would report as complete.

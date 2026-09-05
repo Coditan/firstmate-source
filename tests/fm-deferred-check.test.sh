@@ -97,6 +97,24 @@ test_a_nonzero_late_result_reports_failure() {
   pass "a nonzero late result reports failure rather than clean completion"
 }
 
+test_a_long_nonzero_result_keeps_failure_visible() {
+  local home dir queue out rc=0
+  home=$(new_home long-failed-late)
+  dir="$home/state/.deferred/failed"
+  FM_DEFERRED_CHECK_PAYLOAD_MAX=100 FM_HOME="$home" "$DEFER" start failed -- \
+    bash -c 'sleep 2; head -c 1000 /dev/zero | tr "\\0" x; exit 27' >/dev/null
+  FM_HOME="$home" "$DEFER" collect failed >/dev/null || rc=$?
+  [ "$rc" -eq 3 ] || fail "expected pending, got $rc"
+  wait_for_wake "$home"
+  queue=$(cat "$home/state/.wake-queue" 2>/dev/null || true)
+  out=$(cat "$dir/out" 2>/dev/null || true)
+  assert_contains "$queue" 'DEFERRED_CHECK_FAILED: failed: command exited with status 27' \
+    "truncation must not hide failure metadata from the wake"
+  assert_contains "$out" 'DEFERRED_CHECK_FAILED: failed: command exited with status 27' \
+    "the durable result must preserve failure metadata"
+  pass "a long failed result keeps failure metadata in its wake and durable output"
+}
+
 test_a_nonzero_inline_result_reports_failure() {
   local home out rc=0
   home=$(new_home failed-inline)
@@ -133,6 +151,24 @@ test_a_launch_failure_is_not_pending() {
   FM_STATE_OVERRIDE="$home" "$DEFER" collect failed >/dev/null 2>&1 || collect_rc=$?
   [ "$collect_rc" -eq 1 ] || fail "a collector with no runner should report failure (1), not pending; got $collect_rc"
   pass "a launch failure is distinguishable from a genuinely running check"
+}
+
+test_a_stale_delivery_marker_prevents_launch() {
+  local home dir fake_bin rc=0 collect_rc=0
+  home=$(new_home stale-delivery)
+  dir="$home/state/.deferred/stale"
+  fake_bin="$home/fake-bin"
+  mkdir -p "$dir/delivered" "$fake_bin"
+  printf '0\n' > "$dir/status"
+  printf 'old result\n' > "$dir/out"
+  : > "$dir/done"
+  printf '#!/usr/bin/env bash\nexit 1\n' > "$fake_bin/rm"
+  chmod +x "$fake_bin/rm"
+  PATH="$fake_bin:$PATH" FM_HOME="$home" "$DEFER" start stale -- true >/dev/null 2>&1 || rc=$?
+  [ "$rc" -eq 1 ] || fail "a stale run directory that cannot be removed should refuse launch, got $rc"
+  PATH="$fake_bin:$PATH" FM_HOME="$home" "$DEFER" collect stale >/dev/null 2>&1 || collect_rc=$?
+  [ "$collect_rc" -eq 4 ] || fail "the stale result should remain delivered, got $collect_rc"
+  pass "a surviving delivery marker prevents a new run from launching into stale state"
 }
 
 test_start_does_not_hold_the_callers_stdout() {
@@ -211,9 +247,11 @@ test_a_finished_run_is_collected_into_the_digest
 test_a_pending_run_reports_pending_and_delivers_by_wake
 test_a_clean_late_result_still_wakes
 test_a_nonzero_late_result_reports_failure
+test_a_long_nonzero_result_keeps_failure_visible
 test_a_nonzero_inline_result_reports_failure
 test_a_missing_output_is_reported_as_failure
 test_a_launch_failure_is_not_pending
+test_a_stale_delivery_marker_prevents_launch
 test_start_does_not_hold_the_callers_stdout
 test_a_result_left_by_a_killed_runner_is_picked_up_by_the_next_start
 test_a_second_start_never_runs_two_copies_of_the_same_check
