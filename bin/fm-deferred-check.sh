@@ -52,7 +52,8 @@
 #          its caller may spend a second here rather than a wake there. Exit 0 = finished, and its complete output (possibly empty) was
 #          printed here. Exit 3 = still running, and this call has just released
 #          the result to the runner to deliver. Exit 4 = finished, but the runner
-#          had already taken delivery, so the result is arriving as a wake.
+#          had already taken delivery, so the result is arriving as a wake. Exit
+#          1 = no runner exists and no result can arrive.
 #        fm-deferred-check.sh run <name> -- <command> [arg...]
 #          The runner body. Started by `start`; not called directly.
 #        fm-deferred-check.sh status <name>
@@ -127,6 +128,18 @@ claim_delivery() {  # <dir>
   mkdir "$1/delivered" 2>/dev/null
 }
 
+read_result() {  # <name> <dir>
+  local name=$1 dir=$2 status
+  if ! cat "$dir/out" 2>/dev/null; then
+    printf 'DEFERRED_CHECK_FAILED: %s: recorded output is unreadable or missing (%s/out)\n' "$name" "$dir"
+  fi
+  if ! status=$(cat "$dir/status" 2>/dev/null); then
+    printf 'DEFERRED_CHECK_FAILED: %s: recorded exit status is unreadable or missing (%s/status)\n' "$name" "$dir"
+  elif [ "$status" != 0 ]; then
+    printf 'DEFERRED_CHECK_FAILED: %s: command exited with status %s\n' "$name" "$status"
+  fi
+}
+
 # Give the digest first refusal on a finished result: it prints into the turn
 # the session is already reading, where a wake costs a second one. Returns as
 # soon as the digest has either taken the result or said it will not, and after
@@ -182,7 +195,7 @@ cmd_start() {  # <name> <command> [arg...]
   # is the one case the wake path cannot cover: a runner killed between writing
   # its result and queueing its wake leaves a complete answer and no messenger.
   if [ -f "$dir/done" ] && [ ! -d "$dir/delivered" ] && claim_delivery "$dir"; then
-    leftover=$(cat "$dir/out" 2>/dev/null || true)
+    leftover=$(read_result "$name" "$dir")
     [ -z "$leftover" ] || printf '%s\n' "$leftover"
   fi
 
@@ -217,7 +230,7 @@ cmd_run() {  # <name> <command> [arg...]
   await_handoff "$dir"
   claim_delivery "$dir" || return 0
 
-  out=$(cat "$dir/out" 2>/dev/null || true)
+  out=$(read_result "$name" "$dir")
   if [ -z "$out" ]; then
     summary="completed with nothing to report"
   else
@@ -250,15 +263,13 @@ cmd_collect() {  # <name> [grace-seconds]
     done
   fi
   if [ ! -f "$dir/done" ]; then
-    # Not finished. Release the result to the runner and say so. A name that was
-    # never started reaches this branch too - a launch that failed, or a caller
-    # that collected something it never started - and is reported as pending
-    # rather than as an all-clear, because this call has no result either way.
+    runner_alive "$dir" || return 1
+    # Not finished. Release the result to the runner and say so.
     [ -d "$dir" ] && : > "$dir/released" 2>/dev/null
     return 3
   fi
   claim_delivery "$dir" || return 4
-  cat "$dir/out" 2>/dev/null || true
+  read_result "$1" "$dir"
   return 0
 }
 

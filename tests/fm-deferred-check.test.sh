@@ -82,6 +82,59 @@ test_a_clean_late_result_still_wakes() {
   pass "a clean run that outlives the digest still says so"
 }
 
+test_a_nonzero_late_result_reports_failure() {
+  local home queue rc=0
+  home=$(new_home failed-late)
+  FM_HOME="$home" "$DEFER" start failed -- bash -c 'sleep 2; exit 23' >/dev/null
+  FM_HOME="$home" "$DEFER" collect failed >/dev/null || rc=$?
+  [ "$rc" -eq 3 ] || fail "expected pending, got $rc"
+  wait_for_wake "$home"
+  queue=$(cat "$home/state/.wake-queue" 2>/dev/null || true)
+  assert_contains "$queue" 'DEFERRED_CHECK_FAILED: failed: command exited with status 23' \
+    "a nonzero command with no output must report its exit status"
+  assert_not_contains "$queue" 'completed with nothing to report' \
+    "a nonzero command must not be reported as clean"
+  pass "a nonzero late result reports failure rather than clean completion"
+}
+
+test_a_nonzero_inline_result_reports_failure() {
+  local home out rc=0
+  home=$(new_home failed-inline)
+  FM_HOME="$home" "$DEFER" start failed -- bash -c 'exit 19' >/dev/null
+  wait_for_done "$home" failed
+  out=$(FM_HOME="$home" "$DEFER" collect failed) || rc=$?
+  [ "$rc" -eq 0 ] || fail "collect of a finished failed run should exit 0, got $rc"
+  assert_contains "$out" 'DEFERRED_CHECK_FAILED: failed: command exited with status 19' \
+    "inline collection must report a nonzero exit status"
+  pass "a nonzero result collected inline reports failure"
+}
+
+test_a_missing_output_is_reported_as_failure() {
+  local home dir out rc=0
+  home=$(new_home missing-output)
+  dir="$home/state/.deferred/missing"
+  mkdir -p "$dir"
+  printf '0\n' > "$dir/status"
+  : > "$dir/done"
+  out=$(FM_HOME="$home" "$DEFER" collect missing) || rc=$?
+  [ "$rc" -eq 0 ] || fail "collect of a recorded result should exit 0, got $rc"
+  assert_contains "$out" 'DEFERRED_CHECK_FAILED: missing: recorded output is unreadable or missing' \
+    "a missing result file must be explicit"
+  pass "a missing recorded output is reported as failure"
+}
+
+test_a_launch_failure_is_not_pending() {
+  local home rc=0 collect_rc=0
+  home="$TMP_ROOT/launch-failure/state-file"
+  mkdir -p "$(dirname "$home")"
+  : > "$home"
+  FM_STATE_OVERRIDE="$home" "$DEFER" start failed -- true >/dev/null 2>&1 || rc=$?
+  [ "$rc" -eq 1 ] || fail "a launch whose state cannot be created should exit 1, got $rc"
+  FM_STATE_OVERRIDE="$home" "$DEFER" collect failed >/dev/null 2>&1 || collect_rc=$?
+  [ "$collect_rc" -eq 1 ] || fail "a collector with no runner should report failure (1), not pending; got $collect_rc"
+  pass "a launch failure is distinguishable from a genuinely running check"
+}
+
 test_start_does_not_hold_the_callers_stdout() {
   local home started finished
   home=$(new_home detached-stdout)
@@ -121,12 +174,12 @@ test_a_second_start_never_runs_two_copies_of_the_same_check() {
   pass "a check already running is not started a second time"
 }
 
-test_collect_of_a_check_that_never_started_is_pending_not_clean() {
+test_collect_of_a_check_that_never_started_is_failure_not_pending() {
   local home rc=0
   home=$(new_home never-started)
   FM_HOME="$home" "$DEFER" collect absent >/dev/null || rc=$?
-  [ "$rc" -eq 3 ] || fail "collect with no run should report pending (3), never a silent 0; got $rc"
-  pass "a check that never started reports pending rather than an all-clear"
+  [ "$rc" -eq 1 ] || fail "collect with no run should report failure (1), never pending or clean; got $rc"
+  pass "a check that never started reports failure rather than pending"
 }
 
 test_an_unsafe_check_name_is_refused() {
@@ -157,9 +210,13 @@ test_a_finished_run_is_delivered_once_under_a_racing_collect() {
 test_a_finished_run_is_collected_into_the_digest
 test_a_pending_run_reports_pending_and_delivers_by_wake
 test_a_clean_late_result_still_wakes
+test_a_nonzero_late_result_reports_failure
+test_a_nonzero_inline_result_reports_failure
+test_a_missing_output_is_reported_as_failure
+test_a_launch_failure_is_not_pending
 test_start_does_not_hold_the_callers_stdout
 test_a_result_left_by_a_killed_runner_is_picked_up_by_the_next_start
 test_a_second_start_never_runs_two_copies_of_the_same_check
-test_collect_of_a_check_that_never_started_is_pending_not_clean
+test_collect_of_a_check_that_never_started_is_failure_not_pending
 test_an_unsafe_check_name_is_refused
 test_a_finished_run_is_delivered_once_under_a_racing_collect

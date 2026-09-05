@@ -294,21 +294,28 @@ fleet_sync() {
 # wording bootstrap prints, because a pending line has to name what this digest
 # does NOT yet know rather than leave the reader with an absent line to read as
 # an all-clear.
-deferred_start() {  # <name> <command> [arg...]
-  local name=$1 out rc=0
-  shift
+DEFERRED_START_FAILURES=
+deferred_start() {  # <name> <launch-failure-line> <command> [arg...]
+  local name=$1 failure=$2 out rc=0
+  shift 2
   out=$("$SCRIPT_DIR/fm-deferred-check.sh" start "$name" -- "$@" 2>/dev/null) || rc=$?
   # A result the previous run left undelivered is printed by `start`; it is this
   # run's digest that carries it, so relay it verbatim.
   [ -z "$out" ] || printf '%s\n' "$out"
-  return "$rc"
+  if [ "$rc" -eq 1 ]; then
+    printf '%s\n' "$failure"
+    DEFERRED_START_FAILURES="$DEFERRED_START_FAILURES $name "
+  fi
+  return 0
 }
 
-deferred_collect() {  # <name> <pending-line> <arriving-by-wake-line> [grace-seconds]
-  local name=$1 pending=$2 late=$3 grace=${4:-0} out rc=0
+deferred_collect() {  # <name> <pending-line> <arriving-by-wake-line> <failure-line> [grace-seconds]
+  local name=$1 pending=$2 late=$3 failure=$4 grace=${5:-0} out rc=0
+  case "$DEFERRED_START_FAILURES" in *" $name "*) return 0 ;; esac
   out=$("$SCRIPT_DIR/fm-deferred-check.sh" collect "$name" "$grace" 2>/dev/null) || rc=$?
   case "$rc" in
     0) [ -z "$out" ] || printf '%s\n' "$out" ;;
+    1) printf '%s\n' "$failure" ;;
     4) printf '%s\n' "$late" ;;
     *) printf '%s\n' "$pending" ;;
   esac
@@ -1466,7 +1473,9 @@ if [ "${FM_BOOTSTRAP_DETECT_ONLY:-0}" != 1 ]; then
   # step in a session start and depends on nothing else bootstrap does, so it
   # runs alongside the rest of this script instead of in front of it. It stays
   # after the PR-check migration, which is still the first mutating sweep.
-  deferred_start fleet-sync "$SCRIPT_DIR/fm-bootstrap.sh" __deferred-run fleet-sync || true
+  deferred_start fleet-sync \
+    "FLEET_SYNC: fleet: launch failed: the project-clone refresh could not be started, so nothing will report its result" \
+    "$SCRIPT_DIR/fm-bootstrap.sh" __deferred-run fleet-sync
 fi
 
 if [ "$BACKEND_VALID" -eq 0 ]; then
@@ -1662,7 +1671,9 @@ if [ "${FM_BOOTSTRAP_DETECT_ONLY:-0}" != 1 ]; then
   # usually a cadence no-op that finishes in milliseconds and is collected
   # inline; the run that actually reaches the registry is the one this keeps off
   # the critical path.
-  deferred_start axi-suite "$SCRIPT_DIR/fm-axi-suite.sh" --no-shadow || true
+  deferred_start axi-suite \
+    "AXI_SUITE_FAILED: the suite currency check could not be started, so nothing will report its result" \
+    "$SCRIPT_DIR/fm-axi-suite.sh" --no-shadow
   # The suite may seed this home's own copies into $FM_HOME/.local/axi; drop the
   # cached lookups so the sweeps below resolve the vessel copy rather than the
   # external one this shell already hashed. While a seeding run is still going,
@@ -1686,13 +1697,15 @@ if [ "${FM_BOOTSTRAP_DETECT_ONLY:-0}" != 1 ]; then
   # and delivers its result as a check wake when it finishes.
   deferred_collect fleet-sync \
     "FLEET_SYNC: fleet: pending: the project-clone refresh is still running, so this digest does not yet say whether any clone is stuck, behind, or unreachable; its result arrives as a check wake" \
-    "FLEET_SYNC: fleet: pending: the project-clone refresh finished while this digest was composed, so its result arrives as a check wake rather than printed here"
+    "FLEET_SYNC: fleet: pending: the project-clone refresh finished while this digest was composed, so its result arrives as a check wake rather than printed here" \
+    "FLEET_SYNC: fleet: launch failed: the project-clone refresh could not be started, so nothing will report its result"
   # The suite's own cadence makes this a millisecond no-op on all but one
   # session a day, so it is worth a second here rather than a wake there; the
   # day it does reach the registry, it goes pending like anything else.
   deferred_collect axi-suite \
     "AXI_SUITE_PENDING: the suite currency check is still running, so this digest does not yet say whether a vessel copy is outdated or stuck; its result arrives as a check wake" \
     "AXI_SUITE_PENDING: the suite currency check finished while this digest was composed, so its result arrives as a check wake rather than printed here" \
+    "AXI_SUITE_FAILED: the suite currency check could not be started, so nothing will report its result" \
     "${FM_BOOTSTRAP_AXI_SUITE_GRACE:-1}"
 else
   if [ "${FM_TEST_SKIP_WATCHER_SERVICE:-0}" != 1 ]; then
