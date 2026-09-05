@@ -663,7 +663,7 @@ One fact from that record belongs here rather than only there, because this is w
 
 ### AXI-suite self-update
 
-Locked bootstrap runs `bin/fm-axi-suite.sh` at most once per `FM_AXI_SUITE_CHECK_INTERVAL` for the configured AXI commands.
+Locked bootstrap reports shadowing synchronously, then starts the AXI-suite currency check behind session start; the currency half reaches the registry at most once per `FM_AXI_SUITE_CHECK_INTERVAL` for the configured AXI commands.
 Each vessel derives its npm prefix as `$FM_HOME/.local/axi` without configuration, so different operational homes never share the updater's write destination.
 Firstmate entrypoints put `$FM_HOME/.local/axi/bin` first on `PATH`, and `bin/fm-spawn.sh` exports the owning vessel's bin first for every crewmate while a secondmate launch receives the secondmate home's bin first.
 The recommended primary launch commands also prepend that directory before the harness starts, so a bare AXI command resolves the vessel copy whenever it exists and uses an inherited external installation only as the pre-cutover fallback.
@@ -700,11 +700,11 @@ The marker records the attempt and not its outcome: a home that could not seed e
 Hook setup for `gh-axi`, `chrome-devtools-axi`, and `lavish-axi` is the one part of the suite that the prefix cannot isolate: `<tool> setup hooks` writes the user-global harness surfaces (`~/.claude/settings.json`, `~/.codex/`, `~/.config/opencode/plugins/`) that every vessel on the host shares.
 The updater and the printed install commands therefore invoke the tool by name with the vessel bin directory first on `PATH`, so the installer records the portable command name rather than one home's private path and every vessel converges on identical content.
 Removing a vessel home cannot break another home's hook wiring as a result, but the wiring itself stays shared: the last vessel to run hook setup owns the version of that shared config on disk.
-`FM_AXI_SUITE_NETWORK_TIMEOUT` bounds the suite's steady-state registry, update, and hook work, `FM_AXI_SUITE_PROBE_TIMEOUT` separately bounds its cumulative local version probing so a hung suite binary cannot wedge session start, `FM_AXI_SUITE_SEED_TIMEOUT` separately bounds the one-time installs that give a fresh vessel its own copies, and `FM_AXI_SUITE_DISABLE` is reserved for tests or emergency diagnosis.
+`FM_AXI_SUITE_NETWORK_TIMEOUT` bounds the suite's steady-state registry, update, and hook work, `FM_AXI_SUITE_PROBE_TIMEOUT` separately bounds its cumulative local version probing so a hung suite binary cannot strand the deferred check, `FM_AXI_SUITE_SEED_TIMEOUT` separately bounds the one-time installs that give a fresh vessel its own copies, and `FM_AXI_SUITE_DISABLE` is reserved for tests or emergency diagnosis.
 Each budget is charged only for the time its own calls spend, so no kind of work can exhaust another's: a first cutover installs the whole suite at once and would otherwise consume the tight steady-state network budget and report a healthy vessel as stuck.
 An install that creates the vessel's copy is charged to the seeding budget and an install that replaces an existing vessel copy is an ordinary update, so the distinction never depends on which code path reached it.
 Because seeding is much slower than a steady-state check, it reports on standard error which tool is installing and how much of the seeding budget remains, then closes with how many installs it attempted and how much of the budget it used.
-That output streams live when a captain runs `bin/fm-bootstrap.sh` in a terminal; `bin/fm-session-start.sh` captures bootstrap output for the digest, so under automated session start the same lines arrive together once bootstrap returns, and the summary is what makes the pass interpretable after the fact.
+That output is captured with the deferred currency result whether bootstrap was started directly or by `bin/fm-session-start.sh`; it is printed in bootstrap output, and therefore the session-start digest, if ready at collection time, otherwise it arrives through the check wake, and the summary makes the pass interpretable after the fact.
 A seed that genuinely stalls, or that is never attempted because the seeding budget is already spent, is still reported as `AXI_SUITE_STUCK:` naming which of the two happened, identically from both install paths; the external copy remains the fallback and the next cadence window retries.
 
 ### Firstmate update-source check
@@ -725,11 +725,11 @@ An absent file changes nothing for an unconfigured home, but a present unusable 
 Bootstrap also reports a `TANGLE:` line when `FM_ROOT` is on a named non-default branch; follow the printed checkout remediation rather than treating it as an installable tool problem.
 In a read-only session that did not get the fleet lock, the same line is advisory and omits the checkout command.
 When `FM_ROOT` sits on its default branch instead, bootstrap reports a `SELF_DRIFT:` line if that branch and its own origin disagree; [architecture.md](architecture.md#self-updates-stay-safe) owns the detection and remediation, and `FM_SELF_DRIFT_BOOTSTRAP_TIMEOUT` below bounds its fetch.
-The locked session-start bootstrap step also runs a best-effort project clone refresh through `fm-fleet-sync.sh`.
-It emits `FLEET_SYNC:` for skipped refreshes that may matter, recovered self-heals, and `STUCK:` alarms.
+The locked session-start bootstrap step also starts a best-effort project clone refresh through `fm-fleet-sync.sh`, without waiting for it before the first turn.
+It emits `FLEET_SYNC:` for skipped refreshes that may matter, recovered self-heals, and `STUCK:` alarms; a digest composed before it finishes instead carries an explicit pending line, and the complete result then arrives as a `check: fleet-sync:` wake.
 A refresh that could not read this home's `data/projects.md` or list its projects dir refuses as `FLEET_SYNC: fleet: STUCK:` with the named cause rather than reporting that the home has no projects, and a refresh that stopped for any reason is followed by `FLEET_SYNC: fleet: refresh failed (exit <rc>)`; the [bootstrap-diagnostics skill](../.agents/skills/bootstrap-diagnostics/SKILL.md) owns each line's remediation.
 Normal completed runs keep local-only and no-origin skips silent.
-If bootstrap kills a timed-out refresh, it replays any completed `fm-fleet-sync.sh` output before the aggregate timeout skip so no finished result is lost.
+If the deferred bootstrap runner kills a timed-out refresh, it preserves any completed `fm-fleet-sync.sh` output before the aggregate timeout skip so the digest or wake can deliver every finished result.
 A killed refresh (or a teardown process kill) can leave an orphaned `.git/packed-refs.lock` in a clone, which makes the next refresh's fetch fail with Git's `Unable to create '...packed-refs.lock': File exists`.
 On that signature only, `fm-fleet-sync.sh` retries the fetch with a bounded wait for the lock to self-clear, then removes the lock and retries once more only when it can prove the lock stale, exactly like the `fm-teardown.sh` `index.lock` recovery.
 It never removes a live lock, leaves any other failure shape untouched, and prints every wait, retry, and removal to stderr plus a one-line `recovered:` summary to stdout on success so that this session-start relay still surfaces the recovery.
