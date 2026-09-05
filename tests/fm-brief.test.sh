@@ -125,18 +125,19 @@ test_no_mistakes_dod_wording() {
 # steer to clear. Every ship brief now answers that in the same breath as the rule
 # (docs/codex-sandbox-unavailable.md).
 test_ship_isolation_rule_permits_running_the_check_unsandboxed() {
-  local home id brief
+  local home id_proj id brief
   home="$TMP_ROOT/isolation-sandbox-home"
   write_registry "$home"
-  for id in brief-isolation-nm-a9 brief-isolation-direct-a9; do
-    FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" no-registry-proj >/dev/null 2>&1
+  for id_proj in "brief-isolation-nm-a9:no-registry-proj" "brief-isolation-direct-a9:direct-proj" "brief-isolation-local-a9:local-proj"; do
+    id=${id_proj%%:*}
+    FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" "${id_proj#*:}" >/dev/null 2>&1
     brief="$home/data/$id/brief.md"
     assert_grep "forbids SKIPPING the isolation check; it never forbids running it outside a sandbox" "$brief" \
       "$id: ship brief does not say the stop rule bans skipping the check rather than running it unsandboxed"
     assert_grep "run the check unsandboxed - that is the sanctioned path here, not a blocker to report" "$brief" \
       "$id: ship brief does not name unsandboxed execution as the sanctioned path on such a host"
   done
-  pass "fm-brief.sh: ship briefs say the isolation stop rule bans skipping, not running unsandboxed"
+  pass "fm-brief.sh: every ship mode's brief says the isolation stop rule bans skipping, not running unsandboxed"
 }
 
 test_ship_project_memory_wording() {

@@ -179,7 +179,8 @@ make_seeded_secondmate_home() {
 # starts" instead of quietly meaning "on whatever host CI happens to run on" - the
 # machine this was written on fails that probe, and an unpinned suite would have
 # read its degraded launch line as the shipped one. A case that wants the other
-# host shape exports FM_CODEX_SANDBOX_PROBE around its own call.
+# host shape exports FM_CODEX_SANDBOX_PROBE around its own call; a case that wants
+# the real probe taken against its own fake uname/unshare exports it empty.
 run_spawn() {
   local home=$1 wt=$2 fakebin=$3 launchlog=$4
   shift 4
@@ -188,7 +189,7 @@ run_spawn() {
     FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
     FM_PROJECTS_OVERRIDE="$home/projects" FM_CONFIG_OVERRIDE="$home/config" \
     FM_SPAWN_NO_GUARD=1 FM_FAKE_PANE_PATH="$wt" TMUX="fake,1,0" \
-    FM_CODEX_SANDBOX_PROBE="${FM_CODEX_SANDBOX_PROBE:-yes}" \
+    FM_CODEX_SANDBOX_PROBE="${FM_CODEX_SANDBOX_PROBE-yes}" \
     FM_FAKE_LAUNCH_LOG="$launchlog" GROK_HOME="$home/grok-home" PATH="$fakebin:$PATH" \
     "$SPAWN" "$@" 2>&1
 }
@@ -1241,6 +1242,35 @@ test_codex_unreadable_sandbox_probe_keeps_the_sandbox() {
   pass "a sandbox probe that could not be taken keeps the sandbox and says it could not be taken"
 }
 
+# Darwin has no unshare(1) and Codex sandboxes there through Seatbelt, so the user
+# namespace probe does not apply: a Mac keeps the shipped sandbox with no probe taken
+# and no notice, rather than announcing an unreadable probe on every spawn. The fake
+# unshare here refuses, so a Linux reading of the same host would degrade - which is
+# what proves the Darwin branch, not the pin, produced the shipped launch.
+test_codex_darwin_host_keeps_the_sandbox_without_a_probe_or_a_notice() {
+  local rec id out status launch
+  id=profile-codex-sandbox-darwin-z43
+  rec=$(make_spawn_case profile-codex-sandbox-darwin codex "$id")
+  read_case_record "$rec"
+  printf '#!/bin/sh\necho Darwin\n' > "$FAKEBIN_DIR/uname"
+  printf '#!/bin/sh\nexit 1\n' > "$FAKEBIN_DIR/unshare"
+  chmod +x "$FAKEBIN_DIR/uname" "$FAKEBIN_DIR/unshare"
+
+  out=$(FM_CODEX_SANDBOX_PROBE= run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR")
+  status=$?
+  expect_code 0 "$status" "codex spawn on a Darwin host should succeed"
+  launch=$(cat "$LAUNCH_LOG")
+  assert_contains "$launch" "-c 'sandbox_mode=\"workspace-write\"'" \
+    "a Darwin host did not keep the shipped workspace-write sandbox"
+  assert_not_contains "$launch" 'danger-full-access' \
+    "a Darwin host was degraded on a Linux-only probe it never needed"
+  assert_not_contains "$out" 'could not test whether this host can start a sandbox' \
+    "a Darwin host announced an unreadable probe that does not apply to it"
+  assert_not_contains "$out" 'cannot start a sandbox' \
+    "a Darwin host announced a degradation it did not take"
+  pass "a Darwin host keeps workspace-write with no probe taken and no notice"
+}
+
 test_grok_threads_model_and_reasoning_effort() {
   local rec id out status launch
   id=profile-grok-z5
@@ -1456,6 +1486,7 @@ test_tracked_codex_profile_leaves_launch_grants_to_the_launch_line
 test_codex_sandboxable_host_keeps_the_shipped_workspace_write
 test_codex_unsandboxable_host_launches_unsandboxed_and_says_so
 test_codex_unreadable_sandbox_probe_keeps_the_sandbox
+test_codex_darwin_host_keeps_the_sandbox_without_a_probe_or_a_notice
 test_grok_threads_model_and_reasoning_effort
 test_grok_omits_invalid_max_reasoning_effort
 test_grok_omits_invalid_xhigh_reasoning_effort

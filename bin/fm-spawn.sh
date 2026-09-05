@@ -758,24 +758,34 @@ CODEX_CREW_NETWORK_FLAG='sandbox_workspace_write.network_access=true'
 # everyone. The degradation is a per-launch override on a host that fails the probe,
 # and nothing else changes: approval_policy and approvals_reviewer stay as configured.
 #
-# A probe that cannot be taken - no unshare(1) on the host - is not a failure: it
-# renders as unreadable, keeps the shipped sandbox, and says so, because a reading
+# A probe that cannot be taken - no unshare(1) on a Linux host - is not a failure:
+# it renders as unreadable, keeps the shipped sandbox, and says so, because a reading
 # nobody could take must never silently buy a weaker launch.
+#
+# The question does not apply on Darwin. Codex sandboxes there through Seatbelt and
+# never needs a user namespace, and macOS ships no unshare(1), so taking the probe
+# would render every Mac as unreadable and announce it on every spawn - a permanent
+# false alarm that trains people to ignore the real one. A Darwin host is therefore
+# sandbox-capable without a probe and without a notice.
 CODEX_SANDBOX_PROBE_CACHE=
 CODEX_SANDBOX_NOTICE_SENT=
 
 # Sets CODEX_SANDBOX_PROBE to yes (a sandbox starts here), no (it does not), or
-# unknown (the probe could not be taken). It assigns rather than prints so its cache
-# and the one-shot notice below survive: a command substitution runs in a subshell,
-# where a cached result and a "said it once" flag would both be discarded, and the
-# notice would then repeat on every call.
+# unknown (the probe could not be taken). The cache and the one-shot flag are plain
+# shell state, and the sole caller, codex_config_flags_for_harness, is itself run
+# inside a command substitution, so both live only for that subshell. The probe
+# runs once and the notice prints once per spawn because there is exactly one call
+# per spawn, not because this state outlives it; a second call site would take the
+# probe again and repeat the notice.
 CODEX_SANDBOX_PROBE=
 codex_host_sandbox_probe() {
   if [ -z "$CODEX_SANDBOX_PROBE_CACHE" ]; then
     case "${FM_CODEX_SANDBOX_PROBE:-}" in
       yes|no|unknown) CODEX_SANDBOX_PROBE_CACHE=$FM_CODEX_SANDBOX_PROBE ;;
       "")
-        if ! command -v unshare >/dev/null 2>&1; then
+        if [ "$(uname)" = Darwin ]; then
+          CODEX_SANDBOX_PROBE_CACHE=yes
+        elif ! command -v unshare >/dev/null 2>&1; then
           CODEX_SANDBOX_PROBE_CACHE=unknown
         elif unshare --user --map-root-user true >/dev/null 2>&1; then
           CODEX_SANDBOX_PROBE_CACHE=yes
@@ -793,8 +803,8 @@ codex_host_sandbox_probe() {
 }
 
 # The sandbox_mode this launch gets, announced once when it is not the shipped one,
-# so a degraded host is never a silent downgrade. Sets CODEX_LAUNCH_SANDBOX_MODE,
-# for the same subshell reason as the probe above.
+# so a degraded host is never a silent downgrade. Sets CODEX_LAUNCH_SANDBOX_MODE so
+# the notice on stderr is never captured alongside a printed result.
 CODEX_LAUNCH_SANDBOX_MODE=
 codex_launch_sandbox_mode() {  # <configured-mode>
   local configured=$1

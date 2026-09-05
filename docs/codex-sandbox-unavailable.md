@@ -47,7 +47,10 @@ The host restriction itself stays as it is; the captain ruled on 2026-09-05 that
 | --- | --- | --- |
 | a sandbox starts | the shipped `workspace-write` | no |
 | a sandbox does not start | `danger-full-access` | yes, once on stderr |
-| the probe could not be taken (no `unshare(1)`) | the shipped `workspace-write` | yes, once on stderr |
+| the probe could not be taken (a Linux host with no `unshare(1)`) | the shipped `workspace-write` | yes, once on stderr |
+| the host is Darwin (no probe taken) | the shipped `workspace-write` | no |
+
+On Darwin the question does not apply: Codex sandboxes there through Seatbelt and never needs a user namespace, and macOS ships no `unshare(1)`, so taking the probe would announce an unreadable reading on every spawn of every Mac - a permanent false alarm that trains people to ignore the real one.
 
 `danger-full-access` is level with how this fleet's Claude workers already launch, and is the posture the captain ruled on for this host.
 `approval_policy` and `approvals_reviewer` are not host-conditional and are passed exactly as configured in either case.
@@ -92,8 +95,9 @@ $ ls /tmp/tmp.5YwqPt8BoL
 
 ## Coverage
 
-- `tests/fm-spawn-dispatch-profile.test.sh` pins the launch line for all three probe results, including the host whose sandbox works keeping `workspace-write` and the tracked profile staying untouched.
+- `tests/fm-spawn-dispatch-profile.test.sh` pins the launch line for all three probe results and for a Darwin host, including the host whose sandbox works keeping `workspace-write` and the tracked profile staying untouched.
   Every case in that suite pins the probe, so its `workspace-write` expectations mean "on a host whose sandbox starts" rather than "on whatever host CI ran on".
+  `tests/fm-secondmate-harness.test.sh` pins it the same way, because the degradation is not kind-conditional and a secondmate launch degrades exactly as a crewmate launch does.
 - `tests/fm-codex-sandbox-walls-live-e2e.test.sh` asks a real Codex on this host whether the composed mode actually clears both walls.
   It is opt-in (`FM_CODEX_SANDBOX_LIVE_E2E=1`) because it costs a model call, and it skips on a host that can sandbox, which meets neither wall.
 - `tests/fm-brief.test.sh` pins the sentence the ship brief carries.
