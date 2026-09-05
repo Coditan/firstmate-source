@@ -1256,7 +1256,7 @@ test_codex_darwin_host_keeps_the_sandbox_without_a_probe_or_a_notice() {
   printf '#!/bin/sh\nexit 1\n' > "$FAKEBIN_DIR/unshare"
   chmod +x "$FAKEBIN_DIR/uname" "$FAKEBIN_DIR/unshare"
 
-  out=$(FM_CODEX_SANDBOX_PROBE= run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR")
+  out=$(FM_CODEX_SANDBOX_PROBE='' run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR")
   status=$?
   expect_code 0 "$status" "codex spawn on a Darwin host should succeed"
   launch=$(cat "$LAUNCH_LOG")
