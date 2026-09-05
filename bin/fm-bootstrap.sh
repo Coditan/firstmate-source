@@ -24,6 +24,8 @@
 #                 "FLEET_SYNC: fleet: STUCK: cannot read the project registry <path>: <cause> ...",
 #                 "FLEET_SYNC: fleet: STUCK: cannot list the projects directory <path>: <cause> ...",
 #                 "FLEET_SYNC: fleet: refresh failed (exit <rc>); <what the outcomes above cover>",
+#                 "FLEET_SYNC: fleet: pending: <what this digest does not yet know about the clones>",
+#                 "AXI_SUITE_PENDING: <what this digest does not yet know about the suite>",
 #                 "PR_CHECK_MIGRATION: <private remediation>",
 #                 "TANGLE: <remediation>",
 #                 "SELF_DRIFT: primary checkout default branch '<branch>' is <N> ahead, <M> behind origin/<branch> (<state>) - needs attention",
@@ -98,6 +100,18 @@
 #          X mode is OPTIONAL and inert unless FM_HOME/.env has a non-empty
 #          FMX_PAIRING_TOKEN. When opted in, bootstrap requires curl+jq, writes
 #          the relay poll shim and 30s cadence config, and prints an FMX line.
+#          THE TWO NETWORK SWEEPS DO NOT BLOCK THIS RUN. The project-clone
+#          refresh and the AXI-suite currency check are started early and
+#          collected at the end without waiting, so a session start no longer
+#          waits on fourteen sequential fetches before its first turn. Whichever
+#          has not finished by then prints its own PENDING line naming what this
+#          digest does not yet know, and delivers its complete result - findings
+#          or a clean answer - as a `check` wake when it finishes, so a deferred
+#          check can never end in silence. bin/fm-deferred-check.sh owns that
+#          mechanism; each check keeps its own bounded timeout, so a vessel with
+#          no network reports exactly what it reported before and the digest
+#          cannot hang on either one. Detect-only runs start neither, so a
+#          lock-refused session still writes nothing to the wake queue.
 #          Fleet sync fetches, fast-forwards safe default-branch states, reports
 #          recovered and STUCK clone drift, and prunes gone local branches; it is
 #          bounded by FM_FLEET_SYNC_BOOTSTRAP_TIMEOUT when it is a non-empty
@@ -269,6 +283,42 @@ fleet_sync() {
   [ "$rc" -eq 0 ] \
     || echo "FLEET_SYNC: fleet: refresh failed (exit $rc); the outcomes above are only what it managed before stopping"
   rm -f "$tmp"
+}
+
+# --- deferred checks -------------------------------------------------------
+# The two network sweeps below no longer hold up the first model turn. They are
+# started here and collected at the end of this run; whichever has not finished
+# by then reports itself as PENDING and delivers its own result as a check wake.
+# bin/fm-deferred-check.sh owns that mechanism, including the rule that a
+# deferred check can never finish silently. These two wrappers own only the
+# wording bootstrap prints, because a pending line has to name what this digest
+# does NOT yet know rather than leave the reader with an absent line to read as
+# an all-clear.
+DEFERRED_START_FAILURES=
+deferred_start() {  # <name> <launch-failure-line> <command> [arg...]
+  local name=$1 failure=$2 out rc=0
+  shift 2
+  out=$("$SCRIPT_DIR/fm-deferred-check.sh" start "$name" -- "$@" 2>/dev/null) || rc=$?
+  # A result the previous run left undelivered is printed by `start`; it is this
+  # run's digest that carries it, so relay it verbatim.
+  [ -z "$out" ] || printf '%s\n' "$out"
+  if [ "$rc" -eq 1 ]; then
+    printf '%s\n' "$failure"
+    DEFERRED_START_FAILURES="$DEFERRED_START_FAILURES $name "
+  fi
+  return 0
+}
+
+deferred_collect() {  # <name> <pending-line> <arriving-by-wake-line> <failure-line> [grace-seconds]
+  local name=$1 pending=$2 late=$3 failure=$4 grace=${5:-0} out rc=0
+  case "$DEFERRED_START_FAILURES" in *" $name "*) return 0 ;; esac
+  out=$("$SCRIPT_DIR/fm-deferred-check.sh" collect "$name" "$grace" 2>/dev/null) || rc=$?
+  case "$rc" in
+    0) [ -z "$out" ] || printf '%s\n' "$out" ;;
+    1) printf '%s\n' "$failure" ;;
+    4) printf '%s\n' "$late" ;;
+    *) printf '%s\n' "$pending" ;;
+  esac
 }
 
 self_drift_bootstrap_timeout() {
@@ -1349,6 +1399,17 @@ crew_dispatch_validate() {
   fi
 }
 
+# The deferred runner re-enters this script rather than duplicating a check, so
+# a deferred fleet sync prints exactly the lines fleet_sync has always printed
+# and keeps its own bounded timeout. Internal: started by bin/fm-deferred-check.sh.
+if [ "${1:-}" = "__deferred-run" ]; then
+  case "${2:-}" in
+    fleet-sync) fleet_sync ;;
+    *) echo "fm-bootstrap.sh: unknown deferred check: ${2:-}" >&2; exit 1 ;;
+  esac
+  exit 0
+fi
+
 if [ "${1:-}" = "install" ]; then
   shift
   [ $# -gt 0 ] || { echo "usage: fm-bootstrap.sh install <tool>..." >&2; exit 1; }
@@ -1408,6 +1469,13 @@ fi
 # runnable. Detect-only sessions never touch state.
 if [ "${FM_BOOTSTRAP_DETECT_ONLY:-0}" != 1 ]; then
   "$SCRIPT_DIR/fm-pr-check-migrate.sh" || true
+  # STARTED HERE, COLLECTED AT THE END. The clone refresh is the longest single
+  # step in a session start and depends on nothing else bootstrap does, so it
+  # runs alongside the rest of this script instead of in front of it. It stays
+  # after the PR-check migration, which is still the first mutating sweep.
+  deferred_start fleet-sync \
+    "FLEET_SYNC: fleet: launch failed: the project-clone refresh could not be started, so nothing will report its result" \
+    "$SCRIPT_DIR/fm-bootstrap.sh" __deferred-run fleet-sync
 fi
 
 if [ "$BACKEND_VALID" -eq 0 ]; then
@@ -1593,10 +1661,25 @@ if [ "${FM_BOOTSTRAP_DETECT_ONLY:-0}" != 1 ]; then
   if ! "$SCRIPT_DIR/fm-slot-guard.sh" --arm >/dev/null 2>&1; then
     echo "SLOT_GUARD: the worktree-ownership watch could not be armed on this home, so nothing will notice a pooled worktree two tasks both claim; run $SCRIPT_DIR/fm-slot-guard.sh --arm to see why"
   fi
-  "$SCRIPT_DIR/fm-axi-suite.sh"
-  # The suite may have just seeded this home's own copies into $FM_HOME/.local/axi;
-  # drop the cached lookups so the sweeps below resolve the vessel copy, not the
-  # external one this shell already hashed.
+  # Which copy of the suite THIS session resolves is a question only this
+  # process tree can answer, so that half stays inline and in front. It is a few
+  # PATH lookups and no network.
+  "$SCRIPT_DIR/fm-axi-suite.sh" --shadow-only
+  # STARTED HERE, COLLECTED AT THE END, and started here rather than earlier on
+  # purpose: the suite installs the very tools the version and compatibility
+  # reads above inspect, so it stays behind them where it has always been. It is
+  # usually a cadence no-op that finishes in milliseconds and is collected
+  # inline; the run that actually reaches the registry is the one this keeps off
+  # the critical path.
+  deferred_start axi-suite \
+    "AXI_SUITE_FAILED: the suite currency check could not be started, so nothing will report its result" \
+    "$SCRIPT_DIR/fm-axi-suite.sh" --no-shadow
+  # The suite may seed this home's own copies into $FM_HOME/.local/axi; drop the
+  # cached lookups so the sweeps below resolve the vessel copy rather than the
+  # external one this shell already hashed. While a seeding run is still going,
+  # those sweeps resolve whatever PATH already gives them - the external copy the
+  # suite treats as a fallback input and never removes, which is the same copy
+  # every session used before this home was seeded at all.
   hash -r
   secondmate_sync
   secondmate_liveness_sweep
@@ -1609,7 +1692,21 @@ if [ "${FM_BOOTSTRAP_DETECT_ONLY:-0}" != 1 ]; then
     "$SCRIPT_DIR/fm-frequency-monitor-service.sh" bootstrap
     "$SCRIPT_DIR/fm-bosun-service.sh" bootstrap
   fi
-  fleet_sync
+  # Collect both deferred checks. Neither call waits: one that has not answered
+  # yet says so here in its own words, naming what this digest does not know,
+  # and delivers its result as a check wake when it finishes.
+  deferred_collect fleet-sync \
+    "FLEET_SYNC: fleet: pending: the project-clone refresh is still running, so this digest does not yet say whether any clone is stuck, behind, or unreachable; its result arrives as a check wake" \
+    "FLEET_SYNC: fleet: pending: the project-clone refresh finished while this digest was composed, so its result arrives as a check wake rather than printed here" \
+    "FLEET_SYNC: fleet: launch failed: the project-clone refresh could not be started, so nothing will report its result"
+  # The suite's own cadence makes this a millisecond no-op on all but one
+  # session a day, so it is worth a second here rather than a wake there; the
+  # day it does reach the registry, it goes pending like anything else.
+  deferred_collect axi-suite \
+    "AXI_SUITE_PENDING: the suite currency check is still running, so this digest does not yet say whether a vessel copy is outdated or stuck; its result arrives as a check wake" \
+    "AXI_SUITE_PENDING: the suite currency check finished while this digest was composed, so its result arrives as a check wake rather than printed here" \
+    "AXI_SUITE_FAILED: the suite currency check could not be started, so nothing will report its result" \
+    "${FM_BOOTSTRAP_AXI_SUITE_GRACE:-1}"
 else
   if [ "${FM_TEST_SKIP_WATCHER_SERVICE:-0}" != 1 ]; then
     "$SCRIPT_DIR/fm-watcher-service.sh" bootstrap

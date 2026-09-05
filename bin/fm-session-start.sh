@@ -68,6 +68,12 @@
 #                       fm-bootstrap.sh's own header owns that list; keep the two
 #                       in step, because a count stated in one place and
 #                       enumerated in another is exactly how this one drifted.
+#                       Two of those sweeps - the AXI-suite currency check and
+#                       fleet sync - are the network half, and bootstrap no
+#                       longer waits for them: they run alongside it and report
+#                       as pending here if they have not answered, then deliver
+#                       their own result as a check wake. This step's time in
+#                       state/session-start-timing.log no longer includes them.
 #   2b. wake delivery - publish where this session's model turn lives, so the
 #                       externally supervised delivery listener has an address to
 #                       submit into, then STATE the listener's verdict. Nothing

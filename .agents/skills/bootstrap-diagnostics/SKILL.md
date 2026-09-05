@@ -255,6 +255,11 @@ When any diagnostic needs captain attention, report the plain consequence and re
   Same cause vocabulary as the registry line, plus `the projects directory could not be listed` for a directory that passes its mode check and still cannot be read.
 - `FLEET_SYNC: fleet: refresh failed (exit <rc>); the outcomes above are only what it managed before stopping` - the background refresh did not run to completion, so the per-project lines above it are partial rather than the whole fleet.
   Read the refusal that precedes it for the cause; an exit status with no other fleet line means the refresh stopped before it could report on any clone.
+- `FLEET_SYNC: fleet: pending: <what this digest does not yet know>` - the clone refresh no longer blocks session start, and this run had not finished when the digest was composed.
+  It is not an all-clear and not a failure: nothing is yet known about whether a clone is stuck, behind, or unreachable.
+  Take no action on it; the same lines the digest would have printed arrive shortly as a `check: fleet-sync:` wake, and `bin/fm-deferred-check.sh status fleet-sync` says where the run stands if one is ever needed sooner.
+- `AXI_SUITE_PENDING: <what this digest does not yet know>` - the same, for the suite currency check: it had not answered yet, so this digest says nothing about whether a vessel copy is outdated or stuck, and the result arrives as a `check: axi-suite:` wake.
+  The shadowing report is NOT deferred and is never covered by this line, so an `AXI_SUITE_SHADOWED` entry above still means what it always did.
 - `PR_CHECK_MIGRATION: canonical polls rebuilt and armed; resume supervision for this home` - the non-executing migration rebuilt canonical task polls from validated metadata, and those polls are already armed.
   Independently verify the private per-task outcome record, then resume the emitted supervision protocol after finishing the session-start wake handling.
 - `PR_CHECK_MIGRATION: validated replacement polls armed; resume supervision for this home` - a retry proved canonical publication provenance, metadata identity binding, and single-link integrity for a replacement poll resolving an earlier ambiguous migration outcome.
