@@ -53,6 +53,7 @@ The host restriction itself stays as it is; the captain ruled on 2026-09-05 that
 On Darwin the question does not apply: Codex sandboxes there through Seatbelt and never needs a user namespace, and macOS ships no `unshare(1)`, so taking the probe would announce an unreadable reading on every spawn of every Mac - a permanent false alarm that trains people to ignore the real one.
 
 `danger-full-access` is level with how this fleet's Claude workers already launch, and is the posture the captain ruled on for this host.
+It is a launch with no sandbox, so on such a host the boundaries the three crewmate grants are scoped against - the project working tree, the daemon, every other project's gate - hold only by AGENTS.md hard rule 1 and the brief's isolation assertion, exactly as they do for a Claude worker.
 `approval_policy` and `approvals_reviewer` are not host-conditional and are passed exactly as configured in either case.
 
 Three properties are deliberate:
