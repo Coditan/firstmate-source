@@ -199,8 +199,10 @@ test_pid_publication_failure_leaves_no_runner() {
   fake_bin="$home/fake-bin"
   marker="$home/command-ran"
   mkdir -p "$fake_bin"
+  # shellcheck disable=SC2016 # The fake script must expand these expressions when it runs.
   printf '#!/usr/bin/env bash\n/bin/mv "$@" || exit\ncase "${!#}" in */current) generation=$(cat "${!#}"); mkdir "$(dirname "${!#}")/$generation/pid" ;; esac\n' > "$fake_bin/mv"
   chmod +x "$fake_bin/mv"
+  # shellcheck disable=SC2016 # The inner shell must expand its positional argument.
   PATH="$fake_bin:$PATH" FM_HOME="$home" "$DEFER" start handshake -- \
     bash -c 'printf ran > "$1"' _ "$marker" >/dev/null 2>&1 || rc=$?
   [ "$rc" -eq 1 ] || fail "a failed pid publication should report launch failure, got $rc"
