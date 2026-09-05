@@ -22,7 +22,7 @@ The list below is a pointer to those owners, not a second copy of the rule.
 - The operating vocabulary of this repository is carried by `AGENTS.md` itself, which is the instruction surface every session loads.
 - Reference and mechanism detail is under `docs/`, and exact flags, paths, and commands are owned by each script's own header and `--help` rather than by prose.
 - A term almost every contributor to one project needs goes in that project's committed `AGENTS.md`, in a `## Language` section; `.agents/skills/domain-modeling/GLOSSARY-FORMAT.md` owns the entry shape.
-- A term about how this fleet itself operates goes in the home's `data/learnings.md`, under the learnings contract `AGENTS.md` owns.
+- A term about how this fleet itself operates goes in the home's fleet-local knowledge, with the [`stow` skill](../../.agents/skills/stow/SKILL.md) owning which file receives it.
 - A decision that has already been made and clears the three-part bar goes in a dated record under the home's `data/decisions/`; `.agents/skills/domain-modeling/DECISION-RECORD-FORMAT.md` owns the bar, the routing, and the shape.
 - A decision that is still the captain's to make is not a domain record at all and belongs to `decision-hold-lifecycle`.
 
@@ -31,7 +31,7 @@ That is the lazy-creation rule working as intended rather than a gap: the sectio
 
 ## The part that will surprise an explorer
 
-Two of the owners above, `data/learnings.md` and `data/decisions/`, live under a firstmate home's `data/` directory, which is captain-private and gitignored.
+Two of the owners above, the fleet-knowledge files and `data/decisions/`, live under a firstmate home's `data/` directory, which is captain-private and gitignored.
 A clone of this repository contains neither.
 
 So an agent exploring the clone will find no fleet glossary and no decision records, and that absence is not evidence that none exist.

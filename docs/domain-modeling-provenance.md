@@ -104,7 +104,7 @@ Recognisably the original's, and load-bearing in ours.
 
 - **The store, substituted rather than dropped.**
   The original writes a `CONTEXT.md` glossary at the repository root and numbered records under `docs/adr/`.
-  Ours writes into stores this fleet already has: a `## Language` section in a project's committed `AGENTS.md`, `data/learnings.md` for fleet-operational terms, and the existing dated decision records under `data/decisions/`.
+  Ours writes into stores this fleet already has: a `## Language` section in a project's committed `AGENTS.md`, the fleet-knowledge files selected by the `stow` skill for fleet-operational terms, and the existing dated decision records under `data/decisions/`.
   The captain's condition on adoption was explicit: do not build a third store.
   The formats and the bar cross over intact; only the location changes.
 - **Cross-referencing widened from code to any checkable artifact - ours.**

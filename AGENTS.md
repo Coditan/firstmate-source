@@ -76,7 +76,7 @@ Section 1's two lists - shared tracked material, and the captain-private gitigno
 These are the paths a session reaches for before it has loaded anything else; any other path this file names is introduced by the section that uses it:
 
 - `data/backlog.md` is the durable queue (section 10); `data/projects.md` and `data/secondmates.md` are the fleet navigation and secondmate routing registries (section 6).
-- `data/captain.md`, optional `data/captain-shared.md`, and `data/learnings.md` are the knowledge records section 6 routes to.
+- `data/captain.md`, optional `data/captain-shared.md`, and the fleet-knowledge files are the knowledge records section 6 routes to.
 - `data/<id>/brief.md` holds a task's instructions, and `data/<id>/report.md` holds a scout's deliverable, which survives cleanup.
 - `data/findings/` is this home's findings surface unless `config/findings-dir` or `FM_FINDINGS_DIR` points elsewhere (`docs/findings-surface.md`).
 - `state/<id>.meta` is a task's durable record, `state/<id>.status` its appended wake events, `state/.wake-queue` the durable wake queue, and `state/.afk` the away-mode flag.
@@ -85,7 +85,7 @@ These are the paths a session reaches for before it has loaded anything else; an
 
 A `state/<id>.status` line is a wake event, not current-state truth; `bin/fm-crew-state.sh` owns current-state reconciliation.
 A worker writing its own sparse line through `bin/fm-status.sh` to the status file named in its brief is the authorized status protocol, not a hand edit of state machinery.
-Treat `data/captain.md` as the domain-local record of captain preferences, optional `data/captain-shared.md` as the main-authoritative shared captain-preference file for secondmate inheritance, and `data/learnings.md` as curated home-local knowledge, regardless of harness memory.
+Treat `data/captain.md` as the domain-local record of captain preferences, optional `data/captain-shared.md` as the main-authoritative shared captain-preference file for secondmate inheritance, and section 6's fleet-knowledge files as curated home-local knowledge, regardless of harness memory.
 Everything else under `state/` is machinery belonging to the script that writes it - watcher, delivery-listener, sub-supervisor, wake-batching, journal, merge-poll, and X-mode internals among them - and is never created, edited, or deleted by hand; the owning script is the only correct way to change one.
 
 ## 3. Session start (run once at every session start)

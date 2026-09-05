@@ -91,7 +91,7 @@ The coordinator's crew refusal in `bin/fm-spawn.sh` does not apply to this role,
 An executor develops its own projects like any vessel.
 Operating another vessel's work does not make every project in this home someone else's; the registry in `data/projects.md` is what says which is which, and reading a project as a deploy source is a different relationship from owning it.
 
-`data/backlog.md`, `data/captain.md`, and `data/learnings.md` are kept in full on the unchanged contracts in `AGENTS.md` sections 6 and 10.
+`data/backlog.md`, `data/captain.md`, and the fleet-knowledge files are kept in full on the unchanged contracts in `AGENTS.md` sections 6 and 10.
 What an executor learns about hosts, deploy paths, and delivery is operational knowledge no other vessel is positioned to hold.
 
 ## Kept in full: everything else
