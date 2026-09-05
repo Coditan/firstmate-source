@@ -25,9 +25,9 @@ Delegating through a subordinate home stays legitimate: `config/role` is deliber
 
 ## Kept in full: this home's own durable records
 
-A coordinator keeps its own `data/backlog.md` and its own `data/learnings.md`, on the unchanged contracts in `AGENTS.md` sections 6 and 10.
+A coordinator keeps its own `data/backlog.md` and its own fleet-knowledge files, on the unchanged contracts in `AGENTS.md` sections 6 and 10.
 Routing is real work with real durable threads: a request sent to a peer, a captain decision pending on a cross-domain call, a blocked hand-off waiting on another vessel.
-Those are backlog items in this home even though no crewmate here will ever execute them, and what a coordinator learns about how the fleet actually routes is exactly the operational knowledge `data/learnings.md` exists to hold.
+Those are backlog items in this home even though no crewmate here will ever execute them, and what a coordinator learns about how the fleet actually routes is exactly the operational knowledge those fleet-knowledge files exist to hold.
 
 Only crew dispatch is off.
 Do not read "owns no crews" as "owns no records".

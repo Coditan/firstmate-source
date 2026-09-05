@@ -224,11 +224,12 @@ Before changing it, inspect the current file and rewrite or prune the matching b
 Shared captain preferences that apply across secondmate domains live only in the primary home's optional `data/captain-shared.md`.
 `secondmate-provisioning` owns its propagation contract, including the required header, read-only secondmate copies, quarantine diagnostics, and the rollout rule that existing homes trim `data/captain.md` by hand after first propagation rather than deleting private content automatically.
 
-## Operational learnings (data/learnings.md)
+## Operational learnings
 
-Fleet-local operational facts and gotchas live locally in `data/learnings.md`; it is gitignored and printed after the captain-preference files in the session-start context digest.
-The file is created lazily on first learning and follows the same dated, evidence-backed, curated style as `data/captain.md`: inspect the current file first, then rewrite or prune stale entries instead of appending forever.
+Fleet-local operational knowledge is created lazily and routed through its owner among per-home, gitignored files.
+`data/learnings.md` is the half printed after the captain-preference files in the session-start context digest; whichever file its owner selects follows the same curated style as `data/captain.md`, with existing entries rewritten or pruned instead of appended forever.
 There is no shared learnings file by captain decision.
+The same home also carries `data/learnings-reference.md`, read only when searched, and `data/learnings-archive.md` for entries kept for the record; the [`stow` skill](../.agents/skills/stow/SKILL.md) owns whether a new learning is written to `data/learnings.md` or `data/learnings-reference.md`.
 
 ## Secondmate routes (data/secondmates.md)
 

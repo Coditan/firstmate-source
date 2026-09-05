@@ -99,8 +99,52 @@ test_agents_covers_ceiling_wakes_that_carry_no_next_step() {
   pass "AGENTS.md handles the ceiling wakes that report a condition instead of an action"
 }
 
+# The loaded knowledge file quadrupled in fifteen days on one seat while a 45 KB
+# structural saving landed and was consumed inside a day, so the split criterion
+# has to be met by a writer BEFORE it writes, in the surface it already loads to
+# file knowledge. These assertions keep the three load-bearing clauses stated
+# where the writing happens: the reference default, the one test that earns the
+# loaded half, and the size clause that is what actually holds the byte count.
+test_stow_skill_owns_the_loaded_and_reference_split() {
+  local stow="$ROOT/.agents/skills/stow/SKILL.md"
+
+  assert_grep 'The default is the reference file' "$stow" \
+    "stow skill no longer makes the reference file the default destination"
+  assert_grep 'name the moment a reader would go looking for this' "$stow" \
+    "stow skill lost the one test that earns a fact the loaded half"
+  assert_grep 'brings no narrative with it' "$stow" \
+    "stow skill lost the clause keeping evidence out of the loaded half"
+  assert_grep 'A recurrence is an edit, never a new entry' "$stow" \
+    "stow skill lets a repeat instance add a second loaded entry"
+  assert_grep 'Classify per fact, never per heading' "$stow" \
+    "stow skill no longer classifies a bundled entry fact by fact"
+  assert_grep 'What this rule cannot do' "$stow" \
+    "stow skill states the split rule without naming its own gap"
+  assert_grep 'Nothing refuses a write' "$stow" \
+    "stow skill lets the guidance read as a gate the captain declined"
+  pass "stow skill owns the loaded/reference split, its one test, and its own gap"
+}
+
+# The rule is only met by a writer that reaches it, and the always-loaded
+# contract is the one surface every session reads. It must name the two halves
+# and point at the owner without carrying a second copy of the criterion.
+test_agents_points_the_knowledge_split_at_its_owner() {
+  local agents="$ROOT/AGENTS.md"
+
+  # shellcheck disable=SC2016 # Literal backticks must remain unexpanded.
+  assert_grep 'half read only on search' "$agents" \
+    "AGENTS.md knowledge routing does not name the on-demand half of fleet knowledge"
+  assert_grep 'it owns which half a new learning goes to' "$agents" \
+    "AGENTS.md does not route the split decision to the stow skill"
+  assert_no_grep 'name the moment a reader would go looking for this' "$agents" \
+    "AGENTS.md duplicates the split test from its conditional owner"
+  pass "AGENTS.md names both halves and points the criterion at the stow skill"
+}
+
 test_stow_skill_task_note_contract
 test_agents_backlog_task_note_contract
 test_stow_skill_owns_the_sweep_side_of_the_context_reset
 test_stow_skill_trigger_names_the_context_ceiling_caller
 test_agents_covers_ceiling_wakes_that_carry_no_next_step
+test_stow_skill_owns_the_loaded_and_reference_split
+test_agents_points_the_knowledge_split_at_its_owner
