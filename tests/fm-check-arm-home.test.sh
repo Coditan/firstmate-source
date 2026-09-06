@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Tests for the cross-home arm refusal: bin/fm-check-lib.sh's coherence guard,
-# the six `--arm` paths that call it, and bin/fm-check-register.sh as the
+# the eight `--arm` paths that call it, and bin/fm-check-register.sh as the
 # choke point every check that registers has to pass through.
 #
 # THE FAILURE THESE REPRODUCE, measured 2026-08-30
@@ -84,6 +84,8 @@ slot-guard|fm-slot-guard.sh|--arm
 forge-status|fm-forge-status.sh|--arm
 github-inbox|fm-github-inbox.sh|--arm
 nudge|fm-nudge.sh|--subject curation --arm
+seat-vacancy|fm-seat-alarm.sh|--arm
+seat-restart|fm-seat-respawner-service.sh|--arm
 EOF
 }
 

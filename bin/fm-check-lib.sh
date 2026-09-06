@@ -109,7 +109,7 @@ fm_custom_check_snapshot_cleanup() {
 # HOW FAR THE GUARANTEE REACHES, stated exactly
 #
 # No REGISTRAR-BACKED check can be armed with a home its state directory does
-# not belong to. That is every check written by one of the six `--arm` paths and
+# not belong to. That is every check written by one of the eight `--arm` paths and
 # every check a caller renders itself and registers through
 # bin/fm-check-register.sh.
 #
@@ -168,7 +168,7 @@ fm_check_arm_home_refusal() {  # <state dir> <FM_HOME>
 #
 # Every arm path wants the same three steps - ask the predicate, print what it
 # said on stderr under the caller's own name, fail - so they live here beside
-# the predicate rather than in six copies that can drift apart.
+# the predicate rather than in eight copies that can drift apart.
 fm_check_arm_refuse() {  # <label> <state dir> <FM_HOME>
   local label=$1 refusal
   refusal=$(fm_check_arm_home_refusal "$2" "$3") && return 0
