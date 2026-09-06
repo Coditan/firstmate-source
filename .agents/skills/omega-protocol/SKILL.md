@@ -87,9 +87,12 @@ Before acting on any grant, record it through `bin/fm-decision-hold.sh record --
 - The named task the window is opened for, in his words where he gave them.
 
 Every seat firstmate typed at under the grant and every confirmation it answered belongs in the report below, not in the decision record.
+After recording the decision, open the durable window marker through `bin/fm-omega.sh`; its header owns the exact command and record format.
+The current window state is read through that script and surfaced by session start, so a restarted seat relies on the durable reading rather than memory.
 
 ## At the window's end
 
 The moment his return message arrives, the standing rules resume before that message is acted on, alongside the `/afk` return sequence.
 Then report to him, in `AGENTS.md` section 9 language, when the window began and ended and what was done under the grant: which seats were typed at, which confirmations were answered on his behalf, which steps were added to reach completion, and where the named task stands.
+Use the durable close record owned by `bin/fm-omega.sh` as the source for the window's opening and closing times after the marker is gone.
 Anything begun under the grant that is not finished is named as such and waits for his word, because the grant that would have finished it has ended.
