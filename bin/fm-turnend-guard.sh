@@ -43,7 +43,11 @@ FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 GRACE=${FM_GUARD_GRACE:-300}
-WATCH="$FM_ROOT/bin/fm-watch.sh"
+# The lock records the home's own watcher path, so compare against FM_HOME: it
+# is what bin/fm-spawn.sh seeds into every task worker unconditionally, whereas
+# FM_ROOT_OVERRIDE reaches a worker only by inheritance from firstmate's shell.
+# FM_HOME already selects STATE and is the fm-home half of the lock check.
+WATCH="$FM_HOME/bin/fm-watch.sh"
 DELIVERY="$SCRIPT_DIR/fm-delivery.sh"
 
 # shellcheck source=bin/fm-supervision-lib.sh

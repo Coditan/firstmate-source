@@ -26,10 +26,14 @@ Allowing an ordinary literal teardown prevents a terminal wake from creating a r
 ### Which watcher file the lock is compared against
 
 The lock records the absolute path of the watcher that took it, and `fm_watcher_lock_matches_pid` compares that recorded path as a string.
-All three emitters therefore resolve the watcher they compare from `FM_ROOT`, as `$FM_ROOT/bin/fm-watch.sh`, which is the home whose lock is being read.
-Resolving it from the emitter's own `SCRIPT_DIR` was wrong for exactly the case the previous subsection describes: a worker in a task worktree runs the worktree's byte-identical copy, so the recorded home path never equalled the worktree path, the identity half could never match, and every worker saw a permanent refusal no repair could clear.
+All three emitters therefore resolve the watcher they compare from `FM_HOME`, as `$FM_HOME/bin/fm-watch.sh`, which is the home whose lock is being read.
+Resolving it from the emitter's own `SCRIPT_DIR` was wrong for exactly the worker shape that "Who the refusal is addressed to" below describes: a worker in a task worktree runs the worktree's byte-identical copy, so the recorded home path never equalled the worktree path, the identity half could never match, and every worker saw a permanent refusal no repair could clear.
+`FM_HOME` rather than `FM_ROOT` is the right term because `bin/fm-spawn.sh` seeds `FM_HOME` into every task worker's launch command unconditionally, whereas `FM_ROOT_OVERRIDE` reaches a worker only by inheritance from firstmate's own shell, so a comparison resting on `FM_ROOT` would hold only by accident of inheritance.
+A worker launched without the override is exempt from the PreToolUse gate and the turn-end guard, because both exit at the primary-scope test when `FM_ROOT` falls back to the linked worktree, but `bin/fm-guard.sh` has no scope gate and would still judge the launching home against the worker's own copy of the watcher and print a false daemon-down alarm on every send.
+`FM_HOME` is also already the term that selects `STATE` on all three emitters and is already the fm-home half that `fm_watcher_lock_matches_pid` compares, so the watcher path is no longer the one term in the check resolved differently from everything else.
+This is a decision about which watcher FILE the lock is compared against, and it is not a revert of the addressee decision recorded in "Who the refusal is addressed to": the addressee is still decided from `FM_ROOT`, and an `FM_HOME` comparison there was tried and deliberately reverted for reasons that do not apply to the file path.
 The pid half of the check is unchanged, so a dead process holding the home lock - the 2026-08-30 true positive - still refuses.
-For a session operating the home, `FM_ROOT` and `SCRIPT_DIR/..` are the same directory, so nothing about that case changed.
+All three emitters compute `FM_HOME` as `${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}`, so for a session operating its own home nothing about that case changed.
 
 `bin/fm-status.sh` is classified as a recovery command alongside the wake drain, delivery service repair, and teardown.
 A worker's own status line is never a fleet mutation, and it is the channel the refusal itself tells the worker to report through, so denying it left the worker with no sanctioned way to answer.

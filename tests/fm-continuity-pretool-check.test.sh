@@ -244,7 +244,7 @@ test_operator_refusal_still_names_the_recovery_commands() {
 # a byte-identical copy of this hook at a DIFFERENT path, so resolving the
 # compared watcher from the hook's own SCRIPT_DIR could never match the home's
 # record: every worker saw a permanent refusal no repair could clear. The gate
-# resolves it from FM_ROOT instead, which is the home whose lock it is reading.
+# resolves it from FM_HOME instead, which is the home whose lock it is reading.
 test_worker_sees_the_homes_live_watcher_through_its_own_copy_of_the_gate() {
   local holder identity rc=0
   rm -rf "$STATE/.watch.lock"
