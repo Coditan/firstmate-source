@@ -96,6 +96,15 @@ file_mtime() {
   if [ "$(uname)" = Darwin ]; then stat -f %m "$1" 2>/dev/null; else stat -c %Y "$1" 2>/dev/null; fi
 }
 
+# Set a file's mtime to an absolute epoch, so a test can age a marker past a
+# cadence without sleeping through it.
+backdate() {  # <epoch> <file>...
+  local epoch=$1
+  shift
+  if [ "$(uname)" = Darwin ]; then touch -mt "$(date -r "$epoch" '+%Y%m%d%H%M.%S')" "$@"
+  else touch -m -d "@$epoch" "$@"; fi
+}
+
 # Signature a primed .seen-* marker must hold so the per-poll signal scan does not
 # fire on a pre-existing ordinary status file.
 seen_sig() {
@@ -711,6 +720,417 @@ test_terminal_stale_parked_absorbed_then_resurfaced() {
   FM_STATE_OVERRIDE="$state" "$DRAIN" > "$drain_out" 2>/dev/null || fail "drain after parked re-surface failed"
   grep "$(printf '\tstale\t')" "$drain_out" | grep -F "$window" >/dev/null || fail "parked re-surface was not queued"
   pass "a relayed terminal task absorbs parked pane churn and re-surfaces on the bounded cadence"
+}
+
+# --- parked rechecks that fall due together reach the seat as ONE wake -------
+# Fourteen tasks parked within minutes of each other put fourteen separate stale
+# records on the queue once an hour (measured 2026-09-01, queue seq 8678-8691),
+# because the window loop surfaces at most one wake per pass and then restarts:
+# one record per pass, one pass per poll, each submitted into the seat as its own
+# message. The recheck must still happen for every parked task on its bounded
+# cadence - it is the only thing standing between a forgotten wait and invisible
+# rot - so the fix is to carry them all on ONE record, not to drop any.
+test_parked_rechecks_coalesce_into_one_wake() {
+  local dir state fakebin out capture_file window_list pane_hash back i key rows payload pid
+  local -a wins keys
+  dir=$(make_case parked-coalesce); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"; capture_file="$dir/pane.txt"
+  printf 'finished, awaiting review' > "$capture_file"
+  pane_hash=$(hash_text "finished, awaiting review")
+  back=$(( $(date +%s) - 500 ))
+  wins=(); keys=(); window_list=''
+  for i in 1 2 3; do
+    wins+=("test:fm-pk$i")
+    key=$(printf '%s' "test:fm-pk$i" | tr ':/.' '___')
+    keys+=("$key")
+    window_list="$window_list${window_list:+$'\n'}test:fm-pk$i"
+    printf 'window=test:fm-pk%s\nkind=ship\n' "$i" > "$state/pk$i.meta"
+    printf 'done: PR https://example.test/pr/%s checks green\n' "$i" > "$state/pk$i.status"
+    printf '%s' "$(seen_sig "$state/pk$i.status")" > "$state/.seen-pk${i}_status"
+    printf '%s' "$pane_hash" > "$state/.hash-$key"
+    printf '1\n' > "$state/.count-$key"
+    : > "$state/.parked-$key"
+    # The marker must not be older than the metadata it declares, or
+    # reconcile_parked_markers reads the metadata as newer and revokes the
+    # declaration before the cadence is ever consulted.
+    backdate "$(( back - 60 ))" "$state/pk$i.meta"
+    backdate "$back" "$state/.parked-$key"
+  done
+
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window_list" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+    FM_STATE_OVERRIDE="$state" FM_PAUSE_RESURFACE_SECS=240 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 FM_WATCH_DAEMON=1 "$WATCH" > "$out" 2>&1 &
+  pid=$!
+  # Every due recheck is accounted for once its throttle marker is down; only
+  # then is the record count meaningful.
+  for key in "${keys[@]}"; do
+    wait_numeric_file "$state/.parkedresurfaced-$key" 60 \
+      || { reap "$pid"; fail "a parked task's due recheck never happened: $key"$'\n'"--- watcher ---"$'\n'"$(cat "$out")"; }
+  done
+  reap "$pid"
+
+  rows=$(grep -c "$(printf '\tstale\t')" "$state/.wake-queue" 2>/dev/null || true)
+  [ "$rows" = 1 ] \
+    || fail "three parked rechecks falling due together produced $rows stale records, not one"$'\n'"--- queue ---"$'\n'"$(cat "$state/.wake-queue")"
+  payload=$(cat "$state/.wake-queue")
+  for i in 1 2 3; do
+    assert_contains "$payload" "test:fm-pk$i" "the coalesced parked recheck did not name every task it carries"
+  done
+  assert_contains "$payload" "awaiting external human action" "the coalesced parked recheck lost its external-human reason"
+  assert_not_contains "$payload" "possible wedge" "the coalesced parked recheck was mislabeled a wedge"
+  # One shared age for the set, stated once, then the windows once. Markers
+  # parked together read one age unless the gather straddles a clock tick, in
+  # which case the age is the one-second range, so either shape is the contract.
+  [ "$(grep -o 'parked [0-9]*s' "$state/.wake-queue" | wc -l | tr -d ' ')" = 1 ] \
+    || fail "the coalesced parked recheck did not state one shared age for the set"$'\n'"--- queue ---"$'\n'"$payload"
+  printf '%s' "$payload" | grep -Eq 'parked [0-9]+s(-[0-9]+s)?; test:fm-pk1, test:fm-pk2, test:fm-pk3\)' \
+    || fail "the coalesced parked recheck did not list the windows once after a single shared age"$'\n'"--- queue ---"$'\n'"$payload"
+  # What the seat actually receives is the drain, not the queue file: one record
+  # is only one turn if it survives the drain as one record.
+  FM_STATE_OVERRIDE="$state" "$DRAIN" > "$dir/drain.out" 2>/dev/null \
+    || fail "drain after the coalesced parked recheck failed"
+  rows=$(grep -c "$(printf '\tstale\t')" "$dir/drain.out" 2>/dev/null || true)
+  [ "$rows" = 1 ] \
+    || fail "the coalesced parked recheck reached the seat as $rows records, not one"$'\n'"--- drain ---"$'\n'"$(cat "$dir/drain.out")"
+  pass "parked rechecks falling due together reach the seat as one wake naming all of them"
+}
+
+# Two gathers that fall due at different times must BOTH reach the seat. The
+# drain keeps only the last row per (kind,key), so a fixed key on the set record
+# collapses an earlier undrained gather under a later one: A,B are gathered and
+# their throttles advanced, the seat is mid-turn so nothing drains, then C,D come
+# due and are gathered, and at drain only C,D print - A,B's recheck is silently
+# lost and they wait another full cadence, the exact rot the cadence exists to
+# prevent. Each gather must therefore carry a key of its own.
+test_parked_gathers_that_fall_due_apart_both_survive_the_drain() {
+  local dir state fakebin out capture_file window_list pane_hash back i key rows pid drained
+  local -a keys
+  dir=$(make_case parked-coalesce-two-gathers); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"; capture_file="$dir/pane.txt"
+  printf 'finished, awaiting review' > "$capture_file"
+  pane_hash=$(hash_text "finished, awaiting review")
+  back=$(( $(date +%s) - 500 ))
+  keys=(); window_list=''
+  for i in 1 2 3 4; do
+    key=$(printf '%s' "test:fm-pg$i" | tr ':/.' '___')
+    keys+=("$key")
+    window_list="$window_list${window_list:+$'\n'}test:fm-pg$i"
+    printf 'window=test:fm-pg%s\nkind=ship\n' "$i" > "$state/pg$i.meta"
+    printf 'done: PR https://example.test/pr/%s checks green\n' "$i" > "$state/pg$i.status"
+    printf '%s' "$(seen_sig "$state/pg$i.status")" > "$state/.seen-pg${i}_status"
+    printf '%s' "$pane_hash" > "$state/.hash-$key"
+    printf '1\n' > "$state/.count-$key"
+    : > "$state/.parked-$key"
+    backdate "$(( back - 60 ))" "$state/pg$i.meta"
+    # The first pair is due now; the second pair is freshly parked and stays
+    # inside the cadence until this test ages it, so it cannot join the first
+    # gather.
+    [ "$i" -le 2 ] && backdate "$back" "$state/.parked-$key"
+  done
+
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window_list" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+    FM_STATE_OVERRIDE="$state" FM_PAUSE_RESURFACE_SECS=240 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 FM_WATCH_DAEMON=1 "$WATCH" > "$out" 2>&1 &
+  pid=$!
+  for key in "${keys[0]}" "${keys[1]}"; do
+    wait_numeric_file "$state/.parkedresurfaced-$key" 120 \
+      || { reap "$pid"; fail "the first parked pair's due recheck never happened: $key"$'\n'"--- watcher ---"$'\n'"$(cat "$out")"; }
+  done
+  [ ! -e "$state/.parkedresurfaced-${keys[2]}" ] && [ ! -e "$state/.parkedresurfaced-${keys[3]}" ] \
+    || { reap "$pid"; fail "a not-yet-due parked task was folded into the first gather"$'\n'"--- queue ---"$'\n'"$(cat "$state/.wake-queue")"; }
+  # Nothing drains between the gathers: the seat is mid-turn. Now the second
+  # pair comes due.
+  backdate "$back" "$state/.parked-${keys[2]}" "$state/.parked-${keys[3]}"
+  for key in "${keys[2]}" "${keys[3]}"; do
+    wait_numeric_file "$state/.parkedresurfaced-$key" 120 \
+      || { reap "$pid"; fail "the second parked pair's due recheck never happened: $key"$'\n'"--- watcher ---"$'\n'"$(cat "$out")"; }
+  done
+  reap "$pid"
+
+  rows=$(grep -c "$(printf '\tstale\t')" "$state/.wake-queue" 2>/dev/null || true)
+  [ "$rows" = 2 ] \
+    || fail "two gathers falling due apart produced $rows stale records, not two"$'\n'"--- queue ---"$'\n'"$(cat "$state/.wake-queue")"
+  FM_STATE_OVERRIDE="$state" "$DRAIN" > "$dir/drain.out" 2>/dev/null \
+    || fail "drain after two parked gathers failed"
+  drained=$(cat "$dir/drain.out")
+  rows=$(printf '%s\n' "$drained" | grep -c "$(printf '\tstale\t')" || true)
+  [ "$rows" = 2 ] \
+    || fail "two parked gathers reached the seat as $rows records, not two: the earlier gather was collapsed at drain"$'\n'"--- drain ---"$'\n'"$drained"
+  for i in 1 2 3 4; do
+    assert_contains "$drained" "test:fm-pg$i" "a parked task gathered before the drain was not named to the seat"
+  done
+  printf '%s\n' "$drained" | grep -Eq 'test:fm-pg1, test:fm-pg2\)' \
+    || fail "the first gather did not reach the seat as its own record naming A and B"$'\n'"--- drain ---"$'\n'"$drained"
+  printf '%s\n' "$drained" | grep -Eq 'test:fm-pg3, test:fm-pg4\)' \
+    || fail "the second gather did not reach the seat as its own record naming C and D"$'\n'"--- drain ---"$'\n'"$drained"
+  pass "parked gathers that fall due apart both survive the drain, each naming its own tasks"
+}
+
+# Two gathers inside ONE wall-clock second must still carry distinct keys, and
+# nothing the gather does may leave a file the watcher's own marker cleanup
+# (reconcile_parked_markers, the .parked-* prune) would delete out from under
+# it. A disambiguator persisted under state/.parked-<anything> reads as a
+# parked marker with no metadata and is cleared on the very next pass, so every
+# gather restarts at the same count and same-second gathers collide at drain.
+# Driven against the sourced watcher with the clock frozen, so both gathers
+# provably share a second and the key must tell them apart on its own.
+test_parked_same_second_gathers_get_distinct_keys_without_state_files() {
+  local dir state i key now drained rows keys_seen markers
+  dir=$(make_case parked-same-second); state="$dir/state"
+  now=$(date +%s)
+  for i in 1 2 3 4; do
+    key=$(printf '%s' "test:fm-ss$i" | tr ':/.' '___')
+    printf 'window=test:fm-ss%s\nkind=ship\n' "$i" > "$state/ss$i.meta"
+    printf 'done: PR https://example.test/pr/%s checks green\n' "$i" > "$state/ss$i.status"
+    : > "$state/.parked-$key"
+    backdate "$(( now - 560 ))" "$state/ss$i.meta"
+    if [ "$i" -le 2 ]; then backdate "$(( now - 500 ))" "$state/.parked-$key"
+    else backdate "$now" "$state/.parked-$key"; fi
+  done
+  # A separate process: sourcing the watcher must not touch this suite's own
+  # variables, and the frozen clock must not leak past the two gathers.
+  FM_STATE_OVERRIDE="$state" FM_WATCH_DAEMON=1 FM_PAUSE_RESURFACE_SECS=240 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 bash -c '
+    . "$1" >/dev/null 2>&1 || exit 97
+    frozen=$2
+    date() { if [ "${1-}" = "+%s" ]; then printf "%s\n" "$frozen"; else command date "$@"; fi; }
+    parked_recheck_enqueue "test:fm-ss1" || exit 91
+    parked_recheck_commit >/dev/null
+    reconcile_parked_markers
+    for k in test_fm-ss3 test_fm-ss4; do
+      if [ "$(uname)" = Darwin ]; then touch -mt "$(command date -r "$((frozen - 500))" "+%Y%m%d%H%M.%S")" "$STATE/.parked-$k"
+      else touch -m -d "@$((frozen - 500))" "$STATE/.parked-$k"; fi
+    done
+    parked_recheck_enqueue "test:fm-ss3" || exit 93
+    parked_recheck_commit >/dev/null
+  ' sourced-watcher "$WATCH" "$now" > "$dir/sourced.out" 2>&1 \
+    || fail "sourced watcher gathers failed (exit $?)"$'\n'"--- output ---"$'\n'"$(cat "$dir/sourced.out")"
+
+  markers=$(cd "$state" && for m in .parked-*; do [ -e "$m" ] && printf '%s\n' "$m"; done | sort | tr '\n' ' ')
+  [ "$markers" = ".parked-test_fm-ss1 .parked-test_fm-ss2 .parked-test_fm-ss3 .parked-test_fm-ss4 " ] \
+    || fail "the parked gather left a file in the parked-marker namespace: $markers"
+  rows=$(grep -c "$(printf '\tstale\t')" "$state/.wake-queue" 2>/dev/null || true)
+  [ "$rows" = 2 ] \
+    || fail "two same-second gathers produced $rows stale records, not two"$'\n'"--- queue ---"$'\n'"$(cat "$state/.wake-queue")"
+  keys_seen=$(awk -F '\t' '$3 == "stale" { print $4 }' "$state/.wake-queue" | sort -u | wc -l | tr -d ' ')
+  [ "$keys_seen" = 2 ] \
+    || fail "two same-second gathers with a reconcile pass between them share one key"$'\n'"--- queue ---"$'\n'"$(cat "$state/.wake-queue")"
+  awk -F '\t' '$3 == "stale" { print $4 }' "$state/.wake-queue" | grep -q '^test:fm-ss' \
+    && fail "a coalesced parked recheck was keyed on a member window"$'\n'"--- queue ---"$'\n'"$(cat "$state/.wake-queue")"
+  FM_STATE_OVERRIDE="$state" "$DRAIN" > "$dir/drain.out" 2>/dev/null \
+    || fail "drain after two same-second gathers failed"
+  drained=$(cat "$dir/drain.out")
+  rows=$(printf '%s\n' "$drained" | grep -c "$(printf '\tstale\t')" || true)
+  [ "$rows" = 2 ] \
+    || fail "two same-second gathers reached the seat as $rows records, not two"$'\n'"--- drain ---"$'\n'"$drained"
+  printf '%s\n' "$drained" | grep -Eq 'test:fm-ss1, test:fm-ss2\)' \
+    || fail "the first same-second gather did not reach the seat naming its own tasks"$'\n'"--- drain ---"$'\n'"$drained"
+  printf '%s\n' "$drained" | grep -Eq 'test:fm-ss3, test:fm-ss4\)' \
+    || fail "the second same-second gather did not reach the seat naming its own tasks"$'\n'"--- drain ---"$'\n'"$drained"
+  pass "same-second parked gathers keep distinct keys with no state file for a marker scan to prune"
+}
+
+# A fleet-sized batch must still arrive as ONE record after the drain: the drain
+# shortens any row above FM_WAKE_ECHO_ROW_BYTES (1024 by default) and then keeps
+# the queue file and prints its path, so a coalesced record that outgrows the
+# bound costs the seat a second read to learn which tasks it covers - the turn
+# it was built to save. Real fleet windows are the long tmux
+# "firstmate:fm-<task-slug>" shape, and the per-window cost is what decides
+# whether the reported fourteen-task burst fits, so that is the shape used here.
+test_parked_coalesced_record_fits_the_drain_row_bound() {
+  local dir state fakebin out capture_file window_list pane_hash back i n win key rows row pid
+  local -a keys
+  dir=$(make_case parked-coalesce-bound); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"; capture_file="$dir/pane.txt"
+  printf 'finished, awaiting review' > "$capture_file"
+  pane_hash=$(hash_text "finished, awaiting review")
+  back=$(( $(date +%s) - 500 ))
+  keys=(); window_list=''
+  for i in $(seq 1 14); do
+    n=$(printf '%02d' "$i")
+    win="firstmate:fm-parked-recheck-wake-storm-task-$n"
+    key=$(printf '%s' "$win" | tr ':/.' '___')
+    keys+=("$key")
+    window_list="$window_list${window_list:+$'\n'}$win"
+    printf 'window=%s\nkind=ship\n' "$win" > "$state/pk$n.meta"
+    printf 'done: PR https://example.test/pr/%s checks green\n' "$i" > "$state/pk$n.status"
+    printf '%s' "$(seen_sig "$state/pk$n.status")" > "$state/.seen-pk${n}_status"
+    printf '%s' "$pane_hash" > "$state/.hash-$key"
+    printf '1\n' > "$state/.count-$key"
+    : > "$state/.parked-$key"
+    # Two parking batches two minutes apart, so the shared age is a range.
+    if [ "$i" -le 7 ]; then
+      backdate "$(( back - 60 ))" "$state/pk$n.meta"; backdate "$back" "$state/.parked-$key"
+    else
+      backdate "$(( back - 180 ))" "$state/pk$n.meta"; backdate "$(( back - 120 ))" "$state/.parked-$key"
+    fi
+  done
+
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window_list" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+    FM_STATE_OVERRIDE="$state" FM_PAUSE_RESURFACE_SECS=240 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 FM_WATCH_DAEMON=1 "$WATCH" > "$out" 2>&1 &
+  pid=$!
+  # Fourteen windows is several times the per-pass work of the other watcher
+  # fixtures, so the first pass alone takes tens of seconds on a loaded host.
+  for key in "${keys[@]}"; do
+    wait_numeric_file "$state/.parkedresurfaced-$key" 600 \
+      || { reap "$pid"; fail "a parked task's due recheck never happened: $key"$'\n'"--- watcher ---"$'\n'"$(cat "$out")"; }
+  done
+  reap "$pid"
+
+  rows=$(grep -c "$(printf '\tstale\t')" "$state/.wake-queue" 2>/dev/null || true)
+  [ "$rows" = 1 ] \
+    || fail "fourteen parked rechecks falling due together produced $rows stale records, not one"$'\n'"--- queue ---"$'\n'"$(cat "$state/.wake-queue")"
+  row=$(cat "$state/.wake-queue")
+  printf '%s' "$row" | grep -Eq 'parked [0-9]+s-[0-9]+s; firstmate:fm-' \
+    || fail "two parking batches did not surface as one shared age range"$'\n'"--- queue ---"$'\n'"$row"
+  # The same bound the drain applies, on the same row, with the default cap
+  # (an empty override falls back to it). A separate process rather than a
+  # subshell, so sourcing the wake lib cannot touch this test's own variables.
+  FM_WAKE_ECHO_ROW_BYTES='' FM_WAKE_ECHO_BYTES='' FM_STATE_OVERRIDE="$state" bash -c '
+    . "$1/bin/fm-wake-lib.sh" >/dev/null 2>&1
+    fm_wake_bound_echo "$2"
+    printf "shortened=%s omitted=%s bytes=%s\n" "$FM_WAKE_ECHO_SHORTENED" "$FM_WAKE_ECHO_OMITTED" "${#2}"
+    [ "$FM_WAKE_ECHO_SHORTENED" = 0 ] && [ "$FM_WAKE_ECHO_OMITTED" = 0 ]
+  ' bound-check "$ROOT" "$row" > "$dir/bound.out" 2>&1 \
+    || fail "a fourteen-window coalesced record does not survive the drain row bound unshortened ($(cat "$dir/bound.out"))"$'\n'"--- queue ---"$'\n'"$row"
+  FM_STATE_OVERRIDE="$state" "$DRAIN" > "$dir/drain.out" 2>/dev/null \
+    || fail "drain after the fourteen-window parked recheck failed"
+  grep -q '^wake echo:' "$dir/drain.out" \
+    && fail "the drain withheld or shortened the fourteen-window parked recheck"$'\n'"--- drain ---"$'\n'"$(cat "$dir/drain.out")"
+  for i in $(seq 1 14); do
+    assert_contains "$(cat "$dir/drain.out")" "firstmate:fm-parked-recheck-wake-storm-task-$(printf '%02d' "$i")" \
+      "the drained fourteen-window parked recheck did not name every task it carries"
+  done
+  pass "a fourteen-window coalesced parked recheck reaches the seat whole, inside the drain row bound"
+}
+
+# --- away mode never produces a parked recheck ------------------------------
+# With state/.afk set the supervise-daemon owns triage and the watcher hands it
+# plain window identities only, so a parked recheck - single or coalesced - must
+# not be gathered on either path that can reach the gather. The poll path is
+# driven through a real watcher process; the push path through the sourced
+# watcher's handle_push_transition, the same function the event splice calls.
+# Lifting the flag then produces the coalesced record from the very same
+# fixture on both paths, which is what pins that away mode suppressed it rather
+# than the fixture never being due.
+test_parked_recheck_never_produced_while_away() {
+  local dir state fakebin out capture_file window_list pane_hash back i key n pid queue rows
+  local -a keys
+  dir=$(make_case parked-afk); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"; capture_file="$dir/pane.txt"
+  printf 'finished, awaiting review' > "$capture_file"
+  pane_hash=$(hash_text "finished, awaiting review")
+  back=$(( $(date +%s) - 500 ))
+  keys=(); window_list=''
+  for i in 1 2 3; do
+    key=$(printf '%s' "test:fm-pa$i" | tr ':/.' '___')
+    keys+=("$key")
+    window_list="$window_list${window_list:+$'\n'}test:fm-pa$i"
+    printf 'window=test:fm-pa%s\nkind=ship\n' "$i" > "$state/pa$i.meta"
+    printf 'done: PR https://example.test/pr/%s checks green\n' "$i" > "$state/pa$i.status"
+    printf '%s' "$(seen_sig "$state/pa$i.status")" > "$state/.seen-pa${i}_status"
+    printf '%s' "$pane_hash" > "$state/.hash-$key"
+    printf '1\n' > "$state/.count-$key"
+    # Away mode's own handoff enqueues a plain stale once per distinct pane
+    # hash. This hash is already handed off, so the only record the poll path
+    # could add is a parked recheck, and the queue can be asserted empty.
+    printf '%s' "$pane_hash" > "$state/.stale-$key"
+    : > "$state/.parked-$key"
+    backdate "$(( back - 60 ))" "$state/pa$i.meta"
+    backdate "$back" "$state/.parked-$key"
+  done
+  date '+%s' > "$state/.afk"
+
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window_list" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+    FM_STATE_OVERRIDE="$state" FM_PAUSE_RESURFACE_SECS=240 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 FM_WATCH_DAEMON=1 "$WATCH" > "$out" 2>&1 &
+  pid=$!
+  # Two full passes over every window, each past the unchanged-hash threshold
+  # where the parked branch would otherwise be taken.
+  for key in "${keys[@]}"; do
+    n=0
+    until [ "$(cat "$state/.count-$key" 2>/dev/null || echo 0)" -ge 3 ] 2>/dev/null; do
+      kill -0 "$pid" 2>/dev/null || fail "watcher exited while away with a due parked set: $(cat "$out")"
+      [ "$n" -lt 300 ] || { reap "$pid"; fail "watcher never completed two passes over $key while away: $(cat "$out")"; }
+      sleep 0.1; n=$((n + 1))
+    done
+  done
+  reap "$pid"
+  [ ! -s "$state/.wake-queue" ] \
+    || fail "away mode let the poll path produce a stale record for a due parked set"$'\n'"--- queue ---"$'\n'"$(cat "$state/.wake-queue")"
+  for key in "${keys[@]}"; do
+    [ ! -e "$state/.parkedresurfaced-$key" ] || fail "away mode advanced a parked recheck throttle on the poll path: $key"
+  done
+
+  # The push path, still away: the transition is handed to the daemon as the
+  # plain blocked record, never gathered into a parked recheck.
+  : > "$dir/push.wakes"
+  FM_STATE_OVERRIDE="$state" FM_PAUSE_RESURFACE_SECS=240 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 bash -c '
+    . "$1" >/dev/null 2>&1 || exit 97
+    wakes=$2
+    wake() { printf "%s\n" "$1" >> "$wakes"; }
+    fm_backend_commit_transition() { return 0; }
+    handle_push_transition herdr test "$(fm_transition_record fm-pa1 ws "" blocked claude)"
+  ' sourced-watcher "$WATCH" "$dir/push.wakes" > "$dir/push.out" 2>&1 \
+    || fail "sourced push transition failed while away (exit $?)"$'\n'"--- output ---"$'\n'"$(cat "$dir/push.out")"
+  queue=$(cat "$state/.wake-queue" 2>/dev/null || true)
+  assert_contains "$queue" "herdr: agent blocked" "away mode's push path did not hand the plain blocked transition to the daemon"
+  [ -s "$dir/push.wakes" ] || fail "away mode's push handoff did not keep its one-shot wake"
+  assert_not_contains "$queue" "awaiting external human action" "away mode let the push path produce a parked recheck"
+  assert_not_contains "$queue" "parked-recheck-" "away mode let the push path gather a coalesced parked recheck"
+  for key in "${keys[@]}"; do
+    [ ! -e "$state/.parkedresurfaced-$key" ] || fail "away mode advanced a parked recheck throttle on the push path: $key"
+  done
+
+  # Away mode ends: the same fixture is due, and the poll path gathers it.
+  rm -f "$state/.afk"
+  : > "$out"
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window_list" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+    FM_STATE_OVERRIDE="$state" FM_PAUSE_RESURFACE_SECS=240 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 FM_WATCH_DAEMON=1 "$WATCH" > "$out" 2>&1 &
+  pid=$!
+  for key in "${keys[@]}"; do
+    wait_numeric_file "$state/.parkedresurfaced-$key" 60 \
+      || { reap "$pid"; fail "after away mode ended a parked task's due recheck never happened on the poll path: $key"$'\n'"--- watcher ---"$'\n'"$(cat "$out")"; }
+  done
+  reap "$pid"
+  rows=$(awk -F '\t' '$3 == "stale" && $4 ~ /^parked-recheck-/' "$state/.wake-queue" | grep -c . || true)
+  [ "$rows" = 1 ] \
+    || fail "after away mode ended the poll path produced $rows coalesced parked rechecks, not one"$'\n'"--- queue ---"$'\n'"$(cat "$state/.wake-queue")"
+  grep -Eq 'parked [0-9]+s(-[0-9]+s)?; test:fm-pa1, test:fm-pa2, test:fm-pa3\)' "$state/.wake-queue" \
+    || fail "after away mode ended the poll path's coalesced record did not name every parked task"$'\n'"--- queue ---"$'\n'"$(cat "$state/.wake-queue")"
+
+  # And the push path, once the throttles are cleared so the set is due again.
+  rm -f "$state"/.parkedresurfaced-*
+  FM_STATE_OVERRIDE="$state" FM_PAUSE_RESURFACE_SECS=240 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 bash -c '
+    . "$1" >/dev/null 2>&1 || exit 97
+    wakes=$2
+    wake() { printf "%s\n" "$1" >> "$wakes"; }
+    fm_backend_commit_transition() { return 0; }
+    handle_push_transition herdr test "$(fm_transition_record fm-pa1 ws "" blocked claude)"
+  ' sourced-watcher "$WATCH" "$dir/push.wakes" > "$dir/push.out" 2>&1 \
+    || fail "sourced push transition failed after away mode ended (exit $?)"$'\n'"--- output ---"$'\n'"$(cat "$dir/push.out")"
+  rows=$(awk -F '\t' '$3 == "stale" && $4 ~ /^parked-recheck-/' "$state/.wake-queue" | grep -c . || true)
+  [ "$rows" = 2 ] \
+    || fail "after away mode ended the push path did not gather the due parked set ($rows coalesced records, not two)"$'\n'"--- queue ---"$'\n'"$(cat "$state/.wake-queue")"
+  for key in "${keys[@]}"; do
+    [ -e "$state/.parkedresurfaced-$key" ] || fail "after away mode ended the push path did not advance a gathered throttle: $key"
+  done
+  pass "a parked recheck is never produced while away, on either path, and the same fixture gathers once the flag lifts"
+}
+
+# The cadence default is a prompt-cache decision, not a round number: the seat's
+# prompt cache holds for one hour, so a recheck at exactly 3600s reliably arrives
+# after the cache it would otherwise have reused has expired. Pinned here because
+# the value is what makes that hold; docs/configuration.md and the definition's
+# own comment carry the reason.
+test_pause_resurface_default_stays_under_the_prompt_cache_hour() {
+  [ "$FM_PAUSE_RESURFACE_SECS_DEFAULT" = 3000 ] \
+    || fail "FM_PAUSE_RESURFACE_SECS_DEFAULT is $FM_PAUSE_RESURFACE_SECS_DEFAULT, not the 3000s that keeps a recheck inside the seat's one-hour prompt cache"
+  [ "$FM_PAUSE_RESURFACE_SECS_DEFAULT" -lt 3600 ] \
+    || fail "the bounded recheck cadence reached the one-hour prompt-cache window"
+  pass "the bounded recheck cadence defaults inside the seat's one-hour prompt cache"
 }
 
 test_parked_marker_clears_on_status_write() {
@@ -3006,6 +3426,12 @@ test_lone_turn_end_keeps_its_own_key
 test_signal_symlink_target_append_surfaces
 test_terminal_stale_surfaced
 test_terminal_stale_parked_absorbed_then_resurfaced
+test_parked_rechecks_coalesce_into_one_wake
+test_parked_gathers_that_fall_due_apart_both_survive_the_drain
+test_parked_same_second_gathers_get_distinct_keys_without_state_files
+test_parked_coalesced_record_fits_the_drain_row_bound
+test_parked_recheck_never_produced_while_away
+test_pause_resurface_default_stays_under_the_prompt_cache_hour
 test_parked_marker_clears_on_status_write
 test_parked_marker_clears_on_meta_change
 test_mark_parked_wrapper

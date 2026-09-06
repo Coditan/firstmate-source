@@ -390,6 +390,36 @@ test_stale_terminal_escalates() {
   pass "stale + terminal status escalates immediately"
 }
 
+# A parked recheck queued before away mode began is drained by the daemon like
+# any other stale wake, and both payload shapes the watcher's
+# parked_recheck_enqueue produces must classify exactly as a bare single-window
+# stale does: self-handled transient stale, never escalated. They agree because
+# classify_stale treats the whole remainder after "stale: " as a window name,
+# and neither shape is a bare window: window_to_task matches no metadata window
+# and its suffix fallback names no status file, so both fall through to the
+# final "transient stale" self branch. That is pre-existing behaviour the
+# coalesced shape inherits, not a property it earns on its own. The bare member
+# window, whose status IS terminal, escalates from the same fixture, so a
+# classifier that resolved either payload back to a member would fail here.
+test_stale_parked_recheck_payloads_self_handle_like_a_single_window() {
+  local dir state out single multi i
+  dir=$(make_supercase stale-parked-recheck-shapes)
+  state="$dir/state"
+  for i in 1 2 3; do
+    fm_write_meta "$state/pk$i.meta" "window=sess:fm-pk$i" "kind=ship"
+    printf 'done: PR https://example.test/pr/%s checks green\n' "$i" > "$state/pk$i.status"
+  done
+  out=$(FM_STATE_OVERRIDE="$state" classify_stale "sess:fm-pk1" "$state")
+  [ "${out%%|*}" = escalate ] || fail "control: a bare parked member with a terminal status did not escalate: $out"
+  single='sess:fm-pk1 (parked 3012s, awaiting external human action - supervisor-declared terminal wait, rechecked on a long cadence not a wedge; confirm the wait still holds)'
+  out=$(FM_STATE_OVERRIDE="$state" classify_stale "$single" "$state")
+  [ "${out%%|*}" = self ] || fail "a single-window parked recheck was not self-handled: $out"
+  multi='3 parked tasks due for recheck (parked 3012s-3013s; sess:fm-pk1, sess:fm-pk2, sess:fm-pk3) - awaiting external human action - supervisor-declared terminal waits, rechecked on a long cadence not a wedge; confirm each wait still holds'
+  out=$(FM_STATE_OVERRIDE="$state" classify_stale "$multi" "$state")
+  [ "${out%%|*}" = self ] || fail "a coalesced parked recheck was not self-handled like a single-window one: $out"
+  pass "parked recheck payloads, single and coalesced, self-handle exactly as a single-window stale does"
+}
+
 # A DECLARED external-wait pause (paused:) is neither a wedge nor a terminal
 # escalation: classify_stale returns the `pause` action so handle_wake records a
 # pause marker (long re-surface cadence) rather than a wedge stale marker.
@@ -1970,6 +2000,7 @@ test_classify_terminal_signal_escalates
 test_classify_check_and_unknown_escalate
 test_stale_transient_self_records_marker
 test_stale_terminal_escalates
+test_stale_parked_recheck_payloads_self_handle_like_a_single_window
 test_stale_paused_classifies_pause
 test_handle_wake_paused_records_pause_marker
 test_handle_wake_paused_signal_records_pause_marker
