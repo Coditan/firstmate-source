@@ -28,7 +28,7 @@ The fields are `key=value` lines, matching `state/<id>.meta`:
 | Field | Meaning |
 |---|---|
 | `status` | `ok` or `error`; a reader must refuse on anything but `ok` |
-| `error` | on `status=error` only, the cause: `no-hook-payload`, `no-transcript-path`, `no-session-id`, `unusable-transcript-path`, `unusable-session-id`, `no-jq`, `no-harness-process`, or `harness-lookup-failed` |
+| `error` | on `status=error` only, the cause: `no-hook-payload`, `no-transcript-path`, `no-session-id`, `unusable-transcript-path`, `unusable-session-id`, `no-jq`, `no-harness-process`, `harness-lookup-failed`, or `superseded-without-hook-payload` |
 | `harness_pid` | the harness process that owns this session, resolved by `bin/fm-harness-pid-lib.sh`, the same identity `bin/fm-lock.sh` writes to `state/.lock`; empty when that process could not be identified, so a reader must never probe this value for liveness |
 | `session_id` | on `status=ok` only, the harness session id, which `claude --resume <id>` reopens |
 | `transcript_path` | on `status=ok` only, the absolute path to the session's transcript |
@@ -90,6 +90,14 @@ One simultaneous-start race is an accepted limitation of this gate.
 Two primary sessions starting in the same home at the same instant can both observe no live holder and both publish a record before either acquires the lock, so the loser of the later lock acquisition may have written last.
 The outcome is a reported unenforced ceiling, not a wrong number: `fm_context_ceiling_reason` compares the record's harness pid against the lock's and reports the mismatch instead of measuring it, so this is not the silent non-measurement this change was made to prevent, and that report now escalates on repeat.
 Moving publication to a boundary owned by lock acquisition would break replacement on a fresh start, because only the SessionStart hook payload carries `session_id` and `transcript_path`, while `bin/fm-lock.sh` runs later in a different process with neither.
+
+One lock the hook refuses is taken later by the same session: a dead container's record, which `bin/fm-session-start.sh` supersedes on the two readings [session-lock-across-boundaries.md](session-lock-across-boundaries.md) describes.
+The hook has already run against that record, read it as foreign and written nothing, so the record left standing names the previous container's harness and the ceiling would be reported unenforced as a session mismatch for the whole life of the new session.
+After the supersede, `bin/fm-session-start.sh` invokes `bin/fm-sessionstart-nudge.sh --rebind-after-supersede`, which rebinds the record to the holder the new lock names in this session's own pid table, the value the consumer compares against.
+The hook payload is not available in that invocation and is never invented: a record that already names that holder and whose mtime is not older than pid 1's start is left alone, and any other is replaced by `status=error` with the cause `superseded-without-hook-payload` and the new holder's `harness_pid`, so the reader reports an unmeasured ceiling with its cause rather than a mismatch against a dead harness.
+Pid equality alone does not keep a record, because the record persists with the home and a fresh pid table hands out the same small numbers again: the previous container's `status=ok` record can name the very pid this container's harness got, and leaving it standing would silently measure the previous container's transcript for the life of the new session.
+The record's age is its file mtime, the same kernel-set reading the lock's dead-container predicate uses, and an age or container start that cannot be read never proves the record current.
+The record becomes `status=ok` again at the next SessionStart hook run in that session, such as a `/clear`, which carries the payload.
 
 ## What a lock holder does when it cannot resolve its own harness process
 

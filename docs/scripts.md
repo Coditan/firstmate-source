@@ -8,7 +8,7 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | Script                   | Purpose                                                                              |
 | ------------------------ | ------------------------------------------------------------------------------------ |
 | `fm-session-start.sh`    | Put bounded captain and learnings context first, then compose the complete ordered session-start digest |
-| `fm-sessionstart-nudge.sh` | Record the primary session's transcript position, then print the native session-start hook nudge when it has not already run the digest |
+| `fm-sessionstart-nudge.sh` | Record the primary session's transcript position, then print the native session-start hook nudge when it has not already run the digest; with `--rebind-after-supersede`, rebind that record after a dead-container lock supersede |
 | `fm-vessel-identity.sh`  | State which home on which host a session is driving, and stamp it on that session's own tmux status bar where an attaching person meets it without running a command (docs/vessel-identity.md) |
 | `fm-operational-input.sh` | Construct and parse the canonical cross-language operational-input protocol |
 | `fm-bootstrap.sh`        | Detect toolchain and fleet problems, run the locked session-start sweeps, and install approved tools |
@@ -190,8 +190,8 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-slot-guard.sh`       | Watch recorded pooled worktrees for conflicting live task holders                    |
 | `fm-teardown.sh`         | Fail-closed teardown: refuse another task's pooled worktree, return landed ship worktrees, require completed scout deliverables, retire secondmate homes |
 | `fm-harness.sh`          | Detect the running harness and resolve crew or secondmate harness, model, and effort |
-| `fm-lock.sh`             | Per-home firstmate session lock: acquire, status, and handover of ownership between seats, with the holder's pid table recorded so a reader across a container boundary refuses rather than guesses (`docs/session-lock-across-boundaries.md`) |
-| `fm-harness-pid-lib.sh`  | Shared harness-process identity for every per-session record, from a tool call's ancestry, plus the bounded retry and the one owner of "another live session holds this home's lock" |
+| `fm-lock.sh`             | Per-home firstmate session lock: acquire, status, handover of ownership between seats, and supersession of a record whose holder died with a previous container, with the holder's pid table recorded so a reader across a container boundary refuses rather than guesses (`docs/session-lock-across-boundaries.md`) |
+| `fm-harness-pid-lib.sh`  | Shared harness-process identity for every per-session record, from a tool call's ancestry, plus the bounded retry and the one owner of both lock-record readings: "another live session holds this home's lock" and "this holder died with a previous container" |
 | `fm-x-lib.sh`            | Shared X-mode config, relay, and reply-threading helpers                             |
 | `fm-x-poll.sh`           | One bounded X relay poll: stash newly offered mentions and emit their once-only wake |
 | `fm-x-reply.sh`          | Post or dry-run preview a composed X-mode reply or follow-up                         |

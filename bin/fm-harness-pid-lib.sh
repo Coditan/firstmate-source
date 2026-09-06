@@ -90,9 +90,11 @@ fm_harness_pid() {
 # bin/fm-sessionstart-nudge.sh is the one that needs it: its answer is written
 # into state/.primary-transcript, is not rewritten until the next primary
 # session start, and an unidentified owner there leaves the context ceiling
-# unenforced for the whole life of the session. bin/fm-lock.sh deliberately does
-# not use it - a lock it cannot acquire stops session start with a message on
-# the spot, which is already the loudest possible failure.
+# unenforced for the whole life of the session. bin/fm-lock.sh uses it for the
+# UNKNOWN answer only - an incomplete ancestry walk, published as
+# FM_HARNESS_PID_ERROR=harness-lookup-failed - because that answer may change on
+# the next probe; a completed walk that found no harness is a settled negative,
+# and fm-lock.sh refuses it at once rather than asking the same question again.
 # It publishes FM_HARNESS_PID and FM_HARNESS_PID_ERROR from the LAST attempt, so
 # a caller that has to record its own failure records the one it actually ended
 # on rather than the first one it saw.
@@ -305,4 +307,134 @@ fm_session_lock_held_by_other() {  # <lock-file> <my-harness-pid>
   # shellcheck disable=SC2034 # Read by callers after the predicate returns.
   FM_SESSION_LOCK_VERDICT=free
   return 1
+}
+
+# --- a holder that died with its container ---------------------------------
+# A container rebuild leaves a lock record naming a pid in a table that no
+# longer exists, on a machine identity that no longer exists either. The
+# `foreign` verdict above is correct about that record - this reader cannot see
+# that pid - but it is not the whole reading available: two facts, taken
+# together, say the recorded holder cannot be running in THIS CONTAINER'S pid
+# namespace, and neither of them is a guess about a process.
+#
+#   1. the record's machine-id half differs from the running /etc/machine-id, so
+#      the record was written under a machine identity this host no longer has;
+#   2. the record's mtime precedes pid 1's start, so it was written before the
+#      current container existed and no process of this container wrote it.
+#
+# Either fact alone is NOT enough and the predicate below requires both. A
+# differing machine id alone is also what a genuinely foreign live seat sharing
+# this home over a network filesystem looks like; an older mtime alone is what
+# any long-lived holder of this same container looks like.
+#
+# The known bound, stated here because the two readings do not reach past it:
+# they do not exclude ANY live seat that can reach this home from a pid
+# namespace carrying a different /etc/machine-id - the host or a sibling
+# container sharing the home through a bind mount or volume, or another machine
+# over a network filesystem. A record such a seat wrote before this container
+# started satisfies both readings - the machine id differs and the mtime is
+# older - and neither excludes it, because the mtime only proves no process of
+# THIS container wrote the record and says nothing about a writer elsewhere.
+# The supersede path prints that bound with the readings it acted on, so the
+# seat that takes the lock says what it did not establish.
+
+# Print the epoch second at which pid 1 started: btime from /proc/stat plus
+# field 22 of /proc/1/stat divided by the clock tick. Return 1 when either
+# reading cannot be taken, which callers treat as "unmeasurable" and never as a
+# time. Linux-only by construction, because both files are.
+fm_container_start_epoch() {
+  local btime stat_line rest starttime clk
+  btime=$(sed -n 's/^btime \([0-9][0-9]*\).*/\1/p' /proc/stat 2>/dev/null) || return 1
+  case "$btime" in ''|*[!0-9]*) return 1 ;; esac
+  stat_line=$(cat /proc/1/stat 2>/dev/null) || return 1
+  # The comm field is parenthesised and may itself contain spaces, so the fields
+  # are counted only after the LAST ')': what follows is field 3 onwards, and
+  # field 22 of the whole line is the 20th of that remainder.
+  rest=${stat_line##*') '}
+  [ "$rest" != "$stat_line" ] || return 1
+  starttime=$(printf '%s\n' "$rest" | awk '{print $20}')
+  case "$starttime" in ''|*[!0-9]*) return 1 ;; esac
+  clk=$(getconf CLK_TCK 2>/dev/null) || clk=
+  case "$clk" in ''|*[!0-9]*|0) clk=100 ;; esac
+  printf '%s\n' "$(( btime + starttime / clk ))"
+}
+
+# Print <path>'s mtime in epoch seconds, or return 1 when it cannot be read.
+fm_file_mtime_epoch() {  # <path>
+  local m
+  if [ "$(uname -s 2>/dev/null)" = Darwin ]; then
+    m=$(stat -f %m "$1" 2>/dev/null) || return 1
+  else
+    m=$(stat -c %Y "$1" 2>/dev/null) || return 1
+  fi
+  case "$m" in ''|*[!0-9]*) return 1 ;; esac
+  printf '%s\n' "$m"
+}
+
+# Return 0 when the lock record at <lock-file> was written by a holder that died
+# with a previous container, on BOTH readings above. Any reading that cannot be
+# taken returns 1 with FM_LOCK_DEAD_CONTAINER_REASON naming which one, because a
+# reading nobody could take must never render as the verdict that supersedes
+# another seat's lock.
+# Publishes, when it returns 0, the two readings themselves, so a caller prints
+# what it acted on rather than restating the rule:
+FM_LOCK_DEAD_CONTAINER_RECORD_MACHINE=
+FM_LOCK_DEAD_CONTAINER_RUNNING_MACHINE=
+FM_LOCK_DEAD_CONTAINER_RECORD_MTIME=
+FM_LOCK_DEAD_CONTAINER_START=
+FM_LOCK_DEAD_CONTAINER_REASON=
+fm_session_lock_dead_container() {  # <lock-file>
+  local lock=$1 token rest machine running mtime started
+  FM_LOCK_DEAD_CONTAINER_RECORD_MACHINE=
+  FM_LOCK_DEAD_CONTAINER_RUNNING_MACHINE=
+  FM_LOCK_DEAD_CONTAINER_RECORD_MTIME=
+  FM_LOCK_DEAD_CONTAINER_START=
+  FM_LOCK_DEAD_CONTAINER_REASON=
+  if ! fm_session_lock_record_read "$lock"; then
+    FM_LOCK_DEAD_CONTAINER_REASON="the lock record cannot be read ($FM_LOCK_RECORD_ERROR)"
+    return 1
+  fi
+  token=$FM_LOCK_RECORD_PIDNS
+  case "$token" in
+    linux:*) rest=${token#linux:}; machine=${rest%%:*} ;;
+    *)
+      FM_LOCK_DEAD_CONTAINER_REASON="the record names no Linux process namespace, so it carries no machine identity to compare"
+      return 1 ;;
+  esac
+  [ -n "$machine" ] && [ "$machine" != "$rest" ] || {
+    FM_LOCK_DEAD_CONTAINER_REASON="the record's process namespace names no machine identity"
+    return 1
+  }
+  running=$(cat /etc/machine-id 2>/dev/null) || running=
+  running=${running//[[:space:]]/}
+  [ -n "$running" ] || {
+    FM_LOCK_DEAD_CONTAINER_REASON="this machine's /etc/machine-id cannot be read, so the record's machine identity cannot be compared"
+    return 1
+  }
+  if [ "$machine" = "$running" ]; then
+    FM_LOCK_DEAD_CONTAINER_REASON="the record was written under this machine's own identity $running"
+    return 1
+  fi
+  mtime=$(fm_file_mtime_epoch "$lock") || {
+    FM_LOCK_DEAD_CONTAINER_REASON="the lock record's modification time cannot be read"
+    return 1
+  }
+  started=$(fm_container_start_epoch) || {
+    FM_LOCK_DEAD_CONTAINER_REASON="this container's start time cannot be read from /proc/1/stat and /proc/stat"
+    return 1
+  }
+  if [ "$mtime" -ge "$started" ]; then
+    # shellcheck disable=SC2034 # Read by callers after the predicate returns.
+    FM_LOCK_DEAD_CONTAINER_REASON="the record was written at $mtime, at or after this container's start at $started, so a process of this container wrote it"
+    return 1
+  fi
+  # shellcheck disable=SC2034 # All four are read by callers after the predicate returns.
+  FM_LOCK_DEAD_CONTAINER_RECORD_MACHINE=$machine
+  # shellcheck disable=SC2034 # Read by callers after the predicate returns.
+  FM_LOCK_DEAD_CONTAINER_RUNNING_MACHINE=$running
+  # shellcheck disable=SC2034 # Read by callers after the predicate returns.
+  FM_LOCK_DEAD_CONTAINER_RECORD_MTIME=$mtime
+  # shellcheck disable=SC2034 # Read by callers after the predicate returns.
+  FM_LOCK_DEAD_CONTAINER_START=$started
+  return 0
 }

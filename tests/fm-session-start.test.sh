@@ -460,6 +460,172 @@ EOF
 
 # --- lock refusal: read-only path --------------------------------------------
 
+# A rebuilt container leaves a record whose machine-id half this host no longer
+# carries, written before pid 1 started. The captain allowed a seat to take that
+# record itself, so session start does - and says what it took, rather than
+# leaving the seat read-only until a person removes a file by hand.
+test_a_dead_containers_lock_is_superseded_by_session_start() {
+  local rec root home fakebin out status=0 kept
+  rec=$(new_world lock-dead-container)
+  IFS='|' read -r root home fakebin <<EOF
+$rec
+EOF
+  make_fake_toolchain "$fakebin"
+  make_fake_ps_claude "$fakebin"
+
+  {
+    printf '%s\n' 4242
+    printf 'pidns=linux:00000000000000000000000000000000:pid:[4026531836]\n'
+  } > "$home/state/.lock"
+  touch -d 2001-01-01 "$home/state/.lock"
+
+  out=$(run_session_start "$home" "$root" "$fakebin:$BASE_PATH") || status=$?
+  expect_code 0 "$status" "fm-session-start.sh must exit 0 after superseding a dead container's lock"
+  assert_not_contains "$out" "READ-ONLY SESSION" \
+    "a seat that superseded a dead container's record must not also declare itself read-only"
+  assert_contains "$out" "lock: dead-container" \
+    "session start must print the verdict it acted on"
+  assert_contains "$out" "00000000000000000000000000000000" \
+    "session start must print the machine identity the superseded record carried"
+  assert_contains "$out" "lock acquired by superseding a dead container's record" \
+    "session start must say it took the lock"
+  assert_contains "$out" ".lock.superseded-" \
+    "session start must name the record it kept"
+  kept=$(find "$home/state" -maxdepth 1 -name '.lock.superseded-*' | head -1)
+  [ -n "$kept" ] || fail "the superseded record must be kept on disk"
+
+  pass "session start takes a lock whose holder died with a previous container, on both readings, and prints what it superseded"
+}
+
+# The SessionStart hook ran before the supersede and, reading the dead
+# container's record as foreign, wrote nothing - so the context-ceiling record
+# still named the previous container's harness. A seat that took the lock must
+# not be measured against a dead harness for its whole life.
+transcript_record_field() {  # <record> <key>
+  local record=$1 key=$2 line
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in "$key="*) printf '%s\n' "${line#"$key"=}"; return 0 ;; esac
+  done < "$record"
+  return 1
+}
+
+test_a_superseding_seat_rebinds_the_context_ceiling_record_to_itself() {
+  local rec root home fakebin out status=0 record lock_pid
+  rec=$(new_world lock-dead-container-rebind)
+  IFS='|' read -r root home fakebin <<EOF
+$rec
+EOF
+  make_fake_toolchain "$fakebin"
+  make_fake_ps_claude "$fakebin"
+  : > "$root/AGENTS.md"
+  mkdir -p "$root/bin"
+
+  {
+    printf '%s\n' 4242
+    printf 'pidns=linux:00000000000000000000000000000000:pid:[4026531836]\n'
+  } > "$home/state/.lock"
+  touch -d 2001-01-01 "$home/state/.lock"
+  record="$home/state/.primary-transcript"
+  printf 'status=ok\nharness_pid=4242\nsession_id=aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee\ntranscript_path=/previous/container/transcript.jsonl\nrecorded_at=978307200\n' > "$record"
+
+  out=$(FM_GATE_REFUSE_BYPASS=1 run_session_start "$home" "$root" "$fakebin:$BASE_PATH") || status=$?
+  expect_code 0 "$status" "fm-session-start.sh must exit 0 after superseding a dead container's lock"
+  assert_contains "$out" "lock acquired by superseding a dead container's record" \
+    "session start must have taken the lock before rebinding the record"
+  lock_pid=$(sed -n '1p' "$home/state/.lock")
+  [ -n "$lock_pid" ] && [ "$lock_pid" != 4242 ] \
+    || fail "the lock must now name the superseding seat, not the dead holder: $(cat "$home/state/.lock")"
+  [ -f "$record" ] || fail "the context-ceiling record must still exist after the supersede"
+  [ "$(transcript_record_field "$record" harness_pid)" = "$lock_pid" ] \
+    || fail "the record must name the harness pid the new lock names, not the dead container's: $(cat "$record")"
+  [ "$(transcript_record_field "$record" status)" = error ] \
+    || fail "a rebind without the hook payload must be an explicit error record, never an invented transcript: $(cat "$record")"
+  [ "$(transcript_record_field "$record" error)" = superseded-without-hook-payload ] \
+    || fail "the error record must name why the transcript is unknown: $(cat "$record")"
+  ! transcript_record_field "$record" transcript_path >/dev/null \
+    || fail "the previous container's transcript path must not be carried into the new seat's record: $(cat "$record")"
+  assert_contains "$out" "context-ceiling record: rebound to harness pid $lock_pid" \
+    "session start must say the record was rebound and to whom"
+
+  pass "a seat that supersedes a dead container's lock rebinds the context-ceiling record to its own harness pid as an explicit error rather than leaving it naming the dead one"
+}
+
+# make_fake_ps_claude_holder <fakebin> <holder-pid>: every process's parent is
+# <holder-pid>, and only that pid reports as a live claude, so the ancestry walk
+# in bin/fm-harness-pid-lib.sh resolves to exactly that pid from any process and
+# a test knows in advance which pid the new lock and the record will name.
+make_fake_ps_claude_holder() {
+  local fakebin=$1 holder_pid=$2
+  cat > "$fakebin/ps" <<SH
+#!/usr/bin/env bash
+set -u
+pid=""
+prev=""
+for arg in "\$@"; do
+  [ "\$prev" = "-p" ] && pid="\$arg"
+  prev="\$arg"
+done
+case "\$*" in
+  *"comm="*)
+    if [ "\$pid" = "$holder_pid" ]; then printf '/usr/local/bin/claude\n'; else printf '/bin/bash\n'; fi
+    exit 0 ;;
+  *"args="*)
+    if [ "\$pid" = "$holder_pid" ]; then printf 'claude\n'; else printf 'bash\n'; fi
+    exit 0 ;;
+  *"ppid="*) printf '%s\n' "$holder_pid"; exit 0 ;;
+esac
+exit 1
+SH
+  chmod +x "$fakebin/ps"
+}
+
+# A fresh pid table hands out the same small numbers again, so the previous
+# container's ok record can name the very pid this container's harness got. Pid
+# equality must not keep it: left standing, the ceiling would silently measure
+# the previous container's transcript for the life of this session.
+test_a_stale_record_naming_the_reused_harness_pid_is_still_replaced() {
+  local rec root home fakebin out status=0 record holder_pid
+  rec=$(new_world lock-dead-container-rebind-pid-reuse)
+  IFS='|' read -r root home fakebin <<EOF
+$rec
+EOF
+  make_fake_toolchain "$fakebin"
+  sleep 300 &
+  holder_pid=$!
+  make_fake_ps_claude_holder "$fakebin" "$holder_pid"
+  : > "$root/AGENTS.md"
+  mkdir -p "$root/bin"
+
+  {
+    printf '%s\n' 4242
+    printf 'pidns=linux:00000000000000000000000000000000:pid:[4026531836]\n'
+  } > "$home/state/.lock"
+  touch -d 2001-01-01 "$home/state/.lock"
+  record="$home/state/.primary-transcript"
+  printf 'status=ok\nharness_pid=%s\nsession_id=aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee\ntranscript_path=/previous/container/transcript.jsonl\nrecorded_at=978307200\n' \
+    "$holder_pid" > "$record"
+  touch -d 2001-01-01 "$record"
+
+  out=$(FM_GATE_REFUSE_BYPASS=1 run_session_start "$home" "$root" "$fakebin:$BASE_PATH") || status=$?
+  kill "$holder_pid" 2>/dev/null || true
+  expect_code 0 "$status" "fm-session-start.sh must exit 0 after superseding a dead container's lock"
+  [ "$(sed -n '1p' "$home/state/.lock")" = "$holder_pid" ] \
+    || fail "the fixture must make the new lock name the same pid the stale record names: $(cat "$home/state/.lock")"
+  [ "$(transcript_record_field "$record" status)" = error ] \
+    || fail "a record older than this container must be replaced even when it names the reused pid: $(cat "$record")"
+  [ "$(transcript_record_field "$record" error)" = superseded-without-hook-payload ] \
+    || fail "the replacement must be the explicit supersede error record: $(cat "$record")"
+  [ "$(transcript_record_field "$record" harness_pid)" = "$holder_pid" ] \
+    || fail "the replacement must name this session's harness pid: $(cat "$record")"
+  ! transcript_record_field "$record" transcript_path >/dev/null \
+    || fail "the previous container's transcript path must not survive the rebind: $(cat "$record")"
+  assert_contains "$out" "context-ceiling record: rebound to harness pid $holder_pid" \
+    "session start must say the stale same-pid record was rebound"
+
+  pass "a stale ok record naming the pid this container's harness reused is replaced by the supersede error record rather than left to measure the previous container's transcript"
+}
+
+
 test_lock_refusal_read_only_path() {
   local rec root home fakebin holder_pid out status
   rec=$(new_world lock-refusal)
@@ -1644,6 +1810,9 @@ EOF
 test_context_digest_absent_empty_present
 test_required_session_reads_reach_a_short_preview
 test_lock_refusal_read_only_path
+test_a_dead_containers_lock_is_superseded_by_session_start
+test_a_superseding_seat_rebinds_the_context_ceiling_record_to_itself
+test_a_stale_record_naming_the_reused_harness_pid_is_still_replaced
 test_captain_and_learnings_head_leads_the_digest
 test_oversized_first_lines_deliver_bounded_partial_content
 test_output_ordering_diagnostics_lead

@@ -639,8 +639,87 @@ SH
 
   out=$(run_lock "$root" "$fakebin") || status=$?
   expect_code 1 "$status" "a session with no harness ancestor must not take the lock"
-  assert_contains "$out" "cannot locate harness process in ancestry" \
-    "the refusal must name the identification failure"
+  assert_contains "$out" "no harness process was found" \
+    "the refusal must name the identification failure, and which of the two it was"
+  # The consequence, not just the failure: nothing was written, so a later
+  # `status` reads "free" while this session is live, and a refusal that does not
+  # say so leaves the next reader to conclude the home is idle.
+  assert_contains "$out" "this home now has NO record while this session is live" \
+    "the refusal must name what a later status will report"
+  [ ! -e "$root/state/.lock" ] || fail "no lock may exist after a refused acquisition"
+}
+
+# The other identification failure: the ancestry walk did not complete because
+# a `ps` probe itself failed. That is an UNKNOWN answer rather than a settled
+# one, so it is retried on the shared bounded budget before it is believed. The
+# fake `ps` below counts its own probes in a file so the first ones can fail
+# and the later ones answer as a live harness ancestry would.
+# make_fake_ps_flaky <fakebin> <ancestor-pid> <failing-probes>: the first
+# <failing-probes> invocations exit 1; every later one answers like
+# make_fake_ps_holder. A count of "always" never answers.
+make_fake_ps_flaky() {
+  local fakebin=$1 ancestor=$2 failing=$3
+  : > "$fakebin/ps.calls"
+  cat > "$fakebin/ps" <<SH
+#!/usr/bin/env bash
+set -u
+calls=\$(wc -l < "$fakebin/ps.calls")
+printf 'x\n' >> "$fakebin/ps.calls"
+if [ "$failing" = always ] || [ "\$calls" -lt "$failing" ]; then
+  exit 1
+fi
+pid=""
+prev=""
+for arg in "\$@"; do
+  [ "\$prev" = "-p" ] && pid="\$arg"
+  prev="\$arg"
+done
+case "\$*" in
+  *"comm="*)
+    if [ "\$pid" = "$ancestor" ]; then printf '/usr/local/bin/claude\n'; else printf '/bin/bash\n'; fi
+    exit 0 ;;
+  *"args="*)
+    if [ "\$pid" = "$ancestor" ]; then printf 'claude\n'; else printf 'bash\n'; fi
+    exit 0 ;;
+  *"ppid="*) printf '%s\n' "$ancestor"; exit 0 ;;
+esac
+exit 1
+SH
+  chmod +x "$fakebin/ps"
+}
+
+test_a_probe_that_fails_then_answers_is_retried_and_the_lock_is_written() {
+  local root fakebin harness out
+  root=$(fixture flaky-probe-recovers)
+  fakebin=$(fm_fakebin "$root")
+  live_pid harness
+  make_fake_ps_flaky "$fakebin" "$harness" 2
+
+  out=$(FM_HARNESS_PID_RETRY_DELAYS="0.01 0.01 0.01" run_lock "$root" "$fakebin") \
+    || fail "a probe failure that clears on retry must still yield the lock: $out"
+  assert_contains "$out" "lock acquired: harness pid $harness" \
+    "the acquisition after a retried probe must name this session's harness"
+  [ "$(lock_pid "$root/state/.lock")" = "$harness" ] \
+    || fail "the lock written after the bounded retry must name this session"
+  [ "$(wc -l < "$fakebin/ps.calls")" -gt 2 ] \
+    || fail "the walk must have been retried past the probes that failed"
+}
+
+test_a_probe_that_always_fails_is_refused_and_names_the_probe_failure() {
+  local root fakebin harness out status=0
+  root=$(fixture flaky-probe-never-answers)
+  fakebin=$(fm_fakebin "$root")
+  live_pid harness
+  make_fake_ps_flaky "$fakebin" "$harness" always
+
+  out=$(FM_HARNESS_PID_RETRY_DELAYS="0.01 0.01 0.01" run_lock "$root" "$fakebin") || status=$?
+  expect_code 1 "$status" "a session whose process probes never answer must not take the lock"
+  assert_contains "$out" "the process probes themselves failed" \
+    "the refusal must name the probe failure rather than a missing harness"
+  assert_contains "$out" "this home now has NO record while this session is live" \
+    "the refusal must name what a later status will report"
+  [ "$(wc -l < "$fakebin/ps.calls")" -ge 4 ] \
+    || fail "the unknown answer must have been retried on the bounded budget before being refused"
   [ ! -e "$root/state/.lock" ] || fail "no lock may exist after a refused acquisition"
 }
 
@@ -1056,6 +1135,126 @@ test_a_record_naming_no_pid_table_still_refuses_a_live_holder() {
     "a live holder in a record naming no table must still be named as the holder"
 }
 
+# --- a holder that died with a previous container ---------------------------
+# The fixtures below stage the two readings against the REAL host: the record's
+# machine-id half is a value this machine does not have, and its mtime is set
+# before pid 1's genuine start rather than before a simulated one. Nothing here
+# overrides a clock or a machine identity, so what passes is the same reading a
+# rebuilt seat takes.
+
+# dead_container_record <lock-file> <pid> [mtime-spec]: a record naming a pid
+# table on a machine identity this host does not carry, aged before this
+# container started unless <mtime-spec> says otherwise.
+dead_container_record() {
+  local lock=$1 pid=$2 when=${3:-2001-01-01}
+  write_record "$lock" "$pid" "linux:00000000000000000000000000000000:pid:[4026531836]"
+  touch -d "$when" "$lock"
+}
+
+test_status_names_a_dead_containers_record_with_both_readings() {
+  local root fakebin harness out
+  prepare dead-container-status
+  root=$PREP_ROOT fakebin=$PREP_FAKEBIN harness=$PREP_HARNESS
+
+  dead_container_record "$root/state/.lock" 4242
+  out=$(run_lock "$root" "$fakebin" status) || fail "status must always exit 0"
+  assert_contains "$out" "lock: dead-container" \
+    "a record from a gone machine identity, written before this container started, must read as dead-container"
+  assert_contains "$out" "00000000000000000000000000000000" \
+    "the dead-container verdict must name the machine identity the record was written under"
+  assert_contains "$out" "acquire --supersede-dead-container" \
+    "the dead-container verdict must name the command that takes it"
+}
+
+test_a_dead_containers_record_is_superseded_and_kept() {
+  local root fakebin harness out kept record_mtime
+  prepare dead-container-supersede
+  root=$PREP_ROOT fakebin=$PREP_FAKEBIN harness=$PREP_HARNESS
+
+  dead_container_record "$root/state/.lock" 4242
+  record_mtime=$(stat -c %Y "$root/state/.lock")
+  out=$(run_lock "$root" "$fakebin" acquire --supersede-dead-container) \
+    || fail "a dead container's record must be supersedable: $out"
+  assert_contains "$out" "lock acquired by superseding a dead container's record: harness pid $harness" \
+    "superseding must report the seat that took the lock"
+  assert_contains "$out" "superseded: pid 4242" \
+    "superseding must name the holder it superseded"
+  [ "$(lock_pid "$root/state/.lock")" = "$harness" ] \
+    || fail "the lock must now name this session"
+  [ "$(lock_field "$root/state/.lock" pidns)" = "$(my_pidns)" ] \
+    || fail "the lock must now name this session's own pid table"
+  # find rather than ls: the kept record is a dotfile, and its name carries the
+  # timestamp this run wrote, which the test does not predict.
+  kept=$(find "$root/state" -maxdepth 1 -name '.lock.superseded-*' | head -1)
+  [ -n "$kept" ] || fail "the superseded record must be kept beside the new lock"
+  [ "$(lock_pid "$kept")" = "4242" ] \
+    || fail "the kept record must still be the record that was superseded"
+  [ "$(stat -c %Y "$kept")" = "$record_mtime" ] \
+    || fail "the kept record must carry the modification time the readings acted on"
+  assert_contains "$out" "not excluded by these readings" \
+    "superseding must say what its two readings did not establish"
+}
+
+test_a_record_written_under_this_machine_identity_is_never_superseded() {
+  local root fakebin harness out status=0
+  prepare dead-container-same-machine
+  root=$PREP_ROOT fakebin=$PREP_FAKEBIN harness=$PREP_HARNESS
+
+  # This machine's own token, aged well before this container started: one
+  # reading holds and the other does not, and one is not enough.
+  write_record "$root/state/.lock" 4242 "$(my_pidns)"
+  touch -d 2001-01-01 "$root/state/.lock"
+  out=$(run_lock "$root" "$fakebin" status) || fail "status must always exit 0"
+  assert_not_contains "$out" "dead-container" \
+    "an old record written under this machine's own identity is not a dead container's"
+
+  out=$(run_lock "$root" "$fakebin" acquire --supersede-dead-container) || status=$?
+  expect_code 1 "$status" "superseding must refuse a record written under this machine's identity"
+  assert_contains "$out" "does not read as a holder that died with a previous container" \
+    "the refusal must say the verdict did not hold"
+  [ "$(lock_pid "$root/state/.lock")" = "4242" ] \
+    || fail "a refused supersede must leave the record untouched"
+}
+
+test_a_record_written_after_this_container_started_is_never_superseded() {
+  local root fakebin harness out status=0
+  prepare dead-container-recent
+  root=$PREP_ROOT fakebin=$PREP_FAKEBIN harness=$PREP_HARNESS
+
+  # A foreign machine identity, but written since this container started, so a
+  # process of THIS container wrote it and it names something still here.
+  dead_container_record "$root/state/.lock" 4242 now
+  out=$(run_lock "$root" "$fakebin" status) || fail "status must always exit 0"
+  assert_not_contains "$out" "dead-container" \
+    "a record written after this container started is not a dead container's"
+
+  out=$(run_lock "$root" "$fakebin" acquire --supersede-dead-container) || status=$?
+  expect_code 1 "$status" "superseding must refuse a record written after this container started"
+  [ "$(lock_pid "$root/state/.lock")" = "4242" ] \
+    || fail "a refused supersede must leave the record untouched"
+}
+
+test_a_live_holder_in_this_pid_table_is_never_superseded() {
+  local root fakebin harness other out status=0
+  prepare dead-container-live-holder
+  root=$PREP_ROOT fakebin=$PREP_FAKEBIN harness=$PREP_HARNESS
+  live_pid other
+  make_fake_ps_holder "$fakebin" "$harness" "$other"
+
+  write_record "$root/state/.lock" "$other" "$(my_pidns)"
+  touch -d 2001-01-01 "$root/state/.lock"
+  out=$(run_lock "$root" "$fakebin" acquire --supersede-dead-container) || status=$?
+  expect_code 1 "$status" "a live holder in this session's own pid table must never be superseded"
+  [ "$(lock_pid "$root/state/.lock")" = "$other" ] \
+    || fail "the live holder's record must be untouched"
+
+  status=0
+  out=$(run_lock "$root" "$fakebin") || status=$?
+  expect_code 1 "$status" "the ordinary acquisition must still refuse a live holder"
+  assert_contains "$out" "another live firstmate session holds the lock (pid $other)" \
+    "the ordinary refusal must be unchanged by the supersede path"
+}
+
 test_a_free_lock_is_acquired_and_the_pid_is_published
 test_the_shared_predicate_refuses_every_claimed_nonregular_lock_path
 test_a_live_holder_refuses_the_second_session
@@ -1074,6 +1273,8 @@ test_a_dangling_lock_symlink_is_refused_rather_than_created
 test_a_state_directory_that_cannot_be_written_refuses_before_claiming
 test_a_state_directory_that_cannot_be_created_refuses
 test_a_session_that_cannot_identify_itself_acquires_nothing
+test_a_probe_that_fails_then_answers_is_retried_and_the_lock_is_written
+test_a_probe_that_always_fails_is_refused_and_names_the_probe_failure
 test_linux_refuses_when_its_pid_namespace_identity_is_unreadable
 test_linux_refuses_when_its_machine_identity_is_unusable
 test_the_same_namespace_inode_on_another_machine_is_foreign
@@ -1089,5 +1290,10 @@ test_a_seat_that_holds_nothing_cannot_offer_ownership
 test_ownership_passes_into_a_real_pid_namespace_by_handover
 test_a_record_naming_no_pid_table_is_upgraded_and_the_gap_is_said_out_loud
 test_a_record_naming_no_pid_table_still_refuses_a_live_holder
+test_status_names_a_dead_containers_record_with_both_readings
+test_a_dead_containers_record_is_superseded_and_kept
+test_a_record_written_under_this_machine_identity_is_never_superseded
+test_a_record_written_after_this_container_started_is_never_superseded
+test_a_live_holder_in_this_pid_table_is_never_superseded
 
 pass "session lock: authority is published only when it can be proved, every way of failing to prove it is its own refusal, a holder in a pid table this session cannot see into is refused rather than judged dead, and ownership can be passed without the home ever naming nobody or naming two"

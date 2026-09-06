@@ -73,6 +73,44 @@ It is this:
 That gap was chosen over the alternative because an unsupervised minute is recoverable and two seats both draining the wake queue, dispatching, and merging is not.
 The gap is bounded by how long the successor takes to start, and it is visible: `fm-lock.sh status` says an offer stands.
 
+## Superseding a holder that died with its container
+
+A container rebuild produced the one refusal a handover cannot clear: the outgoing holder is dead, so it can offer nothing, and its record is foreign, so no reader may judge it.
+Measured in this home between 2026-09-02 and 2026-09-06, four times, the last of them recorded in the 2026-09-06 process review:
+
+```
+$ cat state/.lock.stale-2026-09-06
+147
+pidns=linux:76c1f44f...:pid:[4026532522]
+$ cat /etc/machine-id
+9157f31a...
+$ ps -o lstart= -p 1   ->  container started 10:25Z; the stale record's mtime is Sep 4 14:01
+```
+
+Every one of those four was cleared by a person moving the file aside by hand, and until they did, the rebuilt seat ran read-only: no dispatch, no merges, no wake drain.
+
+The captain allowed the takeover on 2026-09-06, on two readings and only together:
+
+1. the record's machine-id half differs from the running `/etc/machine-id`, so the machine identity that table belonged to is gone;
+2. the record's mtime precedes pid 1's start (`/proc/1/stat` field 22 against `btime` in `/proc/stat`), so no process of this container wrote it.
+
+Neither reading alone is enough and the predicate requires both, because each alone describes something still alive: a differing machine id alone is what a genuinely foreign live seat sharing this home over a network filesystem looks like, and an older mtime alone is what any long-lived holder of this same container looks like.
+Together they establish that the holder cannot be running in this container's pid namespace, and no more than that.
+The known bound is that the two readings do not exclude ANY live seat that can reach this home from a pid namespace carrying a different `/etc/machine-id` - the host or a sibling container sharing the home through a bind mount or volume, or another machine over a network filesystem.
+A record such a seat wrote before this container started has a differing machine id and an older mtime, so both readings hold for it, and neither excludes it.
+The mtime reading only proves that no process of this container wrote the record; it says nothing about a writer elsewhere.
+The supersede path prints that bound beside the two readings it acted on, so a seat that takes another record's place says what its readings did not establish.
+The verdict also requires the record's machine-id half to differ, so it clears only a rebuild in which `/etc/machine-id` changed.
+A container that restarts with the same image-provided or persisted machine id but a fresh pid namespace still reads as foreign, and still needs the hand clear this change was meant to retire.
+`bin/fm-harness-pid-lib.sh` owns the test, `fm-lock.sh status` reports it as `dead-container`, and `fm-lock.sh acquire --supersede-dead-container` is the only path that acts on it.
+`bin/fm-session-start.sh` takes that path itself on that verdict and prints the verdict, both readings and the name of the record it kept.
+It then asks `bin/fm-sessionstart-nudge.sh --rebind-after-supersede` to rebind this home's context-ceiling transcript record to the holder the new lock names, because the SessionStart hook ran before the supersede and correctly wrote nothing for a foreign record; [sessionstart-nudge.md](sessionstart-nudge.md) owns that record and what the rebind can and cannot establish.
+
+This is not a loosening of the liveness test, and the difference is worth stating exactly: nothing here probes a process in a table this session cannot see into.
+It reads the RECORD, twice, and both readings are about the machine and the container rather than about a pid.
+Every other refusal is unchanged - a live holder in this session's own table, a foreign holder whose machine identity is this one, an unreadable record, a record this container wrote.
+The superseded record is kept beside the new lock as `.lock.superseded-<timestamp>` rather than deleted, because the operator who has to understand a superseded seat needs the record that was superseded, and because a supersede that leaves no trace is indistinguishable from the hand `rm` it replaced.
+
 ## What this does not establish
 
 - **The claim lock is still pid-based.**
@@ -89,5 +127,6 @@ The gap is bounded by how long the successor takes to start, and it is visible: 
 - **Nothing about supervision.**
   The monitoring loop and the wake listener are untouched by this change and remain outside the boundary a seat would move into.
   That half of the move is still open.
-- **Nothing about survival.**
-  A container restart and a host reboot are not exercised here.
+- **Survival is handled for one shape only.**
+  A rebuild that changes `/etc/machine-id` is the measured case the supersede above clears.
+  A restart that keeps the machine id, and a host reboot, are not exercised here.

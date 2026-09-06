@@ -608,6 +608,39 @@ timing_mark vessel-identity
 subsection "LOCK"
 LOCK_OUT=$("$SCRIPT_DIR/fm-lock.sh" 2>&1)
 LOCK_RC=$?
+# A refusal is re-read once, and only for the one case the captain has already
+# allowed a seat to take by itself: a record whose holder died with a previous
+# container, on the two readings fm-lock.sh reports as dead-container. Every
+# other refusal - a live holder, a foreign holder this session cannot see into,
+# an unreadable record - is left exactly as it is. The verdict, both readings
+# and the name the superseded record was kept under are printed, because a seat
+# that takes another record's place says what it took.
+# The SessionStart hook ran before this and read the same record as foreign, so
+# it wrote no context-ceiling transcript record for this session; the hook is
+# asked to rebind that record to the holder the supersede just published, and
+# what it did is printed with the rest, so the new seat's ceiling is not left
+# measured against the previous container's harness for the life of the session.
+if [ "$LOCK_RC" -ne 0 ]; then
+  LOCK_STATUS=$("$SCRIPT_DIR/fm-lock.sh" status 2>&1)
+  case "$LOCK_STATUS" in
+    lock:\ dead-container*)
+      LOCK_SUPERSEDE_RC=0
+      LOCK_SUPERSEDE=$("$SCRIPT_DIR/fm-lock.sh" acquire --supersede-dead-container 2>&1) || LOCK_SUPERSEDE_RC=$?
+      if [ "$LOCK_SUPERSEDE_RC" -eq 0 ]; then
+        LOCK_REBIND=$("$SCRIPT_DIR/fm-sessionstart-nudge.sh" --rebind-after-supersede </dev/null 2>&1) || true
+        LOCK_OUT="$LOCK_STATUS
+$LOCK_SUPERSEDE"
+        [ -z "$LOCK_REBIND" ] || LOCK_OUT="$LOCK_OUT
+$LOCK_REBIND"
+        LOCK_RC=0
+      else
+        LOCK_OUT="$LOCK_OUT
+$LOCK_STATUS
+$LOCK_SUPERSEDE"
+      fi
+      ;;
+  esac
+fi
 printf '%s\n' "$LOCK_OUT"
 READ_ONLY=0
 if [ "$LOCK_RC" -ne 0 ]; then
