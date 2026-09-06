@@ -663,12 +663,12 @@ test_record_quotes_the_stub_verbatim() {
 # between this rule and a licence to make a claim true by changing behaviour,
 # and it is the half that would be quietly dropped first.
 test_claims_that_outrun_measurement_agree_across_surfaces() {
-  local file section home id brief
-  fm_test_tmproot home fm-instruction-owners
-  mkdir -p "$home/data"
+  local file section case_home id brief
+  fm_test_tmproot case_home fm-instruction-owners
+  mkdir -p "$case_home/data"
   id="owners-claim-rule-e1"
-  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" some-proj >/dev/null 2>&1
-  brief="$home/data/$id/brief.md"
+  FM_HOME="$case_home" "$ROOT/bin/fm-brief.sh" "$id" some-proj >/dev/null 2>&1
+  brief="$case_home/data/$id/brief.md"
   assert_present "$brief" "ship brief was not scaffolded"
 
   for file in "$ASKUSER" "$AGENTS" "$brief"; do
