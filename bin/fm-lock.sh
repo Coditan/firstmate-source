@@ -34,11 +34,24 @@
 # unsupervised minute is recoverable and two seats both dispatching and merging
 # is not.
 #
+# A container rebuild is the one case where a foreign record can be shown to
+# name nobody without probing a process this session cannot see: the record's
+# machine-id half differs from the running /etc/machine-id AND its mtime
+# precedes pid 1's start. bin/fm-harness-pid-lib.sh owns that two-reading test.
+# Superseding on it is a separate, named path rather than a loosening of the
+# refusal: it keeps the old record beside the new one as
+# .lock.superseded-<timestamp> and prints both readings it acted on, so what was
+# taken and why is on disk rather than only in a session's memory.
+#
 # Usage: fm-lock.sh                       acquire; exit 1 unless ownership is verified
 #        fm-lock.sh acquire [--handover TICKET]
 #                                         acquire, presenting a ticket a standing
 #                                         offer named; also read from
 #                                         FM_LOCK_HANDOVER_TICKET
+#        fm-lock.sh acquire --supersede-dead-container
+#                                         take a lock whose holder died with a
+#                                         previous container, on both readings
+#                                         `status` reports as dead-container
 #        fm-lock.sh status                print holder and liveness; always exits 0
 #        fm-lock.sh handover              stand down and print the successor's ticket
 set -u
@@ -53,12 +66,13 @@ LOCK="$STATE/.lock"
 . "$SCRIPT_DIR/fm-harness-pid-lib.sh"
 
 MODE=acquire
+SUPERSEDE_DEAD_CONTAINER=0
 TICKET="${FM_LOCK_HANDOVER_TICKET:-}"
 case "${1:-}" in
   ''|acquire) [ -n "${1:-}" ] && shift ;;
   status) MODE=status; shift ;;
   handover) MODE=handover; shift ;;
-  -h|--help) sed -n '2,43p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+  -h|--help) sed -n '2,56p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
   *) echo "error: unknown command ${1}; run $0 --help" >&2; exit 2 ;;
 esac
 while [ $# -gt 0 ]; do
@@ -68,10 +82,17 @@ while [ $# -gt 0 ]; do
       shift
       [ $# -gt 0 ] || { echo "error: --handover needs a ticket" >&2; exit 2; }
       TICKET=$1; shift ;;
+    --supersede-dead-container)
+      [ "$MODE" = acquire ] || { echo "error: --supersede-dead-container applies to acquire only" >&2; exit 2; }
+      SUPERSEDE_DEAD_CONTAINER=1; shift ;;
     *) echo "error: unknown option $1; run $0 --help" >&2; exit 2 ;;
   esac
 done
 TICKET=${TICKET//[[:space:]]/}
+if [ -n "$TICKET" ] && [ "$SUPERSEDE_DEAD_CONTAINER" -eq 1 ]; then
+  echo "error: a handover ticket and --supersede-dead-container are two different ways to take a lock this session cannot show is free; present exactly one" >&2
+  exit 2
+fi
 
 if [ "$MODE" = status ]; then
   if [ ! -e "$STATE" ] && [ ! -L "$STATE" ]; then
@@ -103,6 +124,14 @@ if [ "$MODE" = status ]; then
   case "$FM_LOCK_RECORD_PID" in
     ''|*[!0-9]*) echo "lock: free"; exit 0 ;;
   esac
+  if fm_session_lock_dead_container "$LOCK"; then
+    # A sub-verdict of `foreign`, not a replacement for it: the pid is still in a
+    # table this session cannot see into, and this says the extra thing that is
+    # measurable - the whole machine identity that table belonged to is gone, and
+    # the record predates this container, so no process here wrote it.
+    echo "lock: dead-container - held by pid $FM_LOCK_RECORD_PID recorded under machine id $FM_LOCK_DEAD_CONTAINER_RECORD_MACHINE, while this machine is $FM_LOCK_DEAD_CONTAINER_RUNNING_MACHINE, and the record's modification time $FM_LOCK_DEAD_CONTAINER_RECORD_MTIME precedes this container's start $FM_LOCK_DEAD_CONTAINER_START; supersede it with \"$0 acquire --supersede-dead-container\"$offer"
+    exit 0
+  fi
   if [ -n "$FM_LOCK_RECORD_PIDNS" ] && { ! mine_ns=$(fm_pid_namespace_token) || [ "$mine_ns" != "$FM_LOCK_RECORD_PIDNS" ]; }; then
     # Not "stale" and not "held": this reader has no way to test that pid at
     # all, and reporting either would be a claim it cannot make.
@@ -145,7 +174,27 @@ refuse_not_ours() {
   exit 1
 }
 
-me=$(fm_harness_pid) || { echo "error: cannot locate harness process in ancestry" >&2; exit 1; }
+# A failed identification here leaves the home with NO record while this session
+# is live, and a later `status` then reports "free" - true about the record and
+# wrong about the home. The two failures are not the same and are not answered
+# the same way: an incomplete ancestry walk is an UNKNOWN answer, so it is
+# retried on the shared bounded budget before being believed, while a completed
+# walk that found no harness is a settled negative and is refused at once. Both
+# refusals name the consequence, because "free" afterwards does not mean idle.
+me=
+if fm_harness_pid >/dev/null; then
+  me=$FM_HARNESS_PID
+elif [ "$FM_HARNESS_PID_ERROR" = harness-lookup-failed ] && fm_harness_pid_settled >/dev/null; then
+  me=$FM_HARNESS_PID
+fi
+if [ -z "$me" ]; then
+  if [ "$FM_HARNESS_PID_ERROR" = harness-lookup-failed ]; then
+    echo "error: cannot locate the harness process in this session's ancestry because the process probes themselves failed; no lock was written, so this home now has NO record while this session is live and a later status will report it free; operate read-only until resolved" >&2
+  else
+    echo "error: no harness process was found in this session's ancestry, so this session cannot name itself as the holder; no lock was written, so this home now has NO record while this session is live and a later status will report it free; operate read-only until resolved" >&2
+  fi
+  exit 1
+fi
 my_ns=$(fm_pid_namespace_token) || {
   echo "error: cannot identify this session's process namespace; Linux requires readable /etc/machine-id and /proc/self/ns/pid, so the lock it wrote could not be read correctly by anyone else; operate read-only until resolved" >&2
   exit 1
@@ -277,6 +326,42 @@ TXT
 fi
 
 # --- acquire ---------------------------------------------------------------
+
+if [ "$SUPERSEDE_DEAD_CONTAINER" -eq 1 ]; then
+  # The second path that takes a lock this session cannot show is free, and like
+  # the ticket it is not a loosening of the liveness test: it acts on two
+  # readings of the RECORD, never on a probe of a process in a table this session
+  # cannot see into. The old record is kept, not deleted, because the operator
+  # who has to understand a superseded seat needs the record that was superseded.
+  take_claim_lock
+  if ! fm_session_lock_dead_container "$LOCK"; then
+    echo "error: this lock does not read as a holder that died with a previous container, so it was not superseded: $FM_LOCK_DEAD_CONTAINER_REASON" >&2
+    exit 1
+  fi
+  superseded_machine=$FM_LOCK_DEAD_CONTAINER_RECORD_MACHINE
+  running_machine=$FM_LOCK_DEAD_CONTAINER_RUNNING_MACHINE
+  superseded_mtime=$FM_LOCK_DEAD_CONTAINER_RECORD_MTIME
+  container_start=$FM_LOCK_DEAD_CONTAINER_START
+  superseded_pid=$FM_LOCK_RECORD_PID
+  kept="$LOCK.superseded-$(date -u +%Y-%m-%dT%H-%M-%SZ)"
+  if [ -e "$kept" ] || [ -L "$kept" ]; then
+    echo "error: $kept already exists, so superseding would overwrite an earlier superseded record; move it aside and retry" >&2
+    exit 1
+  fi
+  if ! mv -f -- "$LOCK" "$kept" 2>/dev/null; then
+    echo "error: cannot move the dead-container lock record aside; ownership was not taken and this home is unchanged" >&2
+    exit 1
+  fi
+  publish_record "$me" "$my_ns" ""
+  release_claim_lock
+  cat <<TXT
+lock acquired by superseding a dead container's record: harness pid $me
+superseded: pid $superseded_pid, kept at $kept
+  recorded machine id $superseded_machine, this machine is $running_machine
+  record modified at $superseded_mtime, this container started at $container_start
+TXT
+  exit 0
+fi
 
 if [ -n "$TICKET" ]; then
   # A presented ticket is the ONE path that takes a lock this session cannot

@@ -460,6 +460,44 @@ EOF
 
 # --- lock refusal: read-only path --------------------------------------------
 
+# A rebuilt container leaves a record whose machine-id half this host no longer
+# carries, written before pid 1 started. The captain allowed a seat to take that
+# record itself, so session start does - and says what it took, rather than
+# leaving the seat read-only until a person removes a file by hand.
+test_a_dead_containers_lock_is_superseded_by_session_start() {
+  local rec root home fakebin out status=0 kept
+  rec=$(new_world lock-dead-container)
+  IFS='|' read -r root home fakebin <<EOF
+$rec
+EOF
+  make_fake_toolchain "$fakebin"
+  make_fake_ps_claude "$fakebin"
+
+  {
+    printf '%s\n' 4242
+    printf 'pidns=linux:00000000000000000000000000000000:pid:[4026531836]\n'
+  } > "$home/state/.lock"
+  touch -d 2001-01-01 "$home/state/.lock"
+
+  out=$(run_session_start "$home" "$root" "$fakebin:$BASE_PATH") || status=$?
+  expect_code 0 "$status" "fm-session-start.sh must exit 0 after superseding a dead container's lock"
+  assert_not_contains "$out" "READ-ONLY SESSION" \
+    "a seat that superseded a dead container's record must not also declare itself read-only"
+  assert_contains "$out" "lock: dead-container" \
+    "session start must print the verdict it acted on"
+  assert_contains "$out" "00000000000000000000000000000000" \
+    "session start must print the machine identity the superseded record carried"
+  assert_contains "$out" "lock acquired by superseding a dead container's record" \
+    "session start must say it took the lock"
+  assert_contains "$out" ".lock.superseded-" \
+    "session start must name the record it kept"
+  kept=$(find "$home/state" -maxdepth 1 -name '.lock.superseded-*' | head -1)
+  [ -n "$kept" ] || fail "the superseded record must be kept on disk"
+
+  pass "session start takes a lock whose holder died with a previous container, on both readings, and prints what it superseded"
+}
+
+
 test_lock_refusal_read_only_path() {
   local rec root home fakebin holder_pid out status
   rec=$(new_world lock-refusal)
@@ -1644,6 +1682,7 @@ EOF
 test_context_digest_absent_empty_present
 test_required_session_reads_reach_a_short_preview
 test_lock_refusal_read_only_path
+test_a_dead_containers_lock_is_superseded_by_session_start
 test_captain_and_learnings_head_leads_the_digest
 test_oversized_first_lines_deliver_bounded_partial_content
 test_output_ordering_diagnostics_lead
