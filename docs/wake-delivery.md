@@ -70,6 +70,8 @@ The listener selects that recorded server explicitly and requires it to echo the
 This matters because a tmux pane id is unique only within one server, so two vessels on one machine can both have a live `%0`.
 
 Recording the publishing session is what makes a stale record detectable.
+An endpoint is deliverable only while its publishing session still holds the lock, and `bin/fm-delivery-lib.sh` reads that as three conditions rather than a pid comparison: the lock names the endpoint's own session pid, that pid is in this session's own pid table, and the process is still alive.
+A lock and endpoint a container rebuild left behind name the same dead pid and once matched each other; `tests/fm-delivery-status-contract.test.sh` pins that such a pair is `undeliverable`.
 A record left behind by an exited session names a pane that is now somebody else's or nobody's, and typing into an unverified address is worse than reporting that there is none - so `publish-endpoint` refuses a guessed pane and a session with no recorded lock, rather than writing an address nobody verified.
 A tmux record with no valid server identity is likewise `undeliverable`; the listener never resolves its bare pane id against ambient process state.
 Binding the target to its server does not constrain which terminal the captain selects, because publication records and proves the selected endpoint rather than imposing a home-path policy on it.
