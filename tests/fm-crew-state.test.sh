@@ -1062,6 +1062,9 @@ test_herdr_server_down_read_never_starts_a_server_and_closes_its_pipe() {
   FM_FAKE_HERDR_SERVER_LOG="$d/server-starts"
   : > "$FM_FAKE_HERDR_SERVER_LOG"
   local out rc
+  # The single quotes are deliberate: $0 and $1 must expand inside the inner
+  # `bash -c` shell, not in this outer test shell.
+  # shellcheck disable=SC2016
   out=$( PATH="$d/fakebin:$PATH" FM_STATE_OVERRIDE="$d/state" \
     timeout 20 bash -c '"$0" "$1" 2>/dev/null | head -1' "$CREW_STATE" feat-herdr-down )
   rc=$?

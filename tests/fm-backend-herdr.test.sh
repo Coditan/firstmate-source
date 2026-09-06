@@ -374,6 +374,9 @@ check_server_ensure_start_detached() {  # <dir> <path> <mode>
   # the faithful shape: it blocks until every holder of that pipe's write end
   # closes it, which the old backgrounded shell function never did while the
   # server lived. The outer timeout is what turns that hang into a failure.
+  # The single quotes are deliberate: $0 and $r must expand inside the inner
+  # `bash -c` shell, not in this outer test shell.
+  # shellcheck disable=SC2016
   out=$( PATH="$path" FM_HERDR_SERVER_STARTS="$dir/starts" FM_HERDR_POLLS="$dir/polls" \
     timeout 20 bash -c 'r=$(. "$0/bin/backends/herdr.sh"; fm_backend_herdr_server_ensure fmtest && echo ensured); printf %s "$r"' "$ROOT" 2>"$dir/stderr" )
   rc=$?
