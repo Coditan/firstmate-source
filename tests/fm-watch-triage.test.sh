@@ -906,7 +906,7 @@ test_parked_same_second_gathers_get_distinct_keys_without_state_files() {
   ' sourced-watcher "$WATCH" "$now" > "$dir/sourced.out" 2>&1 \
     || fail "sourced watcher gathers failed (exit $?)"$'\n'"--- output ---"$'\n'"$(cat "$dir/sourced.out")"
 
-  markers=$(cd "$state" && ls -d .parked-* | sort | tr '\n' ' ')
+  markers=$(cd "$state" && for m in .parked-*; do [ -e "$m" ] && printf '%s\n' "$m"; done | sort | tr '\n' ' ')
   [ "$markers" = ".parked-test_fm-ss1 .parked-test_fm-ss2 .parked-test_fm-ss3 .parked-test_fm-ss4 " ] \
     || fail "the parked gather left a file in the parked-marker namespace: $markers"
   rows=$(grep -c "$(printf '\tstale\t')" "$state/.wake-queue" 2>/dev/null || true)
