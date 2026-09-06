@@ -1005,6 +1005,121 @@ test_parked_coalesced_record_fits_the_drain_row_bound() {
   pass "a fourteen-window coalesced parked recheck reaches the seat whole, inside the drain row bound"
 }
 
+# --- away mode never produces a parked recheck ------------------------------
+# With state/.afk set the supervise-daemon owns triage and the watcher hands it
+# plain window identities only, so a parked recheck - single or coalesced - must
+# not be gathered on either path that can reach the gather. The poll path is
+# driven through a real watcher process; the push path through the sourced
+# watcher's handle_push_transition, the same function the event splice calls.
+# Lifting the flag then produces the coalesced record from the very same
+# fixture on both paths, which is what pins that away mode suppressed it rather
+# than the fixture never being due.
+test_parked_recheck_never_produced_while_away() {
+  local dir state fakebin out capture_file window_list pane_hash back i key n pid queue rows
+  local -a keys
+  dir=$(make_case parked-afk); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"; capture_file="$dir/pane.txt"
+  printf 'finished, awaiting review' > "$capture_file"
+  pane_hash=$(hash_text "finished, awaiting review")
+  back=$(( $(date +%s) - 500 ))
+  keys=(); window_list=''
+  for i in 1 2 3; do
+    key=$(printf '%s' "test:fm-pa$i" | tr ':/.' '___')
+    keys+=("$key")
+    window_list="$window_list${window_list:+$'\n'}test:fm-pa$i"
+    printf 'window=test:fm-pa%s\nkind=ship\n' "$i" > "$state/pa$i.meta"
+    printf 'done: PR https://example.test/pr/%s checks green\n' "$i" > "$state/pa$i.status"
+    printf '%s' "$(seen_sig "$state/pa$i.status")" > "$state/.seen-pa${i}_status"
+    printf '%s' "$pane_hash" > "$state/.hash-$key"
+    printf '1\n' > "$state/.count-$key"
+    # Away mode's own handoff enqueues a plain stale once per distinct pane
+    # hash. This hash is already handed off, so the only record the poll path
+    # could add is a parked recheck, and the queue can be asserted empty.
+    printf '%s' "$pane_hash" > "$state/.stale-$key"
+    : > "$state/.parked-$key"
+    backdate "$(( back - 60 ))" "$state/pa$i.meta"
+    backdate "$back" "$state/.parked-$key"
+  done
+  date '+%s' > "$state/.afk"
+
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window_list" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+    FM_STATE_OVERRIDE="$state" FM_PAUSE_RESURFACE_SECS=240 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 FM_WATCH_DAEMON=1 "$WATCH" > "$out" 2>&1 &
+  pid=$!
+  # Two full passes over every window, each past the unchanged-hash threshold
+  # where the parked branch would otherwise be taken.
+  for key in "${keys[@]}"; do
+    n=0
+    until [ "$(cat "$state/.count-$key" 2>/dev/null || echo 0)" -ge 3 ] 2>/dev/null; do
+      kill -0 "$pid" 2>/dev/null || fail "watcher exited while away with a due parked set: $(cat "$out")"
+      [ "$n" -lt 300 ] || { reap "$pid"; fail "watcher never completed two passes over $key while away: $(cat "$out")"; }
+      sleep 0.1; n=$((n + 1))
+    done
+  done
+  reap "$pid"
+  [ ! -s "$state/.wake-queue" ] \
+    || fail "away mode let the poll path produce a stale record for a due parked set"$'\n'"--- queue ---"$'\n'"$(cat "$state/.wake-queue")"
+  for key in "${keys[@]}"; do
+    [ ! -e "$state/.parkedresurfaced-$key" ] || fail "away mode advanced a parked recheck throttle on the poll path: $key"
+  done
+
+  # The push path, still away: the transition is handed to the daemon as the
+  # plain blocked record, never gathered into a parked recheck.
+  : > "$dir/push.wakes"
+  FM_STATE_OVERRIDE="$state" FM_PAUSE_RESURFACE_SECS=240 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 bash -c '
+    . "$1" >/dev/null 2>&1 || exit 97
+    wakes=$2
+    wake() { printf "%s\n" "$1" >> "$wakes"; }
+    fm_backend_commit_transition() { return 0; }
+    handle_push_transition herdr test "$(fm_transition_record fm-pa1 ws "" blocked claude)"
+  ' sourced-watcher "$WATCH" "$dir/push.wakes" > "$dir/push.out" 2>&1 \
+    || fail "sourced push transition failed while away (exit $?)"$'\n'"--- output ---"$'\n'"$(cat "$dir/push.out")"
+  queue=$(cat "$state/.wake-queue" 2>/dev/null || true)
+  assert_contains "$queue" "herdr: agent blocked" "away mode's push path did not hand the plain blocked transition to the daemon"
+  [ -s "$dir/push.wakes" ] || fail "away mode's push handoff did not keep its one-shot wake"
+  assert_not_contains "$queue" "awaiting external human action" "away mode let the push path produce a parked recheck"
+  assert_not_contains "$queue" "parked-recheck-" "away mode let the push path gather a coalesced parked recheck"
+  for key in "${keys[@]}"; do
+    [ ! -e "$state/.parkedresurfaced-$key" ] || fail "away mode advanced a parked recheck throttle on the push path: $key"
+  done
+
+  # Away mode ends: the same fixture is due, and the poll path gathers it.
+  rm -f "$state/.afk"
+  : > "$out"
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window_list" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+    FM_STATE_OVERRIDE="$state" FM_PAUSE_RESURFACE_SECS=240 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 FM_WATCH_DAEMON=1 "$WATCH" > "$out" 2>&1 &
+  pid=$!
+  for key in "${keys[@]}"; do
+    wait_numeric_file "$state/.parkedresurfaced-$key" 60 \
+      || { reap "$pid"; fail "after away mode ended a parked task's due recheck never happened on the poll path: $key"$'\n'"--- watcher ---"$'\n'"$(cat "$out")"; }
+  done
+  reap "$pid"
+  rows=$(awk -F '\t' '$3 == "stale" && $4 ~ /^parked-recheck-/' "$state/.wake-queue" | grep -c . || true)
+  [ "$rows" = 1 ] \
+    || fail "after away mode ended the poll path produced $rows coalesced parked rechecks, not one"$'\n'"--- queue ---"$'\n'"$(cat "$state/.wake-queue")"
+  grep -Eq 'parked [0-9]+s(-[0-9]+s)?; test:fm-pa1, test:fm-pa2, test:fm-pa3\)' "$state/.wake-queue" \
+    || fail "after away mode ended the poll path's coalesced record did not name every parked task"$'\n'"--- queue ---"$'\n'"$(cat "$state/.wake-queue")"
+
+  # And the push path, once the throttles are cleared so the set is due again.
+  rm -f "$state"/.parkedresurfaced-*
+  FM_STATE_OVERRIDE="$state" FM_PAUSE_RESURFACE_SECS=240 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 bash -c '
+    . "$1" >/dev/null 2>&1 || exit 97
+    wakes=$2
+    wake() { printf "%s\n" "$1" >> "$wakes"; }
+    fm_backend_commit_transition() { return 0; }
+    handle_push_transition herdr test "$(fm_transition_record fm-pa1 ws "" blocked claude)"
+  ' sourced-watcher "$WATCH" "$dir/push.wakes" > "$dir/push.out" 2>&1 \
+    || fail "sourced push transition failed after away mode ended (exit $?)"$'\n'"--- output ---"$'\n'"$(cat "$dir/push.out")"
+  rows=$(awk -F '\t' '$3 == "stale" && $4 ~ /^parked-recheck-/' "$state/.wake-queue" | grep -c . || true)
+  [ "$rows" = 2 ] \
+    || fail "after away mode ended the push path did not gather the due parked set ($rows coalesced records, not two)"$'\n'"--- queue ---"$'\n'"$(cat "$state/.wake-queue")"
+  for key in "${keys[@]}"; do
+    [ -e "$state/.parkedresurfaced-$key" ] || fail "after away mode ended the push path did not advance a gathered throttle: $key"
+  done
+  pass "a parked recheck is never produced while away, on either path, and the same fixture gathers once the flag lifts"
+}
+
 # The cadence default is a prompt-cache decision, not a round number: the seat's
 # prompt cache holds for one hour, so a recheck at exactly 3600s reliably arrives
 # after the cache it would otherwise have reused has expired. Pinned here because
@@ -3315,6 +3430,7 @@ test_parked_rechecks_coalesce_into_one_wake
 test_parked_gathers_that_fall_due_apart_both_survive_the_drain
 test_parked_same_second_gathers_get_distinct_keys_without_state_files
 test_parked_coalesced_record_fits_the_drain_row_bound
+test_parked_recheck_never_produced_while_away
 test_pause_resurface_default_stays_under_the_prompt_cache_hour
 test_parked_marker_clears_on_status_write
 test_parked_marker_clears_on_meta_change
