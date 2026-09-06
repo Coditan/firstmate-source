@@ -948,12 +948,6 @@ test_outer_whitespace_on_parent_pid_is_accepted() {
   pass "fm-sessionstart-nudge: outer whitespace on a parent pid is accepted"
 }
 
-# This allowlist contract is a deliberate exemption from the test-quality rule's
-# prohibition on source-content tests because this is a repository-wide negative
-# property that no single executable interface can demonstrate. It enumerates
-# every tracked script under bin/ that NAMES the record path; it does not prove
-# what writes that path, and forces every new name to be reviewed instead of
-# appearing quietly.
 # make_fake_ps_two_claudes <fakebin> <own-pid> <other-pid>: two live claude
 # processes in one home - this session's own harness, which every ancestry walk
 # from here resolves to, and another session's, which the lock names.
@@ -1012,7 +1006,7 @@ test_a_refused_session_keeps_its_payload_and_the_rebind_promotes_it() {
   own=$!
   make_fake_ps_two_claudes "$fakebin" "$own" "$other"
   record="$root/state/.primary-transcript"
-  pending="$record.pending"
+  pending="$record.pending.$own"
   ns=$(fm_pid_namespace_token) || fail "this host cannot name its own pid table"
   printf 'status=ok\nharness_pid=%s\nsession_id=first-session\ntranscript_path=/tmp/first-session.jsonl\nrecorded_at=1\n' \
     "$other" > "$record"
@@ -1063,7 +1057,7 @@ test_a_stash_naming_another_holder_is_never_promoted() {
   own=$!
   make_fake_ps_two_claudes "$fakebin" "$own" 999001
   record="$root/state/.primary-transcript"
-  pending="$record.pending"
+  pending="$record.pending.$own"
   ns=$(fm_pid_namespace_token) || fail "this host cannot name its own pid table"
   printf 'status=ok\nharness_pid=4242\nsession_id=dead-session\ntranscript_path=/previous/container.jsonl\nrecorded_at=1\n' \
     > "$record"
@@ -1086,6 +1080,110 @@ test_a_stash_naming_another_holder_is_never_promoted() {
   pass "fm-sessionstart-nudge: a stash naming a holder other than the lock's is discarded, and the record becomes an explicit error"
 }
 
+# Two sessions can be refused the same lock: the primary, and a helper the
+# harness started in the primary's own cwd while the dead pre-rebuild lock still
+# stood. Each keeps its own stash, so the helper's run - with a payload of its
+# own, or with none - never touches the primary's, and the rebind after the
+# primary takes the lock still promotes the primary's own position.
+test_a_second_refused_session_cannot_destroy_the_primarys_stash() {
+  local root="$TMP_ROOT/record-pending-two-refused" fakebin record pending
+  local other own helper out status=0 ns helper_payload
+  make_primary "$root"
+  fakebin=$(fm_fakebin "$root")
+  sleep 30 &
+  other=$!
+  sleep 30 &
+  own=$!
+  sleep 30 &
+  helper=$!
+  record="$root/state/.primary-transcript"
+  pending="$record.pending.$own"
+  ns=$(fm_pid_namespace_token) || fail "this host cannot name its own pid table"
+  helper_payload='{"session_id":"99999999-8888-7777-6666-555555555555","transcript_path":"/home/cap/.claude/projects/-home-cap-fm/99999999-8888-7777-6666-555555555555.jsonl","cwd":"/home/cap/fm","hook_event_name":"SessionStart","source":"startup"}'
+  printf 'status=ok\nharness_pid=%s\nsession_id=first-session\ntranscript_path=/tmp/first-session.jsonl\nrecorded_at=1\n' \
+    "$other" > "$record"
+  { printf '%s\n' "$other"; printf 'pidns=%s\n' "$ns"; } > "$root/state/.lock"
+
+  make_fake_ps_two_claudes "$fakebin" "$own" "$other"
+  run_nudge_with_payload "$root" "$fakebin" "$CLAUDE_PAYLOAD" >/dev/null || status=$?
+  expect_code 0 "$status" "the primary's refused run"
+  [ "$(record_field "$pending" harness_pid)" = "$own" ] \
+    || fail "the primary's refused run must stash its own position: $(cat "$pending" 2>/dev/null)"
+
+  make_fake_ps_two_claudes "$fakebin" "$helper" "$other"
+  run_nudge_with_payload "$root" "$fakebin" "$helper_payload" >/dev/null || status=$?
+  expect_code 0 "$status" "the helper's refused run with a payload"
+  run_nudge_with_payload "$root" "$fakebin" '' >/dev/null || status=$?
+  expect_code 0 "$status" "the helper's refused run without a payload"
+  [ "$(record_field "$record" session_id)" = first-session ] \
+    || fail "a refused helper took over the running session's record: $(cat "$record")"
+  [ "$(record_field "$pending" session_id)" = 11111111-2222-3333-4444-555555555555 ] \
+    || fail "the helper's refused runs must leave the primary's stash intact: $(cat "$pending" 2>/dev/null)"
+
+  kill "$other" 2>/dev/null || true
+  wait "$other" 2>/dev/null || true
+  { printf '%s\n' "$own"; printf 'pidns=%s\n' "$ns"; } > "$root/state/.lock"
+  make_fake_ps_two_claudes "$fakebin" "$own" "$helper"
+  out=$(env -u NO_MISTAKES_GATE PATH="$fakebin:$PATH" FM_GATE_REFUSE_BYPASS=0 \
+    FM_ROOT_OVERRIDE="$root" FM_HOME="$root" "$NUDGE" --rebind-to-lock </dev/null) || status=$?
+  kill "$own" "$helper" 2>/dev/null || true
+  wait "$own" "$helper" 2>/dev/null || true
+  expect_code 0 "$status" "the rebind run"
+  [ "$(record_field "$record" status)" = ok ] \
+    || fail "the primary's stash must be promoted rather than replaced by an error: $(cat "$record")"
+  [ "$(record_field "$record" harness_pid)" = "$own" ] \
+    || fail "the promoted record must name the primary the lock now names: $(cat "$record")"
+  [ "$(record_field "$record" session_id)" = 11111111-2222-3333-4444-555555555555 ] \
+    || fail "the promoted record must carry the primary's own session id, not the helper's: $(cat "$record")"
+  [ "$(record_field "$record" transcript_path)" = /home/cap/.claude/projects/-home-cap-fm/11111111-2222-3333-4444-555555555555.jsonl ] \
+    || fail "the promoted record must carry the primary's own transcript path: $(cat "$record")"
+  [ ! -f "$pending" ] || fail "the primary's stash must be spent by the promotion"
+  assert_contains "$out" "context-ceiling record: rebound to harness pid $own" \
+    "the rebind must say what it did"
+
+  pass "fm-sessionstart-nudge: a second refused session, with or without a payload, never destroys the primary's stash, and the rebind still promotes the primary's own position"
+}
+
+# A stash written before this container started names a pid table that no
+# longer exists, so the rebind removes it rather than promoting it against the
+# same small pid number handed out again.
+test_a_stash_predating_this_container_is_swept() {
+  local root="$TMP_ROOT/record-pending-stale" fakebin record own ns status=0
+  make_primary "$root"
+  fakebin=$(fm_fakebin "$root")
+  sleep 30 &
+  own=$!
+  make_fake_ps_two_claudes "$fakebin" "$own" 999001
+  record="$root/state/.primary-transcript"
+  ns=$(fm_pid_namespace_token) || fail "this host cannot name its own pid table"
+  printf 'status=ok\nharness_pid=%s\nsession_id=dead-session\ntranscript_path=/previous/container.jsonl\nrecorded_at=1\n' \
+    "$own" > "$record.pending.$own"
+  touch -d 2001-01-01 "$record.pending.$own"
+  printf 'status=ok\nharness_pid=4343\nsession_id=dead-other\ntranscript_path=/previous/other.jsonl\nrecorded_at=1\n' \
+    > "$record.pending.4343"
+  touch -d 2001-01-01 "$record.pending.4343"
+  { printf '%s\n' "$own"; printf 'pidns=%s\n' "$ns"; } > "$root/state/.lock"
+
+  env -u NO_MISTAKES_GATE PATH="$fakebin:$PATH" FM_GATE_REFUSE_BYPASS=0 \
+    FM_ROOT_OVERRIDE="$root" FM_HOME="$root" "$NUDGE" --rebind-to-lock </dev/null >/dev/null || status=$?
+  kill "$own" 2>/dev/null || true
+  wait "$own" 2>/dev/null || true
+  expect_code 0 "$status" "the rebind run"
+  [ "$(record_field "$record" status)" = error ] \
+    || fail "a stash from a previous container must never become this session's record: $(cat "$record")"
+  [ "$(record_field "$record" error)" = rebound-without-hook-payload ] \
+    || fail "the record must name why the transcript is unknown: $(cat "$record")"
+  [ ! -e "$record.pending.$own" ] || fail "the holder's stale stash must be removed"
+  [ ! -e "$record.pending.4343" ] || fail "another dead pid's stale stash must be removed"
+  pass "fm-sessionstart-nudge: stashes predating this container are swept at the rebind"
+}
+
+# This allowlist contract is a deliberate exemption from the test-quality rule's
+# prohibition on source-content tests because this is a repository-wide negative
+# property that no single executable interface can demonstrate. It enumerates
+# every tracked script under bin/ that NAMES the record path; it does not prove
+# what writes that path, and forces every new name to be reviewed instead of
+# appearing quietly.
 test_primary_transcript_path_name_allowlist_contract() {
   local expected found
   expected=$(printf '%s\n' fm-context-lib.sh fm-harness-pid-lib.sh fm-sessionstart-nudge.sh)
@@ -1212,6 +1310,8 @@ test_an_unusable_parent_pid_is_recorded_as_unknown
 test_outer_whitespace_on_parent_pid_is_accepted
 test_a_refused_session_keeps_its_payload_and_the_rebind_promotes_it
 test_a_stash_naming_another_holder_is_never_promoted
+test_a_second_refused_session_cannot_destroy_the_primarys_stash
+test_a_stash_predating_this_container_is_swept
 test_primary_transcript_path_name_allowlist_contract
 test_opencode_plugin_delivers_exact_nudge_once
 test_tracked_harness_registration

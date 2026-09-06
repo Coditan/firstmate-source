@@ -38,10 +38,13 @@ RECORD="$STATE/.primary-transcript"
 # session's true transcript path and session id survive a refusal: the hook fires
 # once per harness session, so a session refused the record at its start has no
 # second payload to record from when it later takes the lock, and without this it
-# could only ever rebind to an error record. Promotion is gated on the lock naming
-# the pending record's own harness pid, so a second, never-locking session's
-# pending file can never become this home's record.
-PENDING="$RECORD.pending"
+# could only ever rebind to an error record. One file per session, named by the
+# harness pid that wrote it, so two refused sessions in one home - a primary and
+# a helper the harness started in the same cwd - never write the same file and
+# neither can destroy the other's only copy. Promotion reads only the file named
+# by the pid the lock publishes, so a second, never-locking session's pending
+# file can never become this home's record.
+PENDING_PREFIX="$RECORD.pending."
 LOCK="$STATE/.lock"
 
 # 0 when the holder in state/.lock is live, names this process's pid table, and
@@ -209,7 +212,7 @@ record_transcript_position() {
     # rather than published. A payload that yielded no usable transcript is worth
     # nothing to a later rebind, so it leaves no pending file behind to promote.
     if [ -n "$err" ]; then
-      discard_pending_record
+      [ -z "$pid" ] || discard_pending_record "$pid"
     else
       publish_pending_record "$pid" "$sid" "$path"
     fi
@@ -218,9 +221,13 @@ record_transcript_position() {
   # This session is publishing for real, so its own stash has nothing left to
   # say. Another session's stash is left where it is: that session may still take
   # the lock later, and it is the only copy of its transcript position.
-  [ -z "$pid" ] || [ "$(kv_field "$PENDING" harness_pid)" != "$pid" ] || discard_pending_record
+  [ -z "$pid" ] || discard_pending_record "$pid"
   publish_transcript_record "$pid" "$sid" "$path" "$err"
   return 0
+}
+
+pending_path() {  # <pid>
+  printf '%s%s' "$PENDING_PREFIX" "$1"
 }
 
 # Stash this session's own transcript position while another session's lock
@@ -228,17 +235,36 @@ record_transcript_position() {
 # that cannot be written leaves nothing behind rather than a partial file a
 # later rebind would read as this session's.
 publish_pending_record() {  # <pid> <session-id> <transcript-path>
-  local tmp="$PENDING.$$"
+  local pending tmp
+  pending=$(pending_path "$1")
+  tmp="$pending.$$"
   printf 'status=ok\nharness_pid=%s\nsession_id=%s\ntranscript_path=%s\nrecorded_at=%s\n' \
     "$1" "$2" "$3" "$(date +%s)" > "$tmp" 2>/dev/null \
-    || { rm -f "$tmp" 2>/dev/null; discard_pending_record; return 0; }
-  mv -f "$tmp" "$PENDING" 2>/dev/null \
-    || { rm -f "$tmp" 2>/dev/null; discard_pending_record; }
+    || { rm -f "$tmp" 2>/dev/null; discard_pending_record "$1"; return 0; }
+  mv -f "$tmp" "$pending" 2>/dev/null \
+    || { rm -f "$tmp" 2>/dev/null; discard_pending_record "$1"; }
   return 0
 }
 
-discard_pending_record() {
-  rm -f "$PENDING" 2>/dev/null || : > "$PENDING" 2>/dev/null || true
+# Remove only the stash named by <pid>. Every other session's stash is left
+# where it is, for the reason record_transcript_position gives.
+discard_pending_record() {  # <pid>
+  local pending
+  pending=$(pending_path "$1")
+  rm -f "$pending" 2>/dev/null || : > "$pending" 2>/dev/null || true
+}
+
+# Remove every stash written before this container started: its pid names a
+# process in a pid table that no longer exists, and the same small numbers are
+# handed out again in this one. A reading that cannot be taken never proves a
+# stash current, so such a stash is removed rather than kept.
+sweep_stale_pending_records() {
+  local pending
+  for pending in "$PENDING_PREFIX"*; do
+    [ -e "$pending" ] || continue
+    file_postdates_this_container "$pending" && continue
+    rm -f "$pending" 2>/dev/null || : > "$pending" 2>/dev/null || true
+  done
 }
 
 # publish_transcript_record <pid> <session-id> <transcript-path> <error>: write
@@ -285,7 +311,9 @@ publish_transcript_record() {
 # measure the previous container's transcript for the life of this session. The
 # record's age is its mtime, the same kernel-set reading the lock predicate
 # uses, and an age or container start that cannot be read never proves the
-# record current. Prints one line saying what it did.
+# record current. Prints one line saying what it did, and nothing at all when
+# the record already names the holder and is current, so an ordinary healthy
+# session start carries no extra line.
 file_postdates_this_container() {  # <path>
   local mtime started
   mtime=$(fm_file_mtime_epoch "$1") || return 1
@@ -297,32 +325,36 @@ record_postdates_this_container() {
   file_postdates_this_container "$RECORD"
 }
 
-# Promote the stash this session left at its own SessionStart into the record,
-# when it names <holder> - the pid the lock now publishes - and was written after
-# this container started. Both tests are the record's own: a stash naming another
-# pid belongs to another session, and a stash predating this container was
-# written in a pid table that no longer exists, where the same small pid numbers
-# are handed out again. Returns 1 when there is nothing promotable, leaving the
-# record untouched for the caller's error path. The stash is discarded either
-# way: it has served its one purpose, and a stash left behind would be promoted
-# again by a later rebind against a pid it no longer describes.
+# Promote the stash this session left at its own SessionStart into the record.
+# Only the file named by <holder> - the pid the lock now publishes - is read,
+# and it is promoted when its own harness_pid names that holder and it was
+# written after this container started. Both tests are the record's own: a
+# stash naming another pid belongs to another session, and a stash predating
+# this container was written in a pid table that no longer exists, where the
+# same small pid numbers are handed out again. Returns 1 when there is nothing
+# promotable, leaving the record untouched for the caller's error path. The
+# holder's stash is discarded either way: it has served its one purpose, and a
+# stash left behind would be promoted again by a later rebind against a pid it
+# no longer describes. Every other session's stash is left alone.
 promote_pending_record() {  # <holder-pid>
-  local holder=$1 pid sid path
-  pid=$(kv_field "$PENDING" harness_pid) || return 1
-  sid=$(kv_field "$PENDING" session_id) || { discard_pending_record; return 1; }
-  path=$(kv_field "$PENDING" transcript_path) || { discard_pending_record; return 1; }
+  local holder=$1 pending pid sid path
+  pending=$(pending_path "$holder")
+  pid=$(kv_field "$pending" harness_pid) || return 1
+  sid=$(kv_field "$pending" session_id) || { discard_pending_record "$holder"; return 1; }
+  path=$(kv_field "$pending" transcript_path) || { discard_pending_record "$holder"; return 1; }
   if [ "$pid" != "$holder" ] || [ -z "$sid" ] || [ -z "$path" ] \
-     || ! file_postdates_this_container "$PENDING"; then
-    discard_pending_record
+     || ! file_postdates_this_container "$pending"; then
+    discard_pending_record "$holder"
     return 1
   fi
-  discard_pending_record
+  discard_pending_record "$holder"
   publish_transcript_record "$holder" "$sid" "$path" ""
   [ "$(record_field status)" = ok ] && [ "$(record_field harness_pid)" = "$holder" ]
 }
 
 rebind_record_to_lock() {
   local lock_pid mine_ns
+  sweep_stale_pending_records
   if ! fm_session_lock_record_read "$LOCK"; then
     invalidate_transcript_record
     printf 'context-ceiling record: the lock cannot be read back (%s), so the previous record was removed rather than left naming a dead harness\n' \
@@ -346,7 +378,6 @@ rebind_record_to_lock() {
     return 0
   fi
   if [ "$(record_field harness_pid)" = "$lock_pid" ] && record_postdates_this_container; then
-    printf 'context-ceiling record: already names harness pid %s and was written after this container started\n' "$lock_pid"
     return 0
   fi
   if promote_pending_record "$lock_pid"; then

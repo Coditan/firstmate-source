@@ -646,7 +646,7 @@ EOF
   mkdir -p "$root/bin"
 
   record="$home/state/.primary-transcript"
-  pending="$record.pending"
+  pending="$record.pending.$holder_pid"
   transcript="$home/session.jsonl"
   {
     printf '{"type":"user","isMeta":true,"message":{"role":"user","content":"session-start nudge"},"timestamp":"2020-01-01T00:00:00.000Z"}\n'
