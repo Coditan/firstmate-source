@@ -169,8 +169,10 @@ fm_retry_backoff() {  # <count-after-attempt> <base> <max>
   printf '%s\n' "$delay"
 }
 
-# Files the exhausted-ceiling finding once for this episode and records that it
-# did, so a supervisor that keeps polling does not keep filing the same claim.
+# Files the exhausted-ceiling finding once for this episode and records the
+# outcome either way - the finding id when it was filed, `finding=unfiled` when
+# the surface could not be reached - so a supervisor that keeps polling does not
+# keep filing the same claim.
 # Prints one line for the caller's log, and returns non-zero when the finding
 # could not be filed, because a supervisor that gave up unrecorded is itself
 # something the operator has to see.
