@@ -96,9 +96,12 @@ The captain allowed the takeover on 2026-09-06, on two readings and only togethe
 
 Neither reading alone is enough and the predicate requires both, because each alone describes something still alive: a differing machine id alone is what a genuinely foreign live seat sharing this home over a network filesystem looks like, and an older mtime alone is what any long-lived holder of this same container looks like.
 Together they establish that the holder cannot be running in this container's pid namespace, and no more than that.
-The known bound is a home reachable from a second machine over a network filesystem: a LIVE seat on that other machine can have written the record before this container started, so its machine id differs and its mtime is older, and the two readings do not exclude it.
-The mtime reading only proves that no process of this container wrote the record; it says nothing about a writer on another machine.
+The known bound is that the two readings do not exclude ANY live seat that can reach this home from a pid namespace carrying a different `/etc/machine-id` - the host or a sibling container sharing the home through a bind mount or volume, or another machine over a network filesystem.
+A record such a seat wrote before this container started has a differing machine id and an older mtime, so both readings hold for it, and neither excludes it.
+The mtime reading only proves that no process of this container wrote the record; it says nothing about a writer elsewhere.
 The supersede path prints that bound beside the two readings it acted on, so a seat that takes another record's place says what its readings did not establish.
+The verdict also requires the record's machine-id half to differ, so it clears only a rebuild in which `/etc/machine-id` changed.
+A container that restarts with the same image-provided or persisted machine id but a fresh pid namespace still reads as foreign, and still needs the hand clear this change was meant to retire.
 `bin/fm-harness-pid-lib.sh` owns the test, `fm-lock.sh status` reports it as `dead-container`, and `fm-lock.sh acquire --supersede-dead-container` is the only path that acts on it.
 `bin/fm-session-start.sh` takes that path itself on that verdict and prints the verdict, both readings and the name of the record it kept.
 

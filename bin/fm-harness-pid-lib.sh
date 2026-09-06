@@ -327,14 +327,16 @@ fm_session_lock_held_by_other() {  # <lock-file> <my-harness-pid>
 # this home over a network filesystem looks like; an older mtime alone is what
 # any long-lived holder of this same container looks like.
 #
-# The known bound, stated here because the two readings do not reach past it: a
-# home reachable from a second machine over a network filesystem can hold a
-# record written by a LIVE seat on that other machine whose mtime precedes this
-# container's start. Both readings hold for that record - the machine id differs
-# and the mtime is older - and neither excludes it, because the mtime only
-# proves no process of THIS container wrote the record and says nothing about a
-# writer elsewhere. The supersede path prints that bound with the readings it
-# acted on, so the seat that takes the lock says what it did not establish.
+# The known bound, stated here because the two readings do not reach past it:
+# they do not exclude ANY live seat that can reach this home from a pid
+# namespace carrying a different /etc/machine-id - the host or a sibling
+# container sharing the home through a bind mount or volume, or another machine
+# over a network filesystem. A record such a seat wrote before this container
+# started satisfies both readings - the machine id differs and the mtime is
+# older - and neither excludes it, because the mtime only proves no process of
+# THIS container wrote the record and says nothing about a writer elsewhere.
+# The supersede path prints that bound with the readings it acted on, so the
+# seat that takes the lock says what it did not establish.
 
 # Print the epoch second at which pid 1 started: btime from /proc/stat plus
 # field 22 of /proc/1/stat divided by the clock tick. Return 1 when either

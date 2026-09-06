@@ -1167,11 +1167,12 @@ test_status_names_a_dead_containers_record_with_both_readings() {
 }
 
 test_a_dead_containers_record_is_superseded_and_kept() {
-  local root fakebin harness out kept
+  local root fakebin harness out kept record_mtime
   prepare dead-container-supersede
   root=$PREP_ROOT fakebin=$PREP_FAKEBIN harness=$PREP_HARNESS
 
   dead_container_record "$root/state/.lock" 4242
+  record_mtime=$(stat -c %Y "$root/state/.lock")
   out=$(run_lock "$root" "$fakebin" acquire --supersede-dead-container) \
     || fail "a dead container's record must be supersedable: $out"
   assert_contains "$out" "lock acquired by superseding a dead container's record: harness pid $harness" \
@@ -1188,6 +1189,10 @@ test_a_dead_containers_record_is_superseded_and_kept() {
   [ -n "$kept" ] || fail "the superseded record must be kept beside the new lock"
   [ "$(lock_pid "$kept")" = "4242" ] \
     || fail "the kept record must still be the record that was superseded"
+  [ "$(stat -c %Y "$kept")" = "$record_mtime" ] \
+    || fail "the kept record must carry the modification time the readings acted on"
+  assert_contains "$out" "not excluded by these readings" \
+    "superseding must say what its two readings did not establish"
 }
 
 test_a_record_written_under_this_machine_identity_is_never_superseded() {

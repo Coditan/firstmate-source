@@ -348,8 +348,9 @@ if [ "$SUPERSEDE_DEAD_CONTAINER" -eq 1 ]; then
     echo "error: $kept already exists, so superseding would overwrite an earlier superseded record; move it aside and retry" >&2
     exit 1
   fi
-  if ! mv -f -- "$LOCK" "$kept" 2>/dev/null; then
-    echo "error: cannot move the dead-container lock record aside; ownership was not taken and this home is unchanged" >&2
+  if ! cp -p -- "$LOCK" "$kept" 2>/dev/null; then
+    rm -f -- "$kept" 2>/dev/null || true
+    echo "error: cannot copy the dead-container lock record to $kept; ownership was not taken and the record still stands unchanged" >&2
     exit 1
   fi
   publish_record "$me" "$my_ns" ""
@@ -359,7 +360,7 @@ lock acquired by superseding a dead container's record: harness pid $me
 superseded: pid $superseded_pid, kept at $kept
   recorded machine id $superseded_machine, this machine is $running_machine
   record modified at $superseded_mtime, this container started at $container_start
-  not excluded by these readings: a live seat on another machine sharing this home over a network filesystem
+  not excluded by these readings: any live seat reaching this home from a pid namespace with a different machine id (host or sibling container over a bind mount, another machine over a network filesystem)
 TXT
   exit 0
 fi
