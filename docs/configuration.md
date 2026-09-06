@@ -326,6 +326,19 @@ Both `--arm` paths retire their pre-rename predecessor shim and `.check-trust` b
 The respawner itself reads the wake-delivery service verdict rather than probing panes, refuses to launch while the session lock names a live first mate, honors `state/.seat-stay-down`, uses `config/seat-launch-command` as its fresh-start launch command, gives the fresh seat one typed first turn, and reports exhausted retry episodes through the findings surface.
 [`docs/seat-respawner.md`](seat-respawner.md) owns the mechanism, retry bound, accepted manual-close trade, and verification limits, and [`docs/seat-absence.md`](seat-absence.md) owns the detection half, the supervision arrangement, and what is still not covered.
 
+## Herdr runtime service
+
+`bin/fm-herdr-service.sh` owns the supervised owner of this home's herdr runtime, and is selected only on a home whose resolved runtime backend is herdr; on any other home it installs nothing and reports nothing.
+The tracked template is `systemd/fm-herdr@.service` and the instance is `fm-herdr@$(systemd-escape --path "$FM_HOME").service`.
+The first unit copy and `enable --now` require explicit captain consent through `HERDR_RUNTIME:` and `bin/fm-bootstrap.sh install herdr-unit`.
+If `systemd --user` is unavailable, a detached home-scoped tmux keeper is selected automatically, exactly as it is for the watcher, the delivery listener, and the seat respawner.
+Convergence, the recorded `PATH`, and the keeper tier's handed-down `PATH` argument all follow the watcher's rules above; `state/.herdr-service.env` is its environment file and `state/.herdr-runtime.lock/record` its keeper-tier record, which also carries the herdr session name the owner is responsible for.
+That session is resolved as a spawn resolves it, `HERDR_SESSION` then `default`, so the owner and the fleet name one server.
+
+One rule separates this service from its three siblings and is worth stating where a reader configuring it will meet it: convergence here replaces the WATCHING process and never the runtime.
+Restarting the delivery listener costs a few seconds of queued wakes, while restarting the herdr server ends every worker's agent process on the home at once, so no path in this service stops a running runtime and none ever will.
+[`docs/herdr-backend.md`](herdr-backend.md#runtime-ownership-who-starts-the-herdr-server) owns the mechanism, the measurement that produced it, the vessel-entrypoint command a container definition must call, and the rollback.
+
 ## Seat absence alarm
 
 `bin/fm-seat-alarm.sh` is the per-home watch for the seat's own absence, armed as a watcher check at every session start and reported by `SEAT_ALARM:` when it is unarmed or has stopped running.

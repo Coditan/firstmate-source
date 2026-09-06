@@ -55,6 +55,7 @@
 #                 "TELEGRAM_RECEIVER_UNIT: <consent, convergence, or fallback detail>",
 #                 "FREQUENCY_MONITOR_UNIT: <consent, convergence, or fallback detail>",
 #                 "RESPAWNER_UNIT: <consent, convergence, or health detail>",
+#                 "HERDR_RUNTIME: <ownership, convergence, or runtime-reading detail>",
 #                 "BOSUN_UNIT: <consent, convergence, judge-reach, or health detail>",
 #                 "RUN_READER: no-mistakes runs in this session (<path>) but a
 #                 context that inherits no shell setup cannot reach it (...)",
@@ -1450,6 +1451,11 @@ if [ "${1:-}" = "install" ]; then
         "$SCRIPT_DIR/fm-seat-respawner-service.sh" install-unit || exit 1
         continue
         ;;
+      herdr-unit)
+        echo "installing herdr-unit: systemd user template plus this home's enabled instance"
+        "$SCRIPT_DIR/fm-herdr-service.sh" install-unit || exit 1
+        continue
+        ;;
       frequency-monitor-unit)
         echo "installing frequency-monitor-unit: systemd user template plus this home's enabled instance"
         "$SCRIPT_DIR/fm-frequency-monitor-service.sh" install-unit || exit 1
@@ -1701,6 +1707,7 @@ if [ "${FM_BOOTSTRAP_DETECT_ONLY:-0}" != 1 ]; then
     "$SCRIPT_DIR/fm-seat-respawner-service.sh" bootstrap
     "$SCRIPT_DIR/fm-frequency-monitor-service.sh" bootstrap
     "$SCRIPT_DIR/fm-bosun-service.sh" bootstrap
+    "$SCRIPT_DIR/fm-herdr-service.sh" bootstrap
   fi
   # Collect both deferred checks. Neither call waits: one that has not answered
   # yet says so here in its own words, naming what this digest does not know,
@@ -1725,6 +1732,7 @@ else
     "$SCRIPT_DIR/fm-seat-respawner-service.sh" bootstrap
     "$SCRIPT_DIR/fm-frequency-monitor-service.sh" bootstrap
     "$SCRIPT_DIR/fm-bosun-service.sh" bootstrap
+    "$SCRIPT_DIR/fm-herdr-service.sh" bootstrap
   fi
 fi
 # Is the daily currency round still running? One file read and one comparison,

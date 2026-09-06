@@ -55,6 +55,72 @@ Verify it works by spawning a trivial task with `--backend herdr` and confirming
 Limitations: herdr is experimental and still carries the open gaps documented below.
 Resolved backend evidence, including the 2026-07-06 symlinked-project-prefix isolation fix, is kept in the same follow-up log for auditability.
 
+## Runtime ownership: who starts the herdr server
+
+The herdr server is where every crewmate on a herdr home actually runs, and until 2026-09-06 nothing on the machine was responsible for it.
+It was started by whichever process first touched the session through `fm_backend_herdr_server_ensure` - a spawn, a pane read, a watcher poll - so the runtime hosting the whole fleet was a child of whatever short-lived reader happened to arrive first.
+
+Measured on the coditan vessel, 2026-09-06, with six workers live:
+
+```
+$ ps -eo pid,ppid,sid,args | grep '[h]erdr server'
+  53756   53754   53420 herdr server --session default
+$ ps -o pid=,ppid=,args= -p 53754
+  53754       1 bash /home/coditan/coditan-firstmate/bin/fm-crew-state.sh bridge-roster-test-reads-live-data
+```
+
+The parent of the fleet's runtime was a one-shot crew-state read, reparented to init when that read exited.
+On 2026-09-04 it was the watcher's own poll instead, and restarting the watcher took every running worker with it.
+`herdr status --json` on 0.7.4 reports capability `detached_server_daemon: false`, so herdr does not daemonize itself: whoever starts it is its parent and its session, and a signal to that session reaches it.
+
+`bin/fm-herdr-service.sh` gives the runtime an owner of its own, in the same family as `bin/fm-watcher-service.sh` and `bin/fm-delivery-service.sh`.
+A working `systemd --user` selects the tracked `systemd/fm-herdr@.service` template, installed only after the captain approves the `HERDR_RUNTIME` bootstrap diagnostic; where systemd is unusable, a home-scoped tmux keeper is selected automatically.
+Both tiers run one loop, `bin/fm-herdr-runtime.sh` - hosted by `bin/fm-herdr-keeper.sh` on the keeper tier - and both are silent on a home whose resolved backend is not herdr.
+
+Three properties are what make this safe to land on a vessel with a full fleet already running, and each is enforced rather than intended.
+
+- **The server is started detached.** The owner starts it through `setsid` (or `nohup` where setsid is absent, recorded in the owner's own record either way), so it lands in a session of its own and no signal to the owner's session reaches it. The systemd unit additionally sets `KillMode=process`, because a unit's processes share one cgroup and the default control-group kill would otherwise reach the detached server anyway.
+- **Nothing in this family ever stops a running runtime.** There is no subcommand that stops one, and no convergence path that restarts one: a stale source version, a changed service PATH, or a keeper from a previous boot is repaired by replacing the WATCHING process only. `restart` restarts the owner.
+- **The owner adopts rather than replaces.** Ownership here means "something is watching and will start it again", not "I am its parent", so an owner starting for the first time on a home whose server is already up changes nothing about that server. That is what lets a live fleet gain an owner with no disruption.
+
+A reading the owner could not take is never rendered as `down`.
+A missing `herdr`, a missing `jq`, or JSON that does not parse are recorded as `unreadable` and reported as themselves, because starting a server on a `down` the owner invented could bind a second server against a live socket.
+
+### The vessel entrypoint gap
+
+Measured on the coditan vessel, 2026-09-06, by reading the container's own PID 1 and its supervisor:
+
+- `/usr/local/bin/vessel-supervisor` starts and identity-tracks exactly two home services in `start_home_services` - `bin/fm-watch-keeper.sh` and `bin/fm-delivery-keeper.sh` - plus the seat keeper, and it refuses to start at all if either keeper script is missing from the home.
+- Neither that supervisor nor `/usr/local/bin/vessel-entrypoint` mentions herdr anywhere. The entrypoint's one comment about "the server the seat lives in" is about the tmux server, not the herdr one.
+- The entrypoint also runs an optional tenant start hook, `$HOME/$VESSEL_START_HOOK`, once in the background as the tenant uid. `VESSEL_START_HOOK` is unset on this vessel, so no hook runs today.
+
+So every rebuild brings the watcher and the delivery listener back and leaves the runtime every worker runs in down until something touches it by accident.
+That definition lives in the Tugboat repository rather than here, so this repository can only state what it should call:
+
+```
+FM_HOME=<this home> <firstmate checkout>/bin/fm-herdr-service.sh ensure
+```
+
+`bin/fm-herdr-service.sh entrypoint-command` prints that line already filled in for the home it is run against.
+It is idempotent by construction - it adopts a runtime that is already up and starts one that is not - it needs no seat, it is silent on a home that does not run herdr, and it is safe to run before any session exists.
+Either seam can carry it: one call in the supervisor beside `start_home_services`, or a tenant start hook if the definition sets `VESSEL_START_HOOK`.
+
+Prefer that one call over adding `bin/fm-herdr-keeper.sh` to `start_home_services` beside the other two keepers, even though the parity is tempting.
+The keeper takes six positional launch arguments whose version and PATH values must be composed by the service rather than by the caller, so that route couples the container definition to a signature this repository owns and would break silently the day it changes; `ensure` is a one-line contract that composes those values itself.
+Until either call exists, session start still converges the owner at every locked bootstrap, so the gap is the window between a rebuild and the first session, not a permanent absence.
+
+### Rollback
+
+Stopping the owner leaves the runtime running, which is the whole rollback:
+
+```
+bin/fm-herdr-service.sh stop-owner
+```
+
+That stops the keeper session or disables the unit, whichever tier this home selected, and the home returns to its previous behavior with no worker disturbed - `fm_backend_herdr_server_ensure` keeps starting the server lazily exactly as it did before.
+Reverting the code is equally safe for the same reason: nothing about a running server depends on the owner existing, so the removal is invisible to every worker in it.
+The one thing rollback restores along with the old behavior is the old exposure: the runtime goes back to being a child of whichever reader touched it first.
+
 ## Status: experimental
 
 Herdr is experimental, exactly like every non-tmux backend in this design.

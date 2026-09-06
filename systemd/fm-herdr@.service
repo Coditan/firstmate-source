@@ -1,0 +1,27 @@
+[Unit]
+Description=Firstmate herdr runtime owner for %I
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+EnvironmentFile=/%I/state/.herdr-service.env
+ExecStart=/usr/bin/env bash ${FM_HERDR_RUNTIME_EXEC}
+Restart=always
+RestartSec=2
+# The owner is disposable and the runtime it watches is not: stopping or
+# restarting this unit must replace the watching process without touching the
+# herdr server, because that server hosts every worker's agent process on this
+# home and killing it ends all of them at once.
+# setsid alone does not achieve that here - a unit's processes share one cgroup
+# and the default control-group kill would reach the detached server anyway - so
+# the unit kills its main process only.  Leaving the server behind is the
+# intended outcome, not a leak: bin/fm-herdr-runtime.sh adopts a running server
+# on its next start rather than replacing it.
+# Expect the user manager to log "Found left-over process ... in control group
+# while starting unit" on the next start.  That message names exactly the
+# behavior above and is not a fault to repair; repairing it would mean killing
+# the runtime this unit exists to keep.
+KillMode=process
+
+[Install]
+WantedBy=default.target
