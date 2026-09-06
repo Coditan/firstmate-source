@@ -132,6 +132,37 @@ test_status_fails_closed_without_subsecond_fingerprint() {
   pass "omega status fails closed when sub-second identity is unavailable"
 }
 
+test_status_refuses_dangling_marker() {
+  local home out rc
+  home=$(new_home dangling-marker)
+  ln -s "$home/state/missing-marker-target" "$home/state/.omega"
+  set +e
+  out=$(run_omega "$home" status)
+  rc=$?
+  set -e
+  [ "$rc" -eq 1 ] || fail "dangling marker did not use unreadable-state exit (rc=$rc): $out"
+  assert_contains "$out" 'unreadable marker: not a regular file' "dangling marker did not fail loudly"
+  assert_not_contains "$out" 'NOT IN FORCE' "dangling marker was misclassified as absent"
+  pass "omega status refuses a dangling marker as unreadable state"
+}
+
+test_status_refuses_non_regular_away_entry() {
+  local home out rc
+  home=$(new_home invalid-away)
+  printf '1700000006\n' > "$home/state/.afk"
+  run_omega "$home" open --task 'invalid away' --record decision-invalid-away >/dev/null
+  rm "$home/state/.afk"
+  mkdir "$home/state/.afk"
+  set +e
+  out=$(run_omega "$home" status)
+  rc=$?
+  set -e
+  [ "$rc" -eq 1 ] || fail "non-regular away entry did not use unreadable-state exit (rc=$rc): $out"
+  assert_contains "$out" 'away-entry state is not a regular file' "non-regular away entry did not fail loudly"
+  assert_not_contains "$out" 'OMEGA: STALE' "non-regular away entry was misclassified as stale"
+  pass "omega status refuses non-regular away-entry state"
+}
+
 test_close_records_window_and_absent_close_is_quiet() {
   local home out log
   home=$(new_home close)
@@ -173,6 +204,28 @@ test_close_retry_does_not_duplicate_log() {
   pass "omega close retry reuses its durable window identity"
 }
 
+test_concurrent_close_writes_one_log_record() {
+  local home tools real_date pid failures=0
+  home=$(new_home concurrent-close)
+  printf '1700000008\n' > "$home/state/.afk"
+  run_omega "$home" open --task 'concurrent close' --record decision-8 >/dev/null
+  tools="$home/tools"
+  mkdir "$tools"
+  real_date=$(command -v date)
+  printf '#!/usr/bin/env bash\nsleep 0.2\nexec %q "$@"\n' "$real_date" > "$tools/date"
+  chmod +x "$tools/date"
+  for _ in 1 2 3 4 5 6 7 8; do
+    PATH="$tools:$PATH" run_omega "$home" close >/dev/null &
+  done
+  for pid in $(jobs -p); do
+    wait "$pid" || failures=$((failures + 1))
+  done
+  [ "$failures" -eq 0 ] || fail "$failures concurrent close calls failed"
+  [ ! -e "$home/state/.omega" ] || fail "concurrent close left the marker"
+  [ "$(wc -l < "$home/state/omega-window.log" | tr -d ' ')" -eq 1 ] || fail "concurrent close duplicated the end record"
+  pass "omega serializes concurrent close transactions"
+}
+
 test_open_refuses_without_away_mode
 test_open_refuses_second_marker
 test_status_reports_matching_window_in_force
@@ -180,5 +233,8 @@ test_status_reports_removed_away_entry_stale
 test_status_reports_changed_away_entry_stale
 test_status_reports_recreated_same_content_stale
 test_status_fails_closed_without_subsecond_fingerprint
+test_status_refuses_dangling_marker
+test_status_refuses_non_regular_away_entry
 test_close_records_window_and_absent_close_is_quiet
 test_close_retry_does_not_duplicate_log
+test_concurrent_close_writes_one_log_record

@@ -57,7 +57,10 @@ away_fingerprint() {
 
 read_marker() {
   local key value extra schema='' opened='' task='' record='' away='' fingerprint='' window_id='' count=0
-  [ -f "$MARKER" ] || return 3
+  if [ ! -e "$MARKER" ] && [ ! -L "$MARKER" ]; then
+    return 3
+  fi
+  [ -f "$MARKER" ] || { printf 'fm-omega: unreadable marker: not a regular file\n' >&2; return 1; }
   while IFS="$(printf '\t')" read -r key value extra || [ -n "$key$value${extra:-}" ]; do
     [ -z "${extra:-}" ] || { printf 'fm-omega: unreadable marker: extra field on %s\n' "$key" >&2; return 1; }
     case "$key" in
@@ -98,8 +101,15 @@ open_window() {
   done
   task=$(clean_value task "$task") || return 2
   record=$(clean_value record "$record") || return 2
-  [ ! -e "$MARKER" ] || { printf 'fm-omega: open refused: marker already exists\n' >&2; return 1; }
-  [ -f "$STATE/.afk" ] || { printf 'fm-omega: open refused: away mode is not active\n' >&2; return 1; }
+  if [ -e "$MARKER" ] || [ -L "$MARKER" ]; then
+    printf 'fm-omega: open refused: marker already exists\n' >&2
+    return 1
+  fi
+  if [ ! -e "$STATE/.afk" ] && [ ! -L "$STATE/.afk" ]; then
+    printf 'fm-omega: open refused: away mode is not active\n' >&2
+    return 1
+  fi
+  [ -f "$STATE/.afk" ] || { printf 'fm-omega: open refused: away-entry state is not a regular file\n' >&2; return 1; }
   IFS= read -r away < "$STATE/.afk" || { printf 'fm-omega: open refused: away-entry identity is unreadable\n' >&2; return 1; }
   away=$(clean_value away-entry "$away") || return 1
   fingerprint=$(away_fingerprint "$STATE/.afk") || {
@@ -129,15 +139,19 @@ open_window() {
 
 status_window() {
   local current fingerprint
-  if [ ! -e "$MARKER" ]; then
+  if [ ! -e "$MARKER" ] && [ ! -L "$MARKER" ]; then
     printf 'OMEGA: NOT IN FORCE - no marker\n'
     return 3
   fi
   read_marker || return 1
-  if [ ! -f "$STATE/.afk" ]; then
+  if [ ! -e "$STATE/.afk" ] && [ ! -L "$STATE/.afk" ]; then
     printf 'OMEGA: STALE - expected away-entry %s, found no active away entry\n' "$OMEGA_AWAY_ENTRY"
     return 4
   fi
+  [ -f "$STATE/.afk" ] || {
+    printf 'fm-omega: status unreadable: current away-entry state is not a regular file\n' >&2
+    return 1
+  }
   IFS= read -r current < "$STATE/.afk" || {
     printf 'fm-omega: status unreadable: current away-entry identity cannot be read\n' >&2
     return 1
@@ -157,7 +171,20 @@ status_window() {
 
 close_window() {
   local closed close_prefix
-  [ -e "$MARKER" ] || return 0
+  if [ ! -e "$MARKER" ] && [ ! -L "$MARKER" ]; then
+    return 0
+  fi
+  if [ "${FM_OMEGA_CLOSE_LOCKED:-0}" != 1 ]; then
+    FM_OMEGA_CLOSE_LOCKED=1 perl -e '
+      use Fcntl qw(:flock);
+      my ($log, @command) = @ARGV;
+      open my $lock, ">>", $log or die "fm-omega: close lock unavailable: $!\n";
+      flock($lock, LOCK_EX) or die "fm-omega: close lock failed: $!\n";
+      system @command;
+      exit($? == -1 ? 1 : $? >> 8);
+    ' "$LOG" "${BASH_SOURCE[0]}" close
+    return
+  fi
   read_marker || return 1
   close_prefix=$(printf 'closed\twindow-id=%s\t' "$OMEGA_WINDOW_ID")
   if grep -F "$close_prefix" "$LOG" >/dev/null 2>&1; then
