@@ -366,10 +366,11 @@ TXT
 fi
 
 if [ -n "$TICKET" ]; then
-  # A presented ticket is the ONE path that takes a lock this session cannot
-  # otherwise show is free, and it is not a bypass of the liveness test: it is
-  # the outgoing holder's own recorded decision to pass ownership, matched
-  # exactly, under the same claim lock every other write takes.
+  # A presented ticket is one of exactly two paths that take a lock this
+  # session cannot otherwise show is free - the other is the dead-container
+  # supersede above - and it is not a bypass of the liveness test: it is the
+  # outgoing holder's own recorded decision to pass ownership, matched exactly,
+  # under the same claim lock every other write takes.
   take_claim_lock
   if ! fm_session_lock_record_read "$LOCK"; then
     echo "error: the session lock cannot be read ($FM_LOCK_RECORD_ERROR), so the handover ticket cannot be matched against a standing offer; operate read-only until resolved" >&2

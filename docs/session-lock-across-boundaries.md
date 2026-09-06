@@ -127,5 +127,6 @@ The superseded record is kept beside the new lock as `.lock.superseded-<timestam
 - **Nothing about supervision.**
   The monitoring loop and the wake listener are untouched by this change and remain outside the boundary a seat would move into.
   That half of the move is still open.
-- **Nothing about survival.**
-  A container restart and a host reboot are not exercised here.
+- **Survival is handled for one shape only.**
+  A rebuild that changes `/etc/machine-id` is the measured case the supersede above clears.
+  A restart that keeps the machine id, and a host reboot, are not exercised here.
