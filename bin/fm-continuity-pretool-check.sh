@@ -12,6 +12,15 @@
 # closes the long-turn gap before another fleet mutation, but does not replace or
 # weaken the Stop hook.
 #
+# One refusal, two addressees. The recovery commands this message names are
+# reserved to the session that operates this checkout, so they are printed only
+# when this hook was loaded from it: the comparison is against FM_ROOT, and it is
+# deliberately not the home the supervision predicate judged. A worker running
+# the same tracked hook from its task worktree is told to report the stalled
+# supervision instead and is handed no command. See fm_session_operates_home in
+# bin/fm-primary-scope-lib.sh, which owns that contract and its limits; the
+# refusal is identical either way.
+#
 # Input is Claude PreToolUse JSON on stdin. Tests may pass --command directly.
 # Malformed transport, missing jq/Node, a missing classifier, or classifier
 # failure all fail open. A deny writes Claude's hook decision to stderr only and
@@ -100,12 +109,32 @@ REST=${CLASSIFICATION#*"$TAB"}
 BLOCKED_SCRIPT=${REST%%"$TAB"*}
 REASON_CODE=${REST#*"$TAB"}
 [ "$REASON_CODE" != "$REST" ] || REASON_CODE=""
+# Same refusal, different addressee. The supervision-repair commands are reserved
+# to the session that operates this home; AGENTS.md gives a crewmate or scout none
+# of them, and a worker cannot see the other homes on the account or what else is
+# in flight. So the default worker message says what is wrong and asks for a
+# report, and hands over no command.
+# unsafe-teardown is the exception, because it is not a supervision-repair
+# refusal at all: the ordinary literal bin/fm-teardown.sh stays allowed for every
+# addressee, so the retry remedy is as true for a worker as for firstmate and a
+# worker that got the report-it wording instead would be reading a wrong
+# diagnosis. The refusal itself is identical either way.
+OPERATES_HOME=0
+fm_session_operates_home "$SCRIPT_DIR/.." "$FM_ROOT" && OPERATES_HOME=1
 case "$REASON_CODE" in
   unsafe-teardown)
-    REASON="[watcher-continuity] tasks are in flight and no live watcher holds this home lock; during recovery only the ordinary literal bin/fm-teardown.sh is allowed, so drop --force and any shell-expanded arguments and retry the literal invocation (blocked: $BLOCKED_SCRIPT)"
+    if [ "$OPERATES_HOME" -eq 1 ]; then
+      REASON="[watcher-continuity] tasks are in flight and no live watcher holds this home lock; during recovery only the ordinary literal bin/fm-teardown.sh is allowed, so drop --force and any shell-expanded arguments and retry the literal invocation (blocked: $BLOCKED_SCRIPT)"
+    else
+      REASON="[watcher-continuity] tasks are in flight in the home that launched this task and no live watcher holds its home lock; during recovery only the ordinary literal bin/fm-teardown.sh is allowed, so drop --force and any shell-expanded arguments and retry the literal invocation (blocked: $BLOCKED_SCRIPT)"
+    fi
     ;;
   *)
-    REASON="[watcher-continuity] tasks are in flight and no live watcher holds this home lock; drain wakes with bin/fm-wake-drain.sh, use fail-closed bin/fm-teardown.sh for completed tasks when needed, and repair supervision through bin/fm-watcher-service.sh and bin/fm-delivery-service.sh before running other fleet commands (blocked: $BLOCKED_SCRIPT)"
+    if [ "$OPERATES_HOME" -eq 1 ]; then
+      REASON="[watcher-continuity] tasks are in flight and no live watcher holds this home lock; drain wakes with bin/fm-wake-drain.sh, use fail-closed bin/fm-teardown.sh for completed tasks when needed, and repair supervision through bin/fm-watcher-service.sh and bin/fm-delivery-service.sh before running other fleet commands (blocked: $BLOCKED_SCRIPT)"
+    else
+      REASON="[watcher-continuity] tasks are in flight in the home that launched this task and no live watcher holds its home lock; repairing that home's supervision belongs to firstmate and not to a task worker - report the stalled supervision in your task status line and carry on with your own task in this worktree (blocked: $BLOCKED_SCRIPT)"
+    fi
     ;;
 esac
 ESCAPED=$(printf '%s' "$REASON" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' | tr '\n' ' ')

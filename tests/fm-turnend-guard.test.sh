@@ -29,6 +29,32 @@ DRAIN_FIRST_REASON='After draining queued wakes, '
 AWAY_CLOSING_REASON='This forced continuation is internal maintenance; after restoring away delivery, end silently unless a queued wake is captain-relevant under AGENTS.md section 9.'
 SESSION_CLOSING_REASON='This forced continuation is internal maintenance; after draining and restoring delivery, end silently unless a queued wake is captain-relevant under AGENTS.md section 9.'
 
+# --- addressee: firstmate's own session vs a task worker ---------------------
+# The tracked hook files ride in EVERY worktree of this repo, so a crewmate or
+# scout working on firstmate itself runs this very guard out of its task
+# worktree while FM_ROOT_OVERRIDE still names the home that launched it. The
+# guard then evaluates the launching home - correctly - but used to hand the
+# worker that home's repair commands. Measured live on 2026-08-30 on two
+# different runtimes: both were handed
+#   "Daemon repair: bin/fm-watcher-service.sh restart"
+# while ten tasks were in flight in a home neither could see. AGENTS.md section 1
+# reserves supervision repair to firstmate, so obeying does damage and refusing
+# leaves the worker stuck; both outcomes are the guard's fault.
+# These are the commands the worker-facing banner must never name. The daemon and
+# delivery services are the repair itself; the drain and teardown are the other
+# fleet commands the operator banner offers, all reserved to firstmate.
+WORKER_FORBIDDEN_COMMANDS='bin/fm-watcher-service.sh bin/fm-delivery-service.sh bin/fm-wake-drain.sh bin/fm-teardown.sh'
+WORKER_REPORT_TAIL='report the stalled supervision in your task status line and carry on with your own task in this worktree'
+WORKER_REPORT_REASON="repairing it belongs to firstmate, not to a task worker: $WORKER_REPORT_TAIL"
+OPERATOR_DAEMON_REPAIR='Daemon repair: bin/fm-watcher-service.sh restart'
+
+assert_names_no_worker_forbidden_command() {
+  local out=$1 context=$2 command
+  for command in $WORKER_FORBIDDEN_COMMANDS; do
+    assert_not_contains "$out" "$command" "$context ($command)"
+  done
+}
+
 # The away daemon reads state/.wake-queue through its own cursor, so any drain
 # wording anywhere in an away banner is a data-loss instruction: fm-wake-drain.sh
 # would consume records the daemon has not read yet.
@@ -216,8 +242,8 @@ make_secondmate_dir() {
 # always hands crewmate/scout tasks working on firstmate itself. git-dir and
 # git-common-dir differ here, unlike a plain checkout.
 make_crewmate_worktree_dir() {
-  local base=$1 dir=$2
-  fm_git_worktree "$base" "$dir" fm/turnend-guard-test-branch
+  local base=$1 dir=$2 branch=${3:-fm/turnend-guard-test-branch}
+  fm_git_worktree "$base" "$dir" "$branch"
   mkdir -p "$dir/state"
   : > "$dir/AGENTS.md"
   install_guard_scripts "$dir"
@@ -257,6 +283,18 @@ run_hook() {
   local dir=$1 stop_active=$2 home
   home=$(cd "$dir" && pwd)
   printf '{"stop_hook_active":%s}' "$stop_active" | CLAUDECODE=1 FM_HOME="$home" bash "$dir/bin/fm-turnend-guard.sh" 2>&1
+}
+
+# Run the guard the way a crewmate or scout on a firstmate task actually runs it:
+# the hook comes out of the task worktree's own checkout, while FM_ROOT_OVERRIDE
+# and FM_HOME still name the home that launched the task. That is the production
+# environment measured on 2026-08-30, not a contrivance.
+run_hook_as_worker() {
+  local wt=$1 home=$2 stop_active=$3
+  wt=$(cd "$wt" && pwd)
+  home=$(cd "$home" && pwd)
+  printf '{"stop_hook_active":%s}' "$stop_active" \
+    | CLAUDECODE=1 FM_ROOT_OVERRIDE="$home" FM_HOME="$home" bash "$wt/bin/fm-turnend-guard.sh" 2>&1
 }
 
 nonexistent_pid() {
@@ -777,6 +815,80 @@ test_hook_silent_in_crewmate_worktree() {
   pass "fm-turnend-guard: inert in a crewmate/scout task worktree (linked git worktree) even when unhealthy"
 }
 
+# The paired addressee tests. Same home, same unhealthy supervision, same
+# refusal - only the addressee differs, and with it what the banner is allowed to
+# name. The worker case is the defect; the operator case is the guarantee that
+# fixing it did not quieten the real repair.
+test_hook_worker_worktree_is_told_to_report_not_to_repair() {
+  local primary wt out status
+  primary=$(make_primary_dir "$TMP_ROOT/hook-worker-primary")
+  wt="$TMP_ROOT/hook-worker-wt"
+  make_crewmate_worktree_dir "$primary" "$wt" fm/turnend-guard-worker-addressee >/dev/null
+  : > "$primary/state/task1.meta"
+  out=$(run_hook_as_worker "$wt" "$primary" false); status=$?
+  expect_code 2 "$status" "the worker must still be stopped: the launching home's supervision is genuinely down"
+  assert_contains "$out" "TURN WOULD END BLIND" "the worker must still be told supervision is down"
+  assert_names_no_worker_forbidden_command "$out" "worker banner must hand a task worker no command AGENTS.md reserves to firstmate"
+  assert_contains "$out" "$WORKER_REPORT_REASON" "worker banner must name reporting to firstmate as the worker's action"
+  assert_not_contains "$out" "$SESSION_CLOSING_REASON" "worker banner must not close with the operator's drain-and-restore instruction"
+  pass "fm-turnend-guard: a task worker is told to report the stalled supervision, never handed the repair command"
+}
+
+test_hook_operator_still_gets_the_repair_command() {
+  local dir out status
+  dir=$(make_primary_dir "$TMP_ROOT/hook-operator-addressee")
+  : > "$dir/state/task1.meta"
+  out=$(run_hook "$dir" false); status=$?
+  expect_code 2 "$status" "the operator must still be stopped when its own supervision is down"
+  assert_contains "$out" "$OPERATOR_DAEMON_REPAIR" "the session operating this home must still be handed the daemon repair command"
+  assert_contains "$out" "$REQUIRED_REASON" "the session operating this home must still be handed the delivery repair"
+  assert_not_contains "$out" "$WORKER_REPORT_REASON" "the operator must not be told to report the repair to someone else"
+  pass "fm-turnend-guard: the session operating this home still gets the daemon and delivery repair commands"
+}
+
+# fm-spawn.sh hands a crewmate its worktree, and it is the worktree the guard
+# runs from that decides the addressee - not the state the worker happens to have
+# in its own tree. Without FM_ROOT_OVERRIDE the guard exits at the linked-worktree
+# scope test and says nothing at all, which is the pre-existing exemption this
+# change must not disturb.
+test_hook_worker_worktree_without_override_stays_exempt() {
+  local primary wt out status
+  primary=$(make_primary_dir "$TMP_ROOT/hook-worker-nooverride-primary")
+  wt="$TMP_ROOT/hook-worker-nooverride-wt"
+  make_crewmate_worktree_dir "$primary" "$wt" fm/turnend-guard-worker-nooverride >/dev/null
+  : > "$wt/state/task1.meta"
+  out=$(run_hook "$wt" false); status=$?
+  expect_code 0 "$status" "an unmarked linked worktree evaluating itself must stay exempt"
+  [ -z "$out" ] || fail "exempt crewmate worktree produced guard output: $out"
+  pass "fm-turnend-guard: the linked-worktree exemption is unchanged by the addressee split"
+}
+
+test_grok_adapter_tells_a_worker_to_report_not_to_repair() {
+  local primary wt fakebin log out status
+  primary=$(make_primary_dir "$TMP_ROOT/grok-worker-primary")
+  wt="$TMP_ROOT/grok-worker-wt"
+  make_crewmate_worktree_dir "$primary" "$wt" fm/turnend-guard-grok-worker >/dev/null
+  : > "$primary/state/task1.meta"
+  fakebin=$(fm_fakebin "$TMP_ROOT/grok-worker-fakebin")
+  log="$TMP_ROOT/grok-worker-call.log"
+  cat > "$fakebin/grok" <<EOF
+#!/usr/bin/env bash
+for arg in "\$@"; do
+  printf '%s\n' "\$arg" >> "$log"
+done
+EOF
+  chmod +x "$fakebin/grok"
+  out=$(printf '{"sessionId":"session-worker","hookEventName":"stop"}' \
+    | PATH="$fakebin:$PATH" FM_ROOT_OVERRIDE="$primary" FM_HOME="$primary" GROK_WORKSPACE_ROOT="$wt" \
+      bash "$wt/bin/fm-turnend-guard-grok.sh" 2>&1); status=$?
+  expect_code 0 "$status" "grok adapter must fail open after queuing its forced resume"
+  [ -z "$out" ] || fail "grok adapter printed output: $out"
+  assert_names_no_worker_forbidden_command "$(cat "$log")" "grok worker follow-up must hand a task worker no command AGENTS.md reserves to firstmate"
+  assert_contains "$(cat "$log")" 'SUPERVISION IS OFF IN THE HOME THAT LAUNCHED THIS TASK' "grok worker follow-up must name the launching home, not this worktree"
+  assert_contains "$(cat "$log")" "$WORKER_REPORT_TAIL" "grok worker follow-up must name reporting as the worker's action"
+  pass "fm-turnend-guard-grok: a task worker is told to report the stalled supervision, never to repair it"
+}
+
 test_hook_silent_without_jq() {
   local dir out status fakebin tool tool_path
   dir=$(make_primary_dir "$TMP_ROOT/hook-nojq")
@@ -1020,6 +1132,96 @@ EOF
   pass ".opencode primary plugin: guard path is anchored to worktree, not directory"
 }
 
+# The OpenCode plugin prepends its OWN headline to the shared guard's banner, so
+# it has to answer the addressee question the shared guard already answered.
+# fm-spawn.sh launches crewmates and scouts on opencode from a single template,
+# so a crewmate working on firstmate itself loads this tracked plugin out of its
+# task worktree while FM_ROOT_OVERRIDE still names the launching home. Both halves
+# below run the real guard out of a real checkout; only the addressee differs.
+opencode_plugin_driver() {
+  local file="$TMP_ROOT/opencode-addressee-driver.mjs"
+  if [ ! -f "$file" ]; then
+    mkdir -p "$TMP_ROOT"
+    cat > "$file" <<'JS'
+import { writeFileSync } from "node:fs";
+import { pathToFileURL } from "node:url";
+
+const mod = await import(pathToFileURL(process.env.PLUGIN).href);
+let promptBody = "";
+const client = {
+  session: {
+    promptAsync: async (request) => {
+      promptBody = request.body.parts[0].text;
+    },
+  },
+};
+const hooks = await mod.FmPrimaryTurnendGuard({
+  client,
+  directory: process.env.WORKTREE,
+  worktree: process.env.WORKTREE,
+});
+await hooks.event({ event: { type: "session.idle", properties: { sessionID: "session-addressee" } } });
+writeFileSync(process.env.BODY_FILE, promptBody);
+JS
+  fi
+  printf '%s\n' "$file"
+}
+
+run_opencode_plugin_prompt() {
+  local worktree=$1 body_file=$2 home=${3:-} plugin driver
+  plugin="$ROOT/.opencode/plugins/fm-primary-turnend-guard.js"
+  [ -f "$plugin" ] || fail "tracked OpenCode primary plugin is missing"
+  driver=$(opencode_plugin_driver)
+  : > "$body_file"
+  # Runtime module-format warnings are host noise; these assertions own the
+  # forced follow-up's text only.
+  if [ -n "$home" ]; then
+    NODE_NO_WARNINGS=1 PLUGIN="$plugin" WORKTREE="$worktree" BODY_FILE="$body_file" \
+      FM_ROOT_OVERRIDE="$home" FM_HOME="$home" node "$driver"
+  else
+    NODE_NO_WARNINGS=1 PLUGIN="$plugin" WORKTREE="$worktree" BODY_FILE="$body_file" node "$driver"
+  fi
+}
+
+test_opencode_plugin_tells_a_worker_to_report_not_to_repair() {
+  local primary wt body_file body
+  primary=$(make_primary_dir "$TMP_ROOT/opencode-worker-primary")
+  wt="$TMP_ROOT/opencode-worker-wt"
+  make_crewmate_worktree_dir "$primary" "$wt" fm/turnend-guard-opencode-worker >/dev/null
+  : > "$primary/state/task1.meta"
+  body_file="$TMP_ROOT/opencode-worker-body.txt"
+  run_opencode_plugin_prompt "$wt" "$body_file" "$primary" \
+    || fail "OpenCode plugin must force a follow-up when the launching home's supervision is down"
+  body=$(cat "$body_file")
+  [ -n "$body" ] || fail "OpenCode plugin queued no follow-up for a task worker"
+  assert_contains "$body" 'SUPERVISION IS OFF IN THE HOME THAT LAUNCHED THIS TASK' \
+    "OpenCode worker follow-up must name the launching home, not this worktree"
+  assert_contains "$body" "$WORKER_REPORT_TAIL" \
+    "OpenCode worker follow-up must name reporting as the worker's action"
+  assert_not_contains "$body" 'Follow the harness recovery instruction below' \
+    "OpenCode worker follow-up must not point at a recovery instruction the worker banner does not carry"
+  assert_names_no_worker_forbidden_command "$body" \
+    "OpenCode worker follow-up must hand a task worker no command AGENTS.md reserves to firstmate"
+  pass ".opencode primary plugin: a task worker is told to report the stalled supervision, never to repair it"
+}
+
+test_opencode_plugin_operator_headline_is_unchanged() {
+  local dir body_file body
+  dir=$(make_primary_dir "$TMP_ROOT/opencode-operator-primary")
+  : > "$dir/state/task1.meta"
+  body_file="$TMP_ROOT/opencode-operator-body.txt"
+  run_opencode_plugin_prompt "$dir" "$body_file" \
+    || fail "OpenCode plugin must force a follow-up when this home's own supervision is down"
+  body=$(cat "$body_file")
+  assert_contains "$body" 'TURN WOULD END BLIND - supervision is off. The watcher cycle is missing, failed, or unhealthy. Follow the harness recovery instruction below before ending the turn.' \
+    "the session operating this home must keep the OpenCode plugin's original headline"
+  assert_contains "$body" "$OPERATOR_DAEMON_REPAIR" \
+    "the session operating this home must still be handed the daemon repair command"
+  assert_not_contains "$body" 'SUPERVISION IS OFF IN THE HOME THAT LAUNCHED THIS TASK' \
+    "the session operating this home must not be addressed as a task worker"
+  pass ".opencode primary plugin: the session operating this home keeps its recovery headline"
+}
+
 test_pi_extension_forces_followup() {
   local ext content
   ext="$ROOT/.pi/extensions/fm-primary-turnend-guard.ts"
@@ -1246,6 +1448,10 @@ test_hook_blocks_in_treehouse_leased_secondmate_home
 test_hook_exempts_linked_worktree_with_stray_marker
 test_hook_exempts_linked_worktree_with_non_ascii_marker
 test_hook_silent_in_crewmate_worktree
+test_hook_worker_worktree_is_told_to_report_not_to_repair
+test_hook_operator_still_gets_the_repair_command
+test_hook_worker_worktree_without_override_stays_exempt
+test_grok_adapter_tells_a_worker_to_report_not_to_repair
 test_hook_silent_without_jq
 test_hook_silent_without_stdin
 test_hook_runs_fast
@@ -1257,6 +1463,8 @@ test_codex_hook_uses_process_pwd_when_payload_cwd_is_outside_root
 test_codex_hook_ignores_nested_git_root_guard
 test_opencode_plugin_forces_followup
 test_opencode_plugin_anchors_guard_to_worktree
+test_opencode_plugin_tells_a_worker_to_report_not_to_repair
+test_opencode_plugin_operator_headline_is_unchanged
 test_pi_extension_forces_followup
 test_pi_extension_injects_once_per_logical_agent_run
 test_pi_extension_retries_after_followup_delivery_failure
