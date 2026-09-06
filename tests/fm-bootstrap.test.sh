@@ -1186,7 +1186,46 @@ SH
   pass "bootstrap reports open loopback board links only where a tailnet makes them fixable"
 }
 
+# A give-up record from the first-mate watch or the seat keeper is a finding, and
+# a finding emitted onto a surface that does not exist is lost. Bootstrap says so
+# before the first give-up, and only where one of those two watchers is actually
+# running here - and it creates nothing: bin/fm-finding.sh init stays the only
+# creator.
+test_findings_surface_is_reported_where_a_seat_watcher_runs() {
+  local case_dir fakebin out
+  case_dir="$TMP_ROOT/findings-surface"
+  mkdir -p "$case_dir/home/state" "$case_dir/home/config"
+  printf 'manual\n' > "$case_dir/home/config/backlog-backend"
+  fakebin=$(make_fake_toolchain "$case_dir")
+  add_tasks_axi "$fakebin" "0.1.1"
+
+  # No seat watcher on this home: nothing here files a give-up, so nothing is said.
+  out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
+    "$ROOT/bin/fm-bootstrap.sh")
+  case "$out" in
+    *FINDINGS_SURFACE:*) fail "bootstrap demanded a findings surface on a home with no seat watcher: $out" ;;
+  esac
+
+  # The keeper's own pid record is its published evidence that it runs here; the
+  # alarm's own last-reading record is the other half, and neither is the arming
+  # this same digest performs.
+  printf '1\n' > "$case_dir/home/state/.seat-keeper.pid"
+  out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
+    "$ROOT/bin/fm-bootstrap.sh")
+  printf '%s\n' "$out" | grep -F "FINDINGS_SURFACE: the findings surface $case_dir/home/data/findings does not exist" >/dev/null \
+    || fail "bootstrap did not report the absent findings surface for a running seat keeper: $out"
+
+  mkdir -p "$case_dir/home/data/findings"
+  out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
+    "$ROOT/bin/fm-bootstrap.sh")
+  case "$out" in
+    *FINDINGS_SURFACE:*) fail "bootstrap still demanded a surface that exists: $out" ;;
+  esac
+  pass "bootstrap reports an absent findings surface only where a seat watcher would file one"
+}
+
 test_bootstrap_reporting
+test_findings_surface_is_reported_where_a_seat_watcher_runs
 test_no_mistakes_min_version
 test_git_is_required_with_supported_install_instruction
 test_orca_backend_gates_orca_tool_only_when_selected

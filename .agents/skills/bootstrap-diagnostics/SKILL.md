@@ -2,7 +2,7 @@
 name: bootstrap-diagnostics
 description: >-
   Agent-only handling playbook for session-start bootstrap diagnostics.
-  Use whenever the session-start digest's bootstrap section prints an actionable diagnostic line - MISSING, NEEDS_GH_AUTH, SELF_DRIFT, CURRENCY_ROUND, MEMORY_ALARM, RUN_READER, VALIDATION_DAEMON, TELEGRAM_RECEIVER_UNIT, GROSSREINSCHIFF, SLOT_GUARD, or any of the other prefixes this playbook's body carries an entry for, the full set being the lines bin/fm-bootstrap.sh's header documents - or when a standalone bin/fm-bootstrap.sh run prints one of those lines.
+  Use whenever the session-start digest's bootstrap section prints an actionable diagnostic line - MISSING, NEEDS_GH_AUTH, SELF_DRIFT, CURRENCY_ROUND, MEMORY_ALARM, RUN_READER, VALIDATION_DAEMON, TELEGRAM_RECEIVER_UNIT, GROSSREINSCHIFF, SLOT_GUARD, FINDINGS_SURFACE, or any of the other prefixes this playbook's body carries an entry for, the full set being the lines bin/fm-bootstrap.sh's header documents - or when a standalone bin/fm-bootstrap.sh run prints one of those lines.
   A silent bootstrap section, or a BOOTSTRAP_INFO fact, means no skill load.
 user-invocable: false
 metadata:
@@ -192,6 +192,11 @@ When any diagnostic needs captain attention, report the plain consequence and re
   An actual contested copy arrives as a `check:` wake instead, and it names both the finished task and the live worker standing in its copy.
   That wake is captain-facing only when it blocks a cleanup he is waiting on: cleanup of the named task is already refused, and the work of the live worker is not at risk while the refusal stands, so the ordinary handling is to let the live worker finish and then retry the cleanup.
   Never resolve one by forcing the cleanup through: `--force` deliberately does not override this refusal, because authority to discard one task's work is not authority to destroy another's.
+- `FINDINGS_SURFACE: <detail>` - the first-mate watch or the terminal-hosted seat keeper is running on this home and the findings surface it would file its one high-severity give-up record on cannot be reached, so that record would be lost the moment either of them gives up.
+  `does not exist` is the ordinary case on a rebuilt home: creating it is `bin/fm-finding.sh init`, and that command is deliberately the only creator, so never make the directory by hand and never point the surface somewhere else to silence the line.
+  `is not a directory` or `cannot be read by this process` is a misconfiguration of the configured surface rather than a missing one; read `docs/findings-surface.md` and fix the pointer rather than initialising a second surface beside it.
+  `could not be resolved` means this home's `config/findings-dir` pointer exists but names nothing; `bin/fm-finding.sh check` prints the resolver's own reason.
+  Creating the surface is a change to this home's records rather than a fleet action, so it needs no dispatch, but tell the captain when he has been running without one: give-up records emitted before it existed were never written anywhere.
 - `GROSSREINSCHIFF: weekly fleet cleanup sweep is due (...)` - this home has not completed its Thursday cleanup sweep for the current week; load the `grossreinschiff` skill and run it.
   Nothing is broken: the line is a cadence reminder, and it repeats each session start until `bin/fm-grossreinschiff-due.sh --record` marks a sweep that actually produced a report.
   The reported window-open days say only how far into the current week's window this session start falls; the count is bounded to 0 through 6 and never measures how long the home has been dark.

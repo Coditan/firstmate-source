@@ -110,11 +110,13 @@ fm_retry_clear_episode() {  # <record-file> <giveup-file>
 # bound was lifted, so the caller can name it where its operator looks.
 #
 # An episode is exhausted by its attempt count reaching the caller's bound, not
-# by the give-up marker existing: fm_retry_giveup_emit writes that marker only
-# after the finding is filed, so a surface that could not be reached leaves an
-# episode that is exhausted and unfiled. Both are lifted, and the caller is told
-# which it lifted through the exit status, because an operator reading the log
-# has to know a bound was reached whose finding never reached him. An attempts
+# by the give-up marker existing: fm_retry_giveup_emit writes that marker on both
+# paths, recording `finding=unfiled` when the surface could not be reached, so an
+# episode can be exhausted with its claim unfiled either with a marker or, when
+# the bound was reached without a give-up at all, without one.
+# Both are lifted, and the caller is told which it lifted through the exit
+# status, because an operator reading the log has to know a bound was reached
+# whose finding never reached him. An attempts
 # record still below the bound is mid-episode and is deliberately left alone,
 # count and backoff spacing intact - including when it belongs to a condition
 # other than the one the give-up marker names, because a marker outliving its
@@ -123,7 +125,7 @@ fm_retry_clear_episode() {  # <record-file> <giveup-file>
 # Returns 0 when a filed episode was lifted, 2 when an exhausted-but-unfiled one
 # was, and 1 when there was no exhausted episode to lift.
 fm_retry_clear_exhausted_episode() {  # <record-file> <giveup-file> <max-attempts>
-  local record=$1 giveup=$2 max=$3 key count bound record_key
+  local record=$1 giveup=$2 max=$3 key count bound record_key filed
   bound=$max
   case "$bound" in ''|*[!0-9]*) bound=0 ;; esac
   if [ -f "$giveup" ]; then
@@ -132,12 +134,18 @@ fm_retry_clear_exhausted_episode() {  # <record-file> <giveup-file> <max-attempt
     record_key=$(fm_retry_kv_get "$record" key 2>/dev/null || true)
     count=$(fm_retry_kv_get "$record" count 2>/dev/null || true)
     case "$count" in ''|*[!0-9]*) count=0 ;; esac
+    filed=$(fm_retry_kv_get "$giveup" finding 2>/dev/null || true)
     if [ "$record_key" = "$key" ] || { [ "$bound" -gt 0 ] && [ "$count" -ge "$bound" ]; }; then
       fm_retry_clear_episode "$record" "$giveup"
     else
       rm -f "$giveup"
     fi
     printf '%s\n' "$key"
+    # A marker naming no filed finding is the exhausted-but-unfiled case, the
+    # same one the no-marker branch below reports: the bound was reached and the
+    # claim never reached the surface, and the operator has to be told that
+    # rather than reading a lift as a filed record.
+    [ "$filed" != unfiled ] || return 2
     return 0
   fi
   case "$max" in ''|*[!0-9]*) return 1 ;; esac
@@ -191,6 +199,18 @@ fm_retry_giveup_emit() {  # <giveup-file> <key> <officer> <claim> <where> <measu
     printf 'give-up finding emitted for %s\n' "$key"
     return 0
   fi
+  # THE MARKER IS WRITTEN ON THIS PATH TOO, AND SAYS THE FINDING IS UNFILED.
+  # Writing it only after a successful emit left a supervisor that had already
+  # given up re-filing the same claim on every poll: on 2026-09-06 a keeper
+  # emitted the same give-up 157 times in five minutes against a findings
+  # surface that did not exist. The give-up is one per episode whether or not
+  # the surface could be reached; that the claim never reached the surface is
+  # recorded in the marker, where fm_retry_clear_exhausted_episode reads it and
+  # tells the operator through its exit status.
+  {
+    printf 'key=%s\n' "$key"
+    printf 'finding=unfiled\n'
+  } > "$giveup" || true
   printf 'give-up finding failed: %s\n' "$out"
   return 1
 }
