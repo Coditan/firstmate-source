@@ -96,6 +96,42 @@ test_status_reports_changed_away_entry_stale() {
   pass "omega status reports valid but mismatched away entries stale"
 }
 
+test_status_reports_recreated_same_content_stale() {
+  local home out rc
+  home=$(new_home recreated)
+  printf '1700000004\n' > "$home/state/.afk"
+  run_omega "$home" open --task 'recreated task' --record decision-recreated >/dev/null
+  rm "$home/state/.afk"
+  printf '1700000004\n' > "$home/state/.afk"
+  set +e
+  out=$(run_omega "$home" status)
+  rc=$?
+  set -e
+  [ "$rc" -eq 4 ] || fail "recreated same-content away entry was not stale (rc=$rc): $out"
+  assert_contains "$out" 'OMEGA: STALE' "recreated same-content away entry did not report stale"
+  pass "omega status binds identical content to one filesystem entry"
+}
+
+test_status_fails_closed_without_subsecond_fingerprint() {
+  local home tools out rc real_stat
+  home=$(new_home coarse-fingerprint)
+  printf '1700000005\n' > "$home/state/.afk"
+  run_omega "$home" open --task 'coarse task' --record decision-coarse >/dev/null
+  tools="$home/tools"
+  mkdir "$tools"
+  real_stat=$(command -v stat)
+  printf '#!/usr/bin/env bash\nexec %q "$@" | sed "s/\\.[0-9][0-9]*/ /"\n' "$real_stat" > "$tools/stat"
+  chmod +x "$tools/stat"
+  set +e
+  out=$(PATH="$tools:$PATH" run_omega "$home" status)
+  rc=$?
+  set -e
+  [ "$rc" -eq 4 ] || fail "coarse fingerprint was not stale (rc=$rc): $out"
+  assert_contains "$out" 'OMEGA: STALE' "coarse fingerprint did not report stale"
+  assert_contains "$out" 'exact current away-entry identity cannot be established' "coarse fingerprint did not fail loudly"
+  pass "omega status fails closed when sub-second identity is unavailable"
+}
+
 test_close_records_window_and_absent_close_is_quiet() {
   local home out log
   home=$(new_home close)
@@ -105,7 +141,8 @@ test_close_records_window_and_absent_close_is_quiet() {
   [ -z "$out" ] || fail "close printed unexpected output: $out"
   [ ! -e "$home/state/.omega" ] || fail "close left the live marker"
   log=$(cat "$home/state/omega-window.log")
-  assert_contains "$log" $'closed\topened=' "close log omitted the opened epoch"
+  assert_contains "$log" $'closed\twindow-id=' "close log omitted the window identity"
+  assert_contains "$log" $'\topened=' "close log omitted the opened epoch"
   assert_contains "$log" $'\tclosed=' "close log omitted the closed epoch"
   assert_contains "$log" $'\ttask=record close\trecord=decision-6' "close log omitted the task or decision record"
   out=$(run_omega "$home" close) || fail "absent close failed: $out"
@@ -114,9 +151,34 @@ test_close_records_window_and_absent_close_is_quiet() {
   pass "omega close writes one durable end record and absent close is quiet"
 }
 
+
+test_close_retry_does_not_duplicate_log() {
+  local home tools out rc real_rm
+  home=$(new_home close-retry)
+  printf '1700000007\n' > "$home/state/.afk"
+  run_omega "$home" open --task 'retry close' --record decision-7 >/dev/null
+  tools="$home/tools"
+  mkdir "$tools"
+  real_rm=$(command -v rm)
+  printf '#!/usr/bin/env bash\ncase "${*: -1}" in */.omega) exit 1;; esac\nexec %q "$@"\n' "$real_rm" > "$tools/rm"
+  chmod +x "$tools/rm"
+  set +e
+  out=$(PATH="$tools:$PATH" run_omega "$home" close)
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "injected marker-removal failure unexpectedly succeeded"
+  [ -e "$home/state/.omega" ] || fail "failed close did not preserve the marker for retry"
+  run_omega "$home" close >/dev/null || fail "close retry failed"
+  [ "$(wc -l < "$home/state/omega-window.log" | tr -d ' ')" -eq 1 ] || fail "close retry duplicated the end record"
+  pass "omega close retry reuses its durable window identity"
+}
+
 test_open_refuses_without_away_mode
 test_open_refuses_second_marker
 test_status_reports_matching_window_in_force
 test_status_reports_removed_away_entry_stale
 test_status_reports_changed_away_entry_stale
+test_status_reports_recreated_same_content_stale
+test_status_fails_closed_without_subsecond_fingerprint
 test_close_records_window_and_absent_close_is_quiet
+test_close_retry_does_not_duplicate_log
