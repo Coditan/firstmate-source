@@ -2,6 +2,10 @@
 # Record a genuine firstmate primary's transcript position, unless another live
 # session already holds this home's lock, then print the one-line session-start
 # instruction unless that session already acquired the home lock.
+# With --rebind-after-supersede it instead rebinds the standing record to the
+# holder bin/fm-lock.sh just published by superseding a dead container's lock,
+# which bin/fm-session-start.sh invokes because this hook already ran against
+# the superseded record and, correctly, wrote nothing for it.
 # Every silence and error path exits 0 because Claude SessionStart exit 2 blocks
 # session initialization.
 set -u
@@ -181,6 +185,16 @@ record_transcript_position() {
       *) err=no-transcript-path ;;
     esac
   fi
+  publish_transcript_record "$pid" "$sid" "$path" "$err"
+  return 0
+}
+
+# publish_transcript_record <pid> <session-id> <transcript-path> <error>: write
+# the whole record atomically, as an error record when <error> is non-empty. A
+# record that cannot be written or replaced leaves nothing behind, for the
+# reason invalidate_transcript_record gives.
+publish_transcript_record() {
+  local pid=$1 sid=$2 path=$3 err=$4 tmp
   tmp="$RECORD.$$"
   if [ -n "$err" ]; then
     printf 'status=error\nerror=%s\nharness_pid=%s\nrecorded_at=%s\n' \
@@ -196,8 +210,63 @@ record_transcript_position() {
   return 0
 }
 
+# Rebind the record to the holder bin/fm-lock.sh published by superseding a
+# dead container's lock. This hook ran before that supersede, read the dead
+# container's record as foreign and wrote nothing, so without this the record
+# still names the previous container's harness and the context ceiling is
+# reported unenforced for the whole life of the new session. The owner is the
+# pid the new lock names, in this process's own pid table, because that is the
+# value the consumer compares the record against. The SessionStart payload that
+# carries session_id and transcript_path is not available here and is never
+# invented: a record that already names that holder is left as it is, and any
+# other is replaced by an explicit error naming the new holder, so the reader
+# reports an unmeasured ceiling with its cause instead of a mismatch against a
+# dead harness. Prints one line saying what it did.
+rebind_record_after_supersede() {
+  local lock_pid mine_ns
+  if ! fm_session_lock_record_read "$LOCK"; then
+    invalidate_transcript_record
+    printf 'context-ceiling record: the lock cannot be read back (%s), so the previous record was removed rather than left naming a dead harness\n' \
+      "$FM_LOCK_RECORD_ERROR"
+    return 0
+  fi
+  lock_pid=$FM_LOCK_RECORD_PID
+  case "$lock_pid" in
+    ''|*[!0-9]*|0|1)
+      invalidate_transcript_record
+      printf 'context-ceiling record: the lock names no usable holder pid, so the previous record was removed rather than left naming a dead harness\n'
+      return 0 ;;
+  esac
+  mine_ns=$(fm_pid_namespace_token) || {
+    printf 'context-ceiling record: this session cannot name its own pid table, so the record was left alone\n'
+    return 0
+  }
+  if [ "$FM_LOCK_RECORD_PIDNS" != "$mine_ns" ]; then
+    printf 'context-ceiling record: the lock names pid table %s rather than this session'"'"'s, so the record was left alone\n' \
+      "$FM_LOCK_RECORD_PIDNS"
+    return 0
+  fi
+  if [ "$(record_field harness_pid)" = "$lock_pid" ]; then
+    printf 'context-ceiling record: already names harness pid %s\n' "$lock_pid"
+    return 0
+  fi
+  publish_transcript_record "$lock_pid" "" "" superseded-without-hook-payload
+  if [ "$(record_field harness_pid)" = "$lock_pid" ]; then
+    printf 'context-ceiling record: rebound to harness pid %s as an explicit error (superseded-without-hook-payload), because the SessionStart payload naming this session'"'"'s transcript is not available after a supersede; the ceiling is reported unenforced with that cause until this session records its transcript again\n' \
+      "$lock_pid"
+  else
+    printf 'context-ceiling record: could not be rebound to harness pid %s, so the previous record was removed rather than left naming a dead harness\n' \
+      "$lock_pid"
+  fi
+  return 0
+}
+
 fm_is_gate_agent "$FM_ROOT" && exit 0
 fm_primary_scope_matches "$FM_ROOT" "$STATE" || exit 0
+if [ "${1-}" = --rebind-after-supersede ]; then
+  rebind_record_after_supersede
+  exit 0
+fi
 record_transcript_position
 
 lock_is_in_ancestry && exit 0
