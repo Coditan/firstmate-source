@@ -192,6 +192,7 @@ test_close_retry_does_not_duplicate_log() {
   tools="$home/tools"
   mkdir "$tools"
   real_rm=$(command -v rm)
+  # shellcheck disable=SC2016 # The generated shim expands its own arguments.
   printf '#!/usr/bin/env bash\ncase "${*: -1}" in */.omega) exit 1;; esac\nexec %q "$@"\n' "$real_rm" > "$tools/rm"
   chmod +x "$tools/rm"
   set +e
