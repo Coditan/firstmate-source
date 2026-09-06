@@ -6,7 +6,7 @@ It is an evidence map for reviewing a possible later `bin/` reorganization, not 
 
 ## Summary
 
-- Command count: 185 top-level files in `bin/`.
+- Command count: 186 top-level files in `bin/`.
 - Domain count: 18 domains currently used.
 - Ambiguous command count: 5.
 - Unplaced command count: 0.
@@ -17,7 +17,7 @@ It is an evidence map for reviewing a possible later `bin/` reorganization, not 
 - `session-bootstrap`: Session start, startup diagnostics, self-update, fleet sync, home identity, locks, and startup tangles. (14 commands.)
 - `dispatch-backends`: Harness detection, backend adapters, dispatch profiles, spawn, send, pane reads, slots, and terminal primitives. (21 commands.)
 - `supervision-wake`: Watcher loops, wake queue, delivery listener, journal, event batching, turn-end guard, and primary-seat continuity. (34 commands.)
-- `afk`: Away-mode launch, return, daemon supervision, and away-specific escalation. (4 commands.)
+- `afk`: Away-mode launch, return, daemon supervision, and away-specific escalation. (5 commands.)
 - `secondmates-projects`: Secondmate homes, inherited local material, project delivery modes, project removal, and secondmate handoff/reporting. (8 commands.)
 - `task-lifecycle`: Task briefs, promotion from scout to ship, parking, current-state reads, and backend-neutral transition records. (6 commands.)
 - `decisions-backlog`: Captain decision records, backlog decomposition and linting, boards, sea charts, and related presentation surfaces. (10 commands.)
@@ -142,6 +142,7 @@ Every command has at least one tracked caller or reference.
 | `fm-afk-launch.sh` | the single owner of the away-mode daemon TERMINAL lifecycle: launch it in a NON-VISIBLE tracked terminal per backend, record its exact id, tear it down by that exact id, and reconcile a leaked one after a crash | name:fm-afk*, text:\baway[- ]mode\b, text:\bafk\b, ref:tests/*afk*, ref:.agents/skills/afk | documentation: docs/herdr-backend.md, docs/turnend-guard.md; scripts: bin/fm-afk-return.sh, bin/fm-afk-start.sh, bin/fm-memory-reading.sh, bin/fm-supervise-daemon.sh, bin/fm-supervision-instructions.sh, bin/fm-supervisor-target-lib.sh; skills: .agents/skills/afk/SKILL.md; tests: tests/fm-afk-launch.test.sh, tests/fm-afk-pi-herdr-return-e2e.test.sh, tests/fm-afk-return.test.sh, tests/fm-supervision-instructions.test.sh, tests/fm-turnend-guard.test.sh |
 | `fm-afk-return.sh` | deterministic away-mode return catch-up gate | name:fm-afk*, text:\baway[- ]mode\b, text:\bafk\b, ref:tests/*afk*, ref:.agents/skills/afk | documentation: docs/architecture.md, docs/herdr-backend.md, docs/turnend-guard.md; scripts: bin/fm-afk-launch.sh, bin/fm-bearings-snapshot.sh; skills: .agents/skills/afk/SKILL.md; tests: tests/fm-afk-pi-herdr-return-e2e.test.sh, tests/fm-afk-return.test.sh |
 | `fm-afk-start.sh` | Enter away mode and run the sub-supervisor daemon in a harness-tracked foreground process when one is not already alive | name:fm-afk*, text:\baway[- ]mode\b, text:\bafk\b, text:\bsub-supervisor\b, ref:tests/*afk* | documentation: docs/architecture.md, docs/herdr-backend.md, docs/turnend-guard.md, docs/wedge-alarm.md; scripts: bin/fm-afk-launch.sh, bin/fm-memory-reading.sh, bin/fm-supervise-daemon.sh, bin/fm-supervision-instructions.sh; skills: .agents/skills/afk/SKILL.md; tests: tests/fm-afk-launch.test.sh, tests/fm-afk-pi-herdr-return-e2e.test.sh, tests/fm-daemon.test.sh, tests/fm-supervision-instructions.test.sh, tests/fm-turnend-guard.test.sh |
+| `fm-omega.sh` | own the durable omega-window marker and close-record log | text:\baway[- ]mode\b, text:\bafk\b, ref:tests/*afk* | scripts: bin/fm-afk-return.sh, bin/fm-session-start.sh; skills: .agents/skills/omega-protocol/SKILL.md; tests: tests/fm-afk-return.test.sh, tests/fm-omega.test.sh |
 | `fm-supervise-daemon.sh` | fm-supervise-daemon.sh — presence-gated sub-supervisor (closes #27's P2) | name:fm-supervise-daemon.sh, text:\baway[- ]mode\b, text:\bafk\b, text:\bsub-supervisor\b, ref:tests/*afk* | documentation: docs/architecture.md, docs/configuration.md, docs/examples/wedge-alarm, docs/herdr-backend.md, docs/slot-guard.md, docs/telegram-outbound.md, docs/tmux-backend.md, docs/turnend-guard.md, docs/wake-delivery.md, docs/wedge-alarm.md; scripts: bin/backends/herdr.sh, bin/backends/tmux.sh, bin/fm-afk-start.sh, bin/fm-backend.sh, bin/fm-classify-lib.sh, bin/fm-composer-lib.sh, bin/fm-delivery.sh, bin/fm-memory-reading.sh, bin/fm-pane-activity-lib.sh, bin/fm-supervisor-target-lib.sh, bin/fm-tmux-lib.sh; skills: .agents/skills/afk/SKILL.md; tests: tests/fm-afk-inject-e2e.test.sh, tests/fm-afk-inject-herdr-e2e.test.sh, tests/fm-afk-pi-herdr-return-e2e.test.sh, tests/fm-backend-herdr.test.sh, tests/fm-captain-translation-contract.test.sh, tests/fm-daemon.test.sh, tests/fm-tmux-target-resolve.test.sh, tests/fm-wake-daemon-lifecycle-e2e.test.sh |
 
 ## Secondmates, project registry, and local material
