@@ -51,7 +51,8 @@ STALE_BANNER_MARKER="$STATE/.guard-watcher-stale-banner"
 
 # Who this guard is talking to, decided once. READ_ONLY answers whether the
 # session may write, not who it is, so a crewmate or scout falls through it and
-# would otherwise be handed a repair AGENTS.md section 1 reserves to firstmate.
+# would otherwise be handed a repair AGENTS.md reserves to firstmate (section 1
+# makes supervising the crew firstmate's work; section 8 owns the repair protocol).
 # The second argument is FM_ROOT, matching the two other call sites. An FM_HOME
 # comparison was tried and measured to regress a documented shape: FM_HOME names
 # the operational home while scripts still run from this checkout's bin/

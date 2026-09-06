@@ -29,7 +29,7 @@ Three emitters carry this contract: the PreToolUse gate, the turn-end guard, and
 All of them ship in tracked files, so every worktree of this repo carries them, including the disposable task worktree a crewmate or scout gets when the work is on firstmate itself.
 Such a worker runs the identical hook while `FM_ROOT_OVERRIDE` still names the home that launched it, so the guard evaluates that home - and on 2026-08-30 it was right to: the home lock was held by a dead process while several unlocked watcher loops kept every beacon current, and the refusal was correct even though firstmate first read it as a false alarm.
 What was wrong was the addressee.
-Three separate runtimes were each handed `bin/fm-watcher-service.sh restart` against a home with ten tasks in flight that none of them could see, and `AGENTS.md` section 1 reserves supervision repair to firstmate: a worker that obeys does damage and a worker that refuses is stuck, so both outcomes were the guard's fault rather than the worker's.
+Three separate runtimes were each handed `bin/fm-watcher-service.sh restart` against a home with ten tasks in flight that none of them could see, and `AGENTS.md` reserves supervision repair to firstmate, since section 1 makes supervising the crew firstmate's own work and section 8 owns the repair protocol: a worker that obeys does damage and a worker that refuses is stuck, so both outcomes were the guard's fault rather than the worker's.
 
 `fm_session_operates_home` in `bin/fm-primary-scope-lib.sh` decides the addressee by asking whether the checkout the running hook was loaded from is the checkout-derived firstmate root, which all three emitters resolve as `FM_ROOT`.
 So the addressee is decided from where the guard was loaded, and deliberately not from the home whose supervision was judged, which derives from `FM_HOME`.
@@ -42,7 +42,7 @@ On the PreToolUse gate and the turn-end guard that worker message names no comma
 `bin/fm-guard.sh` splits three ways rather than two, because its existing `FM_GUARD_READ_ONLY` branch answers whether the session may write and not who it is; its worker branch keeps the border, the headline, the in-flight and beacon line, and the continuation line, and drops only the `Daemon repair:` line and the delivery repair tail.
 That delivery warning keeps its `WARNING: wake delivery listener ` prefix for every addressee, because `bin/fm-bridge-relay.sh` classifies the line by that prefix.
 `bin/fm-guard.sh` is therefore not command-free for a worker: its queued-wakes warning is still gated only on `FM_GUARD_READ_ONLY`, so a worker is still told to drain them with `bin/fm-wake-drain.sh`.
-That branch was left alone on purpose, because `bin/fm-wake-drain.sh` is on the continuity gate's worker allowlist and draining a queue is not the supervision repair `AGENTS.md` section 1 reserves to firstmate.
+That branch was left alone on purpose, because `bin/fm-wake-drain.sh` is on the continuity gate's worker allowlist and draining a queue is not the supervision repair `AGENTS.md` reserves to firstmate.
 
 One limit of this design is accepted rather than fixed.
 The addressee is decided from the checkout the running script was LOADED FROM, so it is only correct when the session runs its own copy.
