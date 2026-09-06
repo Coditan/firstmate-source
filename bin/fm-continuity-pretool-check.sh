@@ -77,7 +77,7 @@ SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" 2>/dev/null && 
 FM_ROOT=${FM_ROOT_OVERRIDE:-$(CDPATH='' cd -- "$SCRIPT_DIR/.." 2>/dev/null && pwd -P)}
 FM_HOME=${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}
 STATE=${FM_STATE_OVERRIDE:-$FM_HOME/state}
-WATCH="$SCRIPT_DIR/fm-watch.sh"
+WATCH="$FM_ROOT/bin/fm-watch.sh"
 POLICY="$SCRIPT_DIR/fm-continuity-command-policy.mjs"
 
 # shellcheck source=bin/fm-supervision-lib.sh

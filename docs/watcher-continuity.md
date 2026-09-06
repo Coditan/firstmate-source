@@ -20,8 +20,19 @@ Whether a listener is up at that moment is irrelevant to whether the record surv
 
 ## The Claude continuity gate
 
-Claude's PreToolUse continuity gate allows the wake drain, the supervision-repair commands, and independently fail-closed teardown, but refuses other fleet commands while tasks are in flight and no identity-matched live watcher holds the home lock.
+Claude's PreToolUse continuity gate allows the wake drain, the supervision-repair commands, a worker's own status line, and independently fail-closed teardown, but refuses other fleet commands while tasks are in flight and no identity-matched live watcher holds the home lock.
 Allowing an ordinary literal teardown prevents a terminal wake from creating a recovery circle: forced or dynamically constructed teardown remains blocked, ordinary teardown itself still refuses dirty, unlanded, incomplete-scout, and unresolved-decision cases, and the turn-end guard continues to require supervision for any tasks left in flight.
+
+### Which watcher file the lock is compared against
+
+The lock records the absolute path of the watcher that took it, and `fm_watcher_lock_matches_pid` compares that recorded path as a string.
+All three emitters therefore resolve the watcher they compare from `FM_ROOT`, as `$FM_ROOT/bin/fm-watch.sh`, which is the home whose lock is being read.
+Resolving it from the emitter's own `SCRIPT_DIR` was wrong for exactly the case the previous subsection describes: a worker in a task worktree runs the worktree's byte-identical copy, so the recorded home path never equalled the worktree path, the identity half could never match, and every worker saw a permanent refusal no repair could clear.
+The pid half of the check is unchanged, so a dead process holding the home lock - the 2026-08-30 true positive - still refuses.
+For a session operating the home, `FM_ROOT` and `SCRIPT_DIR/..` are the same directory, so nothing about that case changed.
+
+`bin/fm-status.sh` is classified as a recovery command alongside the wake drain, delivery service repair, and teardown.
+A worker's own status line is never a fleet mutation, and it is the channel the refusal itself tells the worker to report through, so denying it left the worker with no sanctioned way to answer.
 
 ### Who the refusal is addressed to
 

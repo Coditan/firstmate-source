@@ -4,7 +4,8 @@
 // The shared Lexer, program splitter, and command-position resolver remain owned
 // by fm-arm-command-policy.mjs. This policy only identifies executed firstmate
 // fleet scripts and divides them into recovery commands (wake drain, delivery
-// service repair, and fail-closed teardown) versus every other bin/fm-*.sh
+// service repair, fail-closed teardown, and a worker's own status line) versus
+// every other bin/fm-*.sh
 // command. Unparseable or opaque dynamic
 // commands fail open so this gate can never become a blanket shell block.
 
@@ -12,7 +13,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Lexer, commandPosition, splitProgram } from "./fm-arm-command-policy.mjs";
 
-const RECOVERY_SCRIPTS = new Set(["fm-wake-drain.sh", "fm-delivery-service.sh", "fm-teardown.sh"]);
+const RECOVERY_SCRIPTS = new Set(["fm-wake-drain.sh", "fm-delivery-service.sh", "fm-teardown.sh", "fm-status.sh"]);
 
 function parseArguments(argv) {
   const result = { command: "", root: "" };

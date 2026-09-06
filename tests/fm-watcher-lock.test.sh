@@ -227,7 +227,9 @@ test_guard_warnings() {
   mkdir -p "$state/.watch.lock" "$state/.delivery.lock"
   printf '%s\n' "$live" > "$state/.watch.lock/pid"
   printf '%s\n' "$dir" > "$state/.watch.lock/fm-home"
-  printf '%s\n' "$ROOT/bin/fm-watch.sh" > "$state/.watch.lock/watcher-path"
+  # The lock names the watcher of the home it belongs to, which is the file the
+  # guard compares against whichever checkout the guard itself was loaded from.
+  printf '%s\n' "$dir/bin/fm-watch.sh" > "$state/.watch.lock/watcher-path"
   printf '%s\n' "$identity" > "$state/.watch.lock/pid-identity"
   printf '%s\n' "$live" > "$state/.delivery.lock/pid"
   printf '%s\n' "$dir" > "$state/.delivery.lock/fm-home"
