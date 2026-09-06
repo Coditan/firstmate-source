@@ -528,7 +528,8 @@ $RULE1
    that is covered when the correction is inside the module you are already changing and alters
    only what the code says, not what it does. Changing what the code DOES so the claim becomes
    true is a different thing - it decides what the right behaviour is - and that one is raised
-   here. This governs what you raise on your own; a finding of this class that arrives through an
+   here, as is a sentence whose right wording cannot be settled without first deciding what the
+   right behaviour is. This governs what you raise on your own; a finding of this class that arrives through an
    active validation gate still goes to firstmate like any other gate finding, and the pipeline
    applies the fix.
 7. Never stop, restart, or update the shared \`no-mistakes\` daemon - it is one instance serving

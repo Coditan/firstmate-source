@@ -708,6 +708,8 @@ test_claims_that_outrun_measurement_agree_across_surfaces() {
 
   assert_grep "Changing what the code DOES so the claim becomes" "$brief" \
     "the generated brief lost the behaviour-change escalation edge"
+  assert_grep "cannot be settled without first deciding what the" "$brief" \
+    "the generated brief lost the escalation case where the right behaviour is itself undecided"
   pass "the claims-that-outrun-measurement rule is stated once and agrees on all three surfaces"
 }
 
