@@ -218,10 +218,24 @@ publish_transcript_record() {
 # pid the new lock names, in this process's own pid table, because that is the
 # value the consumer compares the record against. The SessionStart payload that
 # carries session_id and transcript_path is not available here and is never
-# invented: a record that already names that holder is left as it is, and any
-# other is replaced by an explicit error naming the new holder, so the reader
-# reports an unmeasured ceiling with its cause instead of a mismatch against a
-# dead harness. Prints one line saying what it did.
+# invented: a record that already names that holder AND was written after this
+# container started is left as it is, and any other is replaced by an explicit
+# error naming the new holder, so the reader reports an unmeasured ceiling with
+# its cause instead of a mismatch against a dead harness. Pid equality alone is
+# not enough, because the record persists with the home and a fresh pid table
+# hands out the same small numbers again: the previous container's ok record
+# can name the very pid this container's harness got, and leaving it would
+# measure the previous container's transcript for the life of this session. The
+# record's age is its mtime, the same kernel-set reading the lock predicate
+# uses, and an age or container start that cannot be read never proves the
+# record current. Prints one line saying what it did.
+record_postdates_this_container() {
+  local mtime started
+  mtime=$(fm_file_mtime_epoch "$RECORD") || return 1
+  started=$(fm_container_start_epoch) || return 1
+  [ "$mtime" -ge "$started" ]
+}
+
 rebind_record_after_supersede() {
   local lock_pid mine_ns
   if ! fm_session_lock_record_read "$LOCK"; then
@@ -246,8 +260,8 @@ rebind_record_after_supersede() {
       "$FM_LOCK_RECORD_PIDNS"
     return 0
   fi
-  if [ "$(record_field harness_pid)" = "$lock_pid" ]; then
-    printf 'context-ceiling record: already names harness pid %s\n' "$lock_pid"
+  if [ "$(record_field harness_pid)" = "$lock_pid" ] && record_postdates_this_container; then
+    printf 'context-ceiling record: already names harness pid %s and was written after this container started\n' "$lock_pid"
     return 0
   fi
   publish_transcript_record "$lock_pid" "" "" superseded-without-hook-payload
