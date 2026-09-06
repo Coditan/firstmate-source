@@ -107,6 +107,7 @@ case "$sub" in
     fi
     printf '%s\n' "$$" > "$run"
     printf '%s\n' "$$" >> "$HERDR_STUB_STATE/server-pids"
+    echo "stub server up for session $session"
     trap 'rm -f "$run"; exit 0' TERM INT HUP
     while :; do sleep 0.2; done
     ;;
@@ -192,6 +193,27 @@ test_a_home_that_does_not_run_herdr_is_left_alone() {
   pass "a home that does not spawn into herdr neither installs nor reports a runtime owner"
 }
 
+test_install_and_restart_refuse_a_home_that_does_not_run_herdr() {
+  local fakebin home err
+  fakebin="$TMP_ROOT/refuse-bin"
+  home=$(make_home "$TMP_ROOT/refuse-home" tmux)
+  mkdir -p "$fakebin"
+  printf '#!/usr/bin/env bash\necho "systemctl must not run on a tmux home: $*" >> "%s/refuse.calls"\nexit 0\n' "$TMP_ROOT" > "$fakebin/systemctl"
+  printf '#!/usr/bin/env bash\necho "tmux must not run on a tmux home: $*" >> "%s/refuse.calls"\nexit 0\n' "$TMP_ROOT" > "$fakebin/tmux"
+  chmod +x "$fakebin/systemctl" "$fakebin/tmux"
+  err=$(FM_HOME="$home" FM_HERDR_SYSTEMCTL="$fakebin/systemctl" FM_HERDR_TMUX="$fakebin/tmux" \
+    FM_HERDR_SYSTEMD_UNIT_DIR="$TMP_ROOT/refuse-units" "$SERVICE" install-unit 2>&1 >/dev/null) \
+    && fail "install-unit installed a runtime owner on a home that does not run herdr"
+  assert_contains "$err" "does not spawn workers into herdr" "install-unit did not say why it refused: $err"
+  err=$(FM_HOME="$home" FM_HERDR_SYSTEMCTL="$fakebin/systemctl" FM_HERDR_TMUX="$fakebin/tmux" \
+    "$SERVICE" restart 2>&1 >/dev/null) \
+    && fail "restart converged a runtime owner on a home that does not run herdr"
+  assert_contains "$err" "does not spawn workers into herdr" "restart did not say why it refused: $err"
+  [ ! -e "$TMP_ROOT/refuse.calls" ] || fail "a refused install or restart still drove a service manager: $(cat "$TMP_ROOT/refuse.calls")"
+  [ ! -e "$TMP_ROOT/refuse-units/fm-herdr@.service" ] || fail "a refused install still wrote the unit"
+  pass "install-unit and restart refuse a home that does not spawn into herdr"
+}
+
 test_selection_falls_back_to_the_keeper_tier() {
   local fakebin home out
   fakebin="$TMP_ROOT/select-bin"
@@ -231,6 +253,7 @@ test_owner_adopts_a_running_runtime_without_restarting_it() {
 
 test_owner_starts_a_down_runtime_in_a_session_of_its_own() {
   local fakebin state home owner_sid server_pid server_sid
+  command -v setsid >/dev/null 2>&1 || { echo "skip: setsid not available"; return 0; }
   fakebin="$TMP_ROOT/start-bin"
   state="$TMP_ROOT/herdr-state"
   home=$(make_home "$TMP_ROOT/start-home")
@@ -251,6 +274,43 @@ test_owner_starts_a_down_runtime_in_a_session_of_its_own() {
   [ -n "$server_sid" ] || fail "could not read the started runtime's session id"
   [ "$server_sid" != "$owner_sid" ] || fail "the runtime was started inside the caller's own session ($server_sid)"
   pass "an owner starts a down runtime detached, in a session of its own"
+}
+
+test_server_output_has_its_own_capped_file() {
+  local fakebin state home server_log owner_log
+  fakebin="$TMP_ROOT/log-bin"
+  state="$TMP_ROOT/herdr-state"
+  home=$(make_home "$TMP_ROOT/log-home")
+  make_fake_herdr "$fakebin" "$state"
+  server_log="$home/state/.herdr-server.log"
+  owner_log="$home/state/.herdr-runtime.log"
+
+  # Output from a previous runtime, already past the bound.
+  head -c 3000 /dev/zero | tr '\0' 'x' > "$server_log"
+  printf '\nold runtime last words\n' >> "$server_log"
+
+  PATH="$fakebin:$PATH" FM_HOME="$home" FM_HERDR_RUNTIME_SESSION=logged \
+    FM_HERDR_SERVER_LOG_MAX_BYTES=2048 \
+    FM_HERDR_RUNTIME_ONCE=1 FM_HERDR_RUNTIME_CONFIRM_SLEEP=0.2 "$RUNTIME" \
+    || fail "the owner failed on a runtime that was down"
+  wait_for_file "$state/running-logged" || fail "the owner did not start the runtime"
+  wait_for_file "$server_log" || fail "the server log was not recreated"
+
+  assert_contains "$(cat "$server_log.1")" "old runtime last words" \
+    "the copy taken at the cap lost the previous runtime's output"
+  [ "$(wc -c < "$server_log")" -lt 2048 ] || fail "the server log was not truncated at the bound"
+  local tries=50
+  while [ "$tries" -gt 0 ] && ! grep -q "stub server up for session logged" "$server_log" 2>/dev/null; do
+    sleep 0.1; tries=$((tries - 1))
+  done
+  assert_contains "$(cat "$server_log")" "stub server up for session logged" \
+    "the started server's own output did not land in the server log"
+  assert_contains "$(cat "$owner_log")" "started the herdr runtime for session logged" \
+    "the owner's own line did not land in the owner log"
+  case "$(cat "$owner_log")" in
+    *"stub server up"*) fail "the server's output leaked into the owner's log" ;;
+  esac
+  pass "the server's output has its own file, kept apart from the owner's and capped once"
 }
 
 test_a_reading_that_could_not_be_taken_is_not_a_reading_of_down() {
@@ -279,6 +339,7 @@ test_a_reading_that_could_not_be_taken_is_not_a_reading_of_down() {
 
 test_a_keeper_teardown_does_not_take_the_runtime_with_it() {
   local fakebin state home script pgid server_pid control_pid
+  command -v setsid >/dev/null 2>&1 || { echo "skip: setsid not available"; return 0; }
   fakebin="$TMP_ROOT/detach-bin"
   state="$TMP_ROOT/herdr-state"
   home=$(make_home "$TMP_ROOT/detach-home")
@@ -378,9 +439,11 @@ test_the_entrypoint_command_is_printed_verbatim() {
 }
 
 test_a_home_that_does_not_run_herdr_is_left_alone
+test_install_and_restart_refuse_a_home_that_does_not_run_herdr
 test_selection_falls_back_to_the_keeper_tier
 test_owner_adopts_a_running_runtime_without_restarting_it
 test_owner_starts_a_down_runtime_in_a_session_of_its_own
+test_server_output_has_its_own_capped_file
 test_a_reading_that_could_not_be_taken_is_not_a_reading_of_down
 test_a_keeper_teardown_does_not_take_the_runtime_with_it
 test_the_keeper_tier_starts_stops_and_readopts_one_runtime

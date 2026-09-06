@@ -334,6 +334,7 @@ The first unit copy and `enable --now` require explicit captain consent through 
 If `systemd --user` is unavailable, a detached home-scoped tmux keeper is selected automatically, exactly as it is for the watcher, the delivery listener, and the seat respawner.
 Convergence, the recorded `PATH`, and the keeper tier's handed-down `PATH` argument all follow the watcher's rules above; `state/.herdr-service.env` is its environment file and `state/.herdr-runtime.lock/record` its keeper-tier record, which also carries the herdr session name the owner is responsible for.
 That session is resolved as a spawn resolves it, `HERDR_SESSION` then `default`, so the owner and the fleet name one server.
+The owner's own lines go to `state/.herdr-runtime.log`; the detached server's stdout and stderr go to `state/.herdr-server.log`, capped at `FM_HERDR_SERVER_LOG_MAX_BYTES` (default 4 MiB) by one copy to `.herdr-server.log.1` and an in-place truncation, as [`docs/herdr-backend.md`](herdr-backend.md#runtime-ownership-who-starts-the-herdr-server) describes.
 
 One rule separates this service from its three siblings and is worth stating where a reader configuring it will meet it: convergence here replaces the WATCHING process and never the runtime.
 Restarting the delivery listener costs a few seconds of queued wakes, while restarting the herdr server ends every worker's agent process on the home at once, so no path in this service stops a running runtime and none ever will.

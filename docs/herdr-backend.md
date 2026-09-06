@@ -86,6 +86,16 @@ Three properties are what make this safe to land on a vessel with a full fleet a
 A reading the owner could not take is never rendered as `down`.
 A missing `herdr`, a missing `jq`, or JSON that does not parse are recorded as `unreadable` and reported as themselves, because starting a server on a `down` the owner invented could bind a second server against a live socket.
 
+The owner and the server write to two separate files under `state/`, and only one of them is bounded:
+
+- `state/.herdr-runtime.log` holds the owner's own lines - adoptions, start attempts, unreadable causes, and its own stop - and nothing else.
+- `state/.herdr-server.log` holds the detached `herdr server`'s own stdout and stderr, so a crashed runtime's last words survive rather than going to `/dev/null` the way the lazy start discarded them.
+
+The server file is capped at `FM_HERDR_SERVER_LOG_MAX_BYTES` (default 4 MiB), because the volume a long-lived server writes under a live fleet is unmeasured and it must not become the first unbounded writer under `state/`.
+The owner checks the size before it starts a server and once per poll; at the bound it copies the file once to `state/.herdr-server.log.1`, overwriting any previous copy, and truncates the live file in place.
+Truncation rather than a rename is deliberate: the server holds the file open in append mode and would keep writing to a renamed file.
+There is no rotation scheme beyond that one copy.
+
 ### The vessel entrypoint gap
 
 Measured on the coditan vessel, 2026-09-06, by reading the container's own PID 1 and its supervisor:

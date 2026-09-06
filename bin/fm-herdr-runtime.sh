@@ -57,6 +57,7 @@ RECORD="$LOCKDIR/record"
 READING="$LOCKDIR/reading"
 BEAT="$STATE/.last-herdr-runtime-beat"
 LOG="$STATE/.herdr-runtime.log"
+SERVER_LOG="$STATE/.herdr-server.log"
 
 # One `herdr status --json` per interval, forever, so the interval is chosen
 # against what it costs rather than against how fast a reading could be taken:
@@ -67,11 +68,21 @@ START_TIMEOUT=${FM_HERDR_RUNTIME_START_TIMEOUT:-20}
 BASE_BACKOFF=${FM_HERDR_RUNTIME_BACKOFF:-30}
 MAX_BACKOFF=${FM_HERDR_RUNTIME_MAX_BACKOFF:-300}
 CONFIRM_SLEEP=${FM_HERDR_RUNTIME_CONFIRM_SLEEP:-1}
+# The detached server's own stdout and stderr go to $SERVER_LOG, apart from this
+# owner's lines in $LOG, and that file is capped.  A bound exists at all because
+# the volume a long-lived `herdr server` writes under a live fleet is unmeasured,
+# and the lazy start this replaces discarded that output entirely; the runtime
+# must not become the first unbounded writer under state/.  At the bound the file
+# is copied once to $SERVER_LOG.1 and truncated in place - truncation rather
+# than a rename because the server holds the file open in append mode and would
+# keep writing to a renamed file - so a crashed runtime's last words survive.
+SERVER_LOG_MAX_BYTES=${FM_HERDR_SERVER_LOG_MAX_BYTES:-4194304}
 case "$POLL" in ''|*[!0-9]*|0) POLL=30 ;; esac
 case "$START_TIMEOUT" in ''|*[!0-9]*|0) START_TIMEOUT=20 ;; esac
 case "$BASE_BACKOFF" in ''|*[!0-9]*|0) BASE_BACKOFF=30 ;; esac
 case "$MAX_BACKOFF" in ''|*[!0-9]*|0) MAX_BACKOFF=300 ;; esac
 case "$CONFIRM_SLEEP" in ''|.|*[!0-9.]*|*.*.*) CONFIRM_SLEEP=1 ;; esac
+case "$SERVER_LOG_MAX_BYTES" in ''|*[!0-9]*|0) SERVER_LOG_MAX_BYTES=4194304 ;; esac
 
 # shellcheck source=bin/fm-wake-lib.sh
 . "$SCRIPT_DIR/fm-wake-lib.sh"
@@ -169,20 +180,33 @@ unreadable_cause() {
   printf 'herdr status --json for session %s returned nothing usable' "$SESSION"
 }
 
+cap_server_log() {
+  local size
+  [ -f "$SERVER_LOG" ] || return 0
+  size=$(wc -c < "$SERVER_LOG" 2>/dev/null | tr -d ' ') || return 0
+  case "$size" in ''|*[!0-9]*) return 0 ;; esac
+  [ "$size" -ge "$SERVER_LOG_MAX_BYTES" ] || return 0
+  cp -f "$SERVER_LOG" "$SERVER_LOG.1" 2>/dev/null || true
+  : > "$SERVER_LOG" 2>/dev/null || return 0
+  log "server output for session $SESSION reached ${size} bytes; kept one copy at $SERVER_LOG.1 and truncated $SERVER_LOG"
+}
+
 # Start the server in a session of its OWN.  setsid is the mechanism, and the
 # recorded `detach=` field is how a reader can tell which one was used rather
 # than assuming the stronger one.  The started process re-enters this script's
 # __serve arm so the command itself keeps its single owner in the adapter.
 start_detached() {
+  mkdir -p "$STATE" 2>/dev/null || true
+  cap_server_log
   if command -v setsid >/dev/null 2>&1; then
-    setsid "$RUNTIME_PATH" __serve "$SESSION" >>"$LOG" 2>&1 </dev/null &
+    setsid "$RUNTIME_PATH" __serve "$SESSION" >>"$SERVER_LOG" 2>&1 </dev/null &
     LAST_DETACH="setsid"
     return 0
   fi
   # nohup is weaker - it only ignores SIGHUP and leaves the process in this
   # session's process group - so a home without setsid keeps a runtime that a
   # group-wide signal can still reach.  It is recorded rather than smoothed over.
-  nohup "$RUNTIME_PATH" __serve "$SESSION" >>"$LOG" 2>&1 </dev/null &
+  nohup "$RUNTIME_PATH" __serve "$SESSION" >>"$SERVER_LOG" 2>&1 </dev/null &
   LAST_DETACH="nohup"
   return 0
 }
@@ -202,6 +226,7 @@ wait_for_running() {
 # owner watching for the moment it can.
 supervise_once() {
   local state confirm now cause
+  cap_server_log
   state=$(server_state)
   case "$state" in
     running)
@@ -262,7 +287,7 @@ supervise_once() {
 if [ "${1:-}" = __serve ]; then
   [ "$#" -eq 2 ] || { echo "usage: $(basename "$0") __serve <session>" >&2; exit 2; }
   exec_session=$2
-  log "serving herdr session $exec_session (pid $$, sid $(ps -o sid= -p $$ 2>/dev/null | tr -d ' '))"
+  log "serving herdr session $exec_session (pid $$, sid $(ps -o sid= -p $$ 2>/dev/null | tr -d ' ')); its output goes to $SERVER_LOG"
   fm_backend_herdr_cli "$exec_session" server
   exit $?
 fi

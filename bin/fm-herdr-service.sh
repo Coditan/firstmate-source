@@ -399,6 +399,7 @@ ensure_systemd() {
 
 install_systemd() {
   local unit
+  home_runs_herdr || { echo "this home does not spawn workers into herdr; nothing to install" >&2; return 1; }
   systemd_usable || { echo "error: systemd --user is unavailable; the tmux keeper tier needs no install" >&2; return 1; }
   unit=$(unit_instance) || return 1
   install_unit_bytes || return 1
@@ -521,6 +522,7 @@ ensure_selected() {
 }
 
 restart_selected() {
+  home_runs_herdr || { echo "this home does not spawn workers into herdr; nothing to restart" >&2; return 1; }
   case "$(select_backend)" in
     systemd)
       if ! systemd_installed || ! systemd_enabled; then
