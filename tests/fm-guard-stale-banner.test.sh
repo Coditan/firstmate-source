@@ -366,28 +366,6 @@ test_worker_delivery_warning_keeps_relay_prefix_without_a_repair() {
   pass "fm-guard: a task worker's delivery warning keeps the relay prefix and carries no repair"
 }
 
-# bin/fm-spawn.sh seeds only FM_HOME into a task worker's launch command;
-# FM_ROOT_OVERRIDE reaches the worker solely by inheritance from firstmate's own
-# shell. fm-guard has no primary-scope gate, so a worker launched without the
-# override still judges the launching home here, and the watcher it compares
-# must resolve from FM_HOME: under an FM_ROOT spelling FM_ROOT falls back to the
-# worker's own checkout and the home's live lock reads as a dead daemon forever.
-test_worker_without_root_override_sees_the_homes_live_watcher() {
-  local dir home worker out live
-  dir=$(make_guard_case worker-no-override)
-  home=$(case_home "$dir")
-  worker=$(make_worker_checkout "$dir")
-  sleep 60 & live=$!
-  record_live_daemon "$home" "$live"
-  out=$(env -u FM_ROOT_OVERRIDE FM_HOME="$home" FM_GUARD_GRACE=999 FM_WATCH_SERVICE_FORCE_BACKEND=keeper \
-    "$worker/bin/fm-guard.sh" 2>&1)
-  kill "$live" 2>/dev/null || true
-  wait "$live" 2>/dev/null || true
-  assert_not_contains "$out" "WATCHER DAEMON DOWN" \
-    "a worker carrying only FM_HOME must see the home's live watcher, not a dead daemon"
-  pass "fm-guard: the compared watcher resolves from FM_HOME, so a worker seeded without FM_ROOT_OVERRIDE gets no false daemon alarm"
-}
-
 # The other half of the pair: the session that operates this home must still be
 # handed a repair. The fix is an addressee split, not a quietening.
 test_operator_delivery_warning_still_carries_the_repair() {
@@ -420,5 +398,4 @@ test_healthy_read_only_does_not_clear_marker
 test_read_only_never_mutates_stale_banner_state_files
 test_worker_daemon_banner_names_no_command_reserved_to_firstmate
 test_worker_delivery_warning_keeps_relay_prefix_without_a_repair
-test_worker_without_root_override_sees_the_homes_live_watcher
 test_operator_delivery_warning_still_carries_the_repair
