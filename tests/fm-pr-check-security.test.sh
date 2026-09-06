@@ -2414,6 +2414,23 @@ test_bootstrap_migrates_before_other_mutations() {
   pass "bootstrap runs the non-executing migration at the locked session boundary"
 }
 
+# Bootstrap's deferred fleet-sync run finishes on its own clock. When the digest
+# reported it pending, wait (bounded) for that generation to finish and append
+# its output to the captured digest so assertions see the complete delivery.
+append_deferred_fleet_sync_result() {  # <home> <bootstrap-output-file>
+  local home=$1 out=$2 generation dir waited=0
+  grep -q 'FLEET_SYNC: fleet: pending:' "$out" 2>/dev/null || return 0
+  generation=$(cat "$home/state/.deferred/fleet-sync/current" 2>/dev/null || true)
+  [ -n "$generation" ] || fail "digest reported the fleet refresh pending but no deferred generation exists"
+  dir="$home/state/.deferred/fleet-sync/$generation"
+  while [ ! -f "$dir/done" ] && [ "$waited" -lt 300 ]; do
+    sleep 0.1
+    waited=$((waited + 1))
+  done
+  [ -f "$dir/done" ] || fail "deferred fleet refresh did not finish within 30s"
+  [ ! -f "$dir/out" ] || cat "$dir/out" >> "$out"
+}
+
 test_bootstrap_isolates_incomplete_poll_migration() {
   local dir state fakebin fleet_marker x_poll_marker rc
   dir=$(make_case bootstrap-migration-isolation)
@@ -2479,6 +2496,12 @@ SH
     "incomplete poll migration suppressed X mention setup"
   fmx_poll_shim_valid "$state/x-watch.check.sh" "$dir/home" "$dir/root" \
     || fail "incomplete poll migration did not arm a private authenticated X relay shim"
+  # The clone refresh is a deferred check: bootstrap starts it early and collects
+  # it at the end without waiting, so the digest either carries its result or
+  # reports it pending and lets the runner deliver it. Ask for the whole
+  # delivery - digest plus whatever the runner wrote once it finished - rather
+  # than racing the collect call and calling the loser a regression.
+  append_deferred_fleet_sync_result "$dir/home" "$dir/bootstrap.out"
   [ -e "$fleet_marker" ] || fail "incomplete poll migration suppressed fleet refresh"
   assert_grep 'FLEET_SYNC: alpha: recovered: continued after isolated migration failure' "$dir/bootstrap.out" \
     "continued fleet refresh was not operator-visible"
