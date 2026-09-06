@@ -10,6 +10,12 @@
 # Registration writes state/<id>.check-trust, binding the check to its current
 # SHA-256 hash; register it again after changing its bytes.
 #
+# The state directory must belong to the home this command runs as: when
+# FM_STATE_OVERRIDE names another home's state/, registration is refused rather
+# than binding a check that home would run with the wrong locations baked in.
+# bin/fm-check-lib.sh owns that predicate; docs/configuration.md owns the
+# override layout it reads.
+#
 # This command neither creates the check nor gives it a wall-clock cadence.
 # The watcher sweeps state/*.check.sh no more often than once per
 # FM_CHECK_INTERVAL seconds (default 300), and every due check in a sweep runs:
@@ -56,6 +62,12 @@ CHECK="$STATE/$ID.check.sh"
 TRUST="$STATE/$ID.check-trust"
 CHECK_DISPLAY="state/$ID.check.sh"
 [ -d "$STATE" ] && [ ! -L "$STATE" ] || { echo "error: state directory is unavailable" >&2; exit 1; }
+# The choke point for every check that registers. Not every armed check is
+# rendered by a script in this directory - a caller can write its own shim and
+# borrow only this registrar - so the cross-home predicate has to hold here too,
+# or the arm paths' guard has a door beside it. bin/fm-check-lib.sh owns the
+# predicate and why it exists.
+fm_check_arm_refuse fm-check-register "$STATE" "$FM_HOME" || exit 1
 # Each condition fm_pr_private_file_valid folds into one boolean is named
 # separately here, so the refusal states the remedy instead of implying it.
 [ -e "$CHECK" ] || [ -L "$CHECK" ] \

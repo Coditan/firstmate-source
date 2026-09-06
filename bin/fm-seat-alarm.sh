@@ -201,6 +201,12 @@
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# The cross-home arm guard: an armed check must land in the state
+# directory of the home it bakes (bin/fm-check-lib.sh).
+# shellcheck source=bin/fm-check-lib.sh disable=SC1091
+. "$SCRIPT_DIR/fm-check-lib.sh"
+
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
@@ -616,6 +622,9 @@ notify() {  # <verdict> <duration-seconds>
 # globbed, for the reason the rename migration below gives.
 arm() {
   local desired current tmp
+  # Before the write, not after: refusing only at registration would
+  # still leave the other home's check overwritten and its trust stale.
+  fm_check_arm_refuse fm-seat-alarm "$STATE" "$FM_HOME" || return 1
   if fm_root_is_secondmate_home "$FM_HOME"; then
     rm -f -- "$CHECK" "$STATE/$CHECK_ID.check-trust" "$LEGACY_CHECK" "$LEGACY_TRUST" \
       2>/dev/null || return 1

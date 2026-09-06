@@ -62,6 +62,30 @@ unset FM_WATCH_DAEMON
 # refuse to answer for.
 unset FM_AXI_AMBIENT_PATH FM_AXI_AMBIENT_PATH_OWNER
 
+# The location overrides are inherited the same way, and the consequence is
+# worse than a wrong reading: it is a WRITE into the operator's live home.
+#
+# A suite launched from inside a running firstmate session inherits that
+# session's FM_STATE_OVERRIDE. A case that then sets only FM_HOME for its
+# fixture - which most of them do, because that is also how bin/fm-bootstrap.sh
+# is invoked - resolves a FIXTURE home and the OPERATOR'S LIVE state directory.
+# Anything that arms then writes the fixture's locations into a live armed
+# check. On 2026-08-30 that overwrote six of this fleet's live checks; each one
+# afterwards looked in a temporary directory that no longer existed, printed
+# nothing, and read as a clean all-clear.
+#
+# Clearing them here is the half that scales: it holds for every case in every
+# suite, including ones not written yet, and it does not depend on any case
+# remembering. bin/fm-check-lib.sh holds the other half, refusing the write
+# itself in every arm path and in the registrar, including for the callers of
+# those that live outside this repository.
+#
+# --arm stays deliberately un-silenced, so the bootstrap suites still exercise
+# arming against fixture homes. Arming a fixture home is legitimate; reaching
+# the operator's home from a test is the harm, and only the second is closed.
+unset FM_HOME FM_ROOT_OVERRIDE FM_STATE_OVERRIDE FM_DATA_OVERRIDE \
+  FM_CONFIG_OVERRIDE FM_PROJECTS_OVERRIDE FM_FINDINGS_DIR
+
 # The daily currency round's armed reading runs in bootstrap's detect pass, and
 # every fixture home is by definition unarmed, so each suite that composes
 # fm-bootstrap.sh would otherwise see its diagnostic. Silence the reporting modes
