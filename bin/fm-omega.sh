@@ -41,7 +41,7 @@ clean_value() { # <field-name> <value>
 }
 
 away_fingerprint() {
-  local path=$1 fingerprint timestamp
+  local path=$1 fingerprint timestamp fraction
   if [ "$(uname)" = Darwin ]; then
     fingerprint=$(LC_ALL=C stat -f '%d:%i:%Fm' "$path" 2>/dev/null) || return 1
   else
@@ -49,8 +49,17 @@ away_fingerprint() {
   fi
   timestamp=${fingerprint#*:*:}
   case "$timestamp" in
-    *.[0-9]*|*.[0-9]*' '*) ;;
+    *.[0-9]*) ;;
     *) return 1 ;;
+  esac
+  fraction=${timestamp#*.}
+  fraction=${fraction%%[!0-9]*}
+  case "$fraction" in
+    *[!0]*) ;;
+    *)
+      printf 'fm-omega: away-entry fingerprint has zero-filled sub-second timestamp\n' >&2
+      return 1
+      ;;
   esac
   printf '%s' "$fingerprint"
 }

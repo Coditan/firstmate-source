@@ -120,7 +120,7 @@ test_status_fails_closed_without_subsecond_fingerprint() {
   tools="$home/tools"
   mkdir "$tools"
   real_stat=$(command -v stat)
-  printf '#!/usr/bin/env bash\nexec %q "$@" | sed "s/\\.[0-9][0-9]*/ /"\n' "$real_stat" > "$tools/stat"
+  printf '#!/usr/bin/env bash\nexec %q "$@" | sed "s/\\.[0-9][0-9]*/.000000000/"\n' "$real_stat" > "$tools/stat"
   chmod +x "$tools/stat"
   set +e
   out=$(PATH="$tools:$PATH" run_omega "$home" status)
@@ -128,6 +128,7 @@ test_status_fails_closed_without_subsecond_fingerprint() {
   set -e
   [ "$rc" -eq 4 ] || fail "coarse fingerprint was not stale (rc=$rc): $out"
   assert_contains "$out" 'OMEGA: STALE' "coarse fingerprint did not report stale"
+  assert_contains "$out" 'zero-filled sub-second timestamp' "coarse fingerprint did not name its zero-filled representation"
   assert_contains "$out" 'exact current away-entry identity cannot be established' "coarse fingerprint did not fail loudly"
   pass "omega status fails closed when sub-second identity is unavailable"
 }
