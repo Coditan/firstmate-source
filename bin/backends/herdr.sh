@@ -695,12 +695,22 @@ fm_backend_herdr_projection_order_best_effort() {  # <session> <created-workspac
 # state whose server was down hung its pipeline forever and the fleet's whole
 # worker runtime became a child of that one-shot reader. `exec` closes the saved
 # descriptors, and `setsid` puts the server in its own session so a signal to
-# the reader's process group never reaches it.
+# the reader's process group never reaches it. macOS ships no setsid(1), so
+# fm_backend_herdr_server_start_detached falls back to the same exec-with-
+# /dev/null form without it: the child ignores HUP and execs the binary
+# directly, keeping every property above except the separate process session.
+fm_backend_herdr_server_start_detached() {  # <session>
+  local session=$1
+  local -a start=(herdr server --session "$session")
+  command -v setsid >/dev/null 2>&1 && start=(setsid "${start[@]}")
+  ( ( trap '' HUP; HERDR_SESSION="$session" exec "${start[@]}" ) </dev/null >/dev/null 2>&1 & )
+}
+
 fm_backend_herdr_server_ensure() {  # <session>
   local session=$1 running out i
   running=$(fm_backend_herdr_cli "$session" status --json 2>/dev/null | jq -r '.server.running // false' 2>/dev/null)
   [ "$running" = "true" ] && return 0
-  ( HERDR_SESSION="$session" setsid herdr server --session "$session" </dev/null >/dev/null 2>&1 & ) || return 1
+  fm_backend_herdr_server_start_detached "$session" || return 1
   for i in $(seq 1 20); do
     running=$(fm_backend_herdr_cli "$session" status --json 2>/dev/null | jq -r '.server.running // false' 2>/dev/null)
     [ "$running" = "true" ] && return 0
