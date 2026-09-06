@@ -778,7 +778,7 @@ run_bootstrap() {
 run_config_push() {
   local w=$1 fakebin
   fakebin=$(make_fake_toolchain "$w")
-  fm_test_record_supervision_healthy "$w/home"
+  fm_test_record_supervision_healthy "$w/home" "$w/home/state" "$w/main"
   PATH="$fakebin:$BASE_PATH" FM_HOME="$w/home" FM_ROOT_OVERRIDE="$w/main" \
     "$ROOT/bin/fm-config-push.sh"
 }

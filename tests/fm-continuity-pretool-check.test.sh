@@ -75,6 +75,9 @@ test_gate_scope_and_recovery_exceptions() {
   expect_allow "delivery repair recovery" 'bin/fm-delivery-service.sh restart'
   expect_allow "drain then delivery repair recovery" 'bin/fm-wake-drain.sh; bin/fm-delivery-service.sh restart'
   expect_allow "fail-closed teardown recovery" 'bin/fm-teardown.sh task'
+  # A worker's own status line is never a fleet mutation, and the refusal itself
+  # tells the worker to report through it, so it must be classified as recovery.
+  expect_allow "own status line recovery" 'bin/fm-status.sh state/task.status working hi'
   unsafe_teardown_reason='[watcher-continuity] tasks are in flight and no live watcher holds this home lock; during recovery only the ordinary literal bin/fm-teardown.sh is allowed, so drop --force and any shell-expanded arguments and retry the literal invocation (blocked: fm-teardown.sh)'
   expect_deny "forced teardown is not recovery" 'bin/fm-teardown.sh task --force' 'fm-teardown.sh' "$unsafe_teardown_reason"
   expect_deny "nested forced teardown is not recovery" "bash -lc 'bin/fm-teardown.sh task --force'" 'fm-teardown.sh' "$unsafe_teardown_reason"
@@ -236,6 +239,81 @@ test_operator_refusal_still_names_the_recovery_commands() {
   pass "continuity gate still hands the session operating this home its full recovery instruction"
 }
 
+# The lock records the ABSOLUTE path of the watcher that took it, which is the
+# watcher of the CHECKOUT it was launched from, and the identity check compares
+# that path as a string. A worker in a task worktree runs a byte-identical copy
+# of this hook at a DIFFERENT path, so resolving the compared watcher from the
+# hook's own SCRIPT_DIR compared the worktree's copy and could never match the
+# record: every worker saw a permanent refusal no repair could clear. The gate
+# resolves it from FM_ROOT instead, the checkout-derived root the recorded path
+# resolves to, so a worker whose FM_ROOT_OVERRIDE names the launching home
+# compares the right file.
+test_worker_sees_the_homes_live_watcher_through_its_own_copy_of_the_gate() {
+  local holder identity rc=0
+  rm -rf "$STATE/.watch.lock"
+  printf 'project=fixture\n' > "$STATE/task.meta"
+  sleep 300 &
+  holder=$!
+  identity=$(FM_STATE_OVERRIDE="$STATE" bash -c '. "$1"; fm_pid_identity "$2"' _ "$ROOT/bin/fm-wake-lib.sh" "$holder") \
+    || fail "could not identify live continuity fixture"
+  mkdir -p "$STATE/.watch.lock"
+  printf '%s\n' "$holder" > "$STATE/.watch.lock/pid"
+  printf '%s\n' "$PRIMARY" > "$STATE/.watch.lock/fm-home"
+  printf '%s\n' "$WATCH" > "$STATE/.watch.lock/watcher-path"
+  printf '%s\n' "$identity" > "$STATE/.watch.lock/pid-identity"
+
+  run_command_as_worker 'bin/fm-crew-state.sh task' || rc=$?
+  kill "$holder" 2>/dev/null || true
+  wait "$holder" 2>/dev/null || true
+  [ "$rc" -eq 0 ] || fail "a worker running its own copy of the gate must see the home's live watcher, got exit $rc: $(cat "$ERR")"
+  [ ! -s "$ERR" ] || fail "worker live-lock allow wrote stderr: $(cat "$ERR")"
+  pass "continuity gate compares the watcher of the checkout FM_ROOT names, so a worker in a task worktree is not falsely refused"
+}
+
+# The pid half of the check is untouched, so the case the check exists for - a
+# dead process still holding the home lock, reproduced 2026-08-30 - still refuses
+# from a worker's copy as well.
+test_dead_pid_holding_the_home_lock_still_refuses_a_worker() {
+  local holder identity rc=0
+  rm -rf "$STATE/.watch.lock"
+  printf 'project=fixture\n' > "$STATE/task.meta"
+  sleep 300 &
+  holder=$!
+  identity=$(FM_STATE_OVERRIDE="$STATE" bash -c '. "$1"; fm_pid_identity "$2"' _ "$ROOT/bin/fm-wake-lib.sh" "$holder") \
+    || fail "could not identify continuity fixture before killing it"
+  kill "$holder" 2>/dev/null || true
+  wait "$holder" 2>/dev/null || true
+  mkdir -p "$STATE/.watch.lock"
+  printf '%s\n' "$holder" > "$STATE/.watch.lock/pid"
+  printf '%s\n' "$PRIMARY" > "$STATE/.watch.lock/fm-home"
+  printf '%s\n' "$WATCH" > "$STATE/.watch.lock/watcher-path"
+  printf '%s\n' "$identity" > "$STATE/.watch.lock/pid-identity"
+
+  run_command_as_worker 'bin/fm-crew-state.sh task' || rc=$?
+  rm -rf "$STATE/.watch.lock"
+  [ "$rc" -eq 2 ] || fail "a dead pid holding the home lock must still refuse, got exit $rc"
+  pass "continuity gate still refuses when a dead process holds the home lock"
+}
+
+# The channel the refusal names must itself be usable, from either addressee.
+test_status_writer_is_classified_recovery() {
+  local classification
+  # Any executed bin/fm-*.sh that is NOT in the recovery set prints a deny line,
+  # so silence here is the proof that the status writer is in that set.
+  classification=$(node "$ROOT/bin/fm-continuity-command-policy.mjs" \
+    --command 'bin/fm-status.sh state/task.status working hi' --root "$ROOT") \
+    || fail "policy could not classify the status writer"
+  [ -z "$classification" ] || fail "the status writer must classify as recovery, got: $classification"
+  classification=$(node "$ROOT/bin/fm-continuity-command-policy.mjs" \
+    --command 'bin/fm-crew-state.sh task' --root "$ROOT") \
+    || fail "policy could not classify the contrast command"
+  case "$classification" in
+    deny*fm-crew-state.sh*) ;;
+    *) fail "contrast command must still deny, so silence above means recovery: $classification" ;;
+  esac
+  pass "the command policy classifies the status writer as a recovery command"
+}
+
 test_claude_hook_registration_preserves_stop_backstop() {
   jq -e '
     [.hooks.PreToolUse[] | select(.matcher == "Bash") | .hooks[].command]
@@ -253,4 +331,7 @@ test_child_worktree_and_malformed_input_fail_open
 test_worker_refusal_names_no_command_reserved_to_firstmate
 test_worker_forced_teardown_gets_the_literal_retry_remedy
 test_operator_refusal_still_names_the_recovery_commands
+test_worker_sees_the_homes_live_watcher_through_its_own_copy_of_the_gate
+test_dead_pid_holding_the_home_lock_still_refuses_a_worker
+test_status_writer_is_classified_recovery
 test_claude_hook_registration_preserves_stop_backstop

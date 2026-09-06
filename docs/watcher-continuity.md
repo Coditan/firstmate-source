@@ -20,8 +20,23 @@ Whether a listener is up at that moment is irrelevant to whether the record surv
 
 ## The Claude continuity gate
 
-Claude's PreToolUse continuity gate allows the wake drain, the supervision-repair commands, and independently fail-closed teardown, but refuses other fleet commands while tasks are in flight and no identity-matched live watcher holds the home lock.
+Claude's PreToolUse continuity gate allows the wake drain, the supervision-repair commands, a worker's own status line, and independently fail-closed teardown, but refuses other fleet commands while tasks are in flight and no identity-matched live watcher holds the home lock.
 Allowing an ordinary literal teardown prevents a terminal wake from creating a recovery circle: forced or dynamically constructed teardown remains blocked, ordinary teardown itself still refuses dirty, unlanded, incomplete-scout, and unresolved-decision cases, and the turn-end guard continues to require supervision for any tasks left in flight.
+
+### Which watcher file the lock is compared against
+
+The lock records the absolute path of the watcher that took it, and `fm_watcher_lock_matches_pid` compares that recorded path as a string.
+That recorded path names the watcher of the checkout the watcher was launched from: `bin/fm-watch.sh` records its own `SCRIPT_DIR` copy, and `bin/fm-watcher-service.sh` launches the checkout's copy, so the lock names the checkout's `bin/fm-watch.sh` and never a file under the home's state directory.
+All three emitters therefore resolve the watcher they compare from `FM_ROOT`, as `$FM_ROOT/bin/fm-watch.sh`, because `FM_ROOT` is the checkout-derived root and is exactly what the recorded path resolves to.
+`FM_HOME` is the wrong term for this comparison, even though it selects the state directory the lock lives in: `docs/configuration.md` documents `FM_HOME` as selecting state while scripts still run from this repo's `bin/`, so in the `FM_HOME=<scratch>` shape that `docs/cmux-backend.md` records, an `FM_HOME`-derived watcher path names a file the lock never records and every emitter would alarm forever.
+Resolving it from the emitter's own `SCRIPT_DIR` was wrong for exactly the worker shape that "Who the refusal is addressed to" below describes: a worker in a task worktree runs the worktree's byte-identical copy, so the recorded home path never equalled the worktree path, the identity half could never match, and every worker saw a permanent refusal no repair could clear.
+The pid half of the check is unchanged, so a dead process holding the home lock - the 2026-08-30 true positive - still refuses.
+For a session operating the home, `FM_ROOT` and `SCRIPT_DIR/..` are the same directory, so nothing about that case changed.
+One residual is accepted: when a worker's environment carries `FM_HOME` but no `FM_ROOT_OVERRIDE`, `FM_ROOT` falls back to the worktree.
+The PreToolUse gate and the turn-end guard are unaffected in that shape, because `fm_primary_scope_matches` exits them before the lock is ever read, so the residual is confined to the advisory banner of `bin/fm-guard.sh`, which warns and never blocks.
+
+`bin/fm-status.sh` is classified as a recovery command alongside the wake drain, delivery service repair, and teardown.
+A worker's own status line is never a fleet mutation, and it is the channel the refusal itself tells the worker to report through, so denying it left the worker with no sanctioned way to answer.
 
 ### Who the refusal is addressed to
 
