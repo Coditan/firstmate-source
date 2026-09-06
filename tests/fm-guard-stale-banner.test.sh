@@ -350,9 +350,11 @@ test_worker_delivery_warning_keeps_relay_prefix_without_a_repair() {
   home=$(case_home "$dir")
   make_worker_checkout "$dir" > /dev/null
   sleep 60 & live=$!
-  # The lock records the home's own watcher, which is what the guard compares
-  # against from any checkout: a worker's copy of fm-guard.sh reads that same
-  # live watcher rather than looking for its own worktree's path.
+  # The lock records the checkout the watcher was launched from, which in this
+  # fixture is the directory FM_ROOT_OVERRIDE names, so a worker's copy of
+  # fm-guard.sh compares that path as FM_ROOT rather than its own worktree's.
+  # The home and that checkout coincide here, so the two spellings look alike -
+  # exactly the coincidence a rejected FM_HOME-derived path mistook for a rule.
   record_live_daemon "$home" "$live"
   out=$(run_guard_case_as_worker "$dir")
   kill "$live" 2>/dev/null || true

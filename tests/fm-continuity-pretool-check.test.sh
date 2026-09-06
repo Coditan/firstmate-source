@@ -239,12 +239,15 @@ test_operator_refusal_still_names_the_recovery_commands() {
   pass "continuity gate still hands the session operating this home its full recovery instruction"
 }
 
-# The lock records the ABSOLUTE path of the watcher that took it, and the
-# identity check compares that path as a string. A worker in a task worktree runs
-# a byte-identical copy of this hook at a DIFFERENT path, so resolving the
-# compared watcher from the hook's own SCRIPT_DIR could never match the home's
+# The lock records the ABSOLUTE path of the watcher that took it, which is the
+# watcher of the CHECKOUT it was launched from, and the identity check compares
+# that path as a string. A worker in a task worktree runs a byte-identical copy
+# of this hook at a DIFFERENT path, so resolving the compared watcher from the
+# hook's own SCRIPT_DIR compared the worktree's copy and could never match the
 # record: every worker saw a permanent refusal no repair could clear. The gate
-# resolves it from FM_HOME instead, which is the home whose lock it is reading.
+# resolves it from FM_ROOT instead, the checkout-derived root the recorded path
+# resolves to, so a worker whose FM_ROOT_OVERRIDE names the launching home
+# compares the right file.
 test_worker_sees_the_homes_live_watcher_through_its_own_copy_of_the_gate() {
   local holder identity rc=0
   rm -rf "$STATE/.watch.lock"
@@ -264,7 +267,7 @@ test_worker_sees_the_homes_live_watcher_through_its_own_copy_of_the_gate() {
   wait "$holder" 2>/dev/null || true
   [ "$rc" -eq 0 ] || fail "a worker running its own copy of the gate must see the home's live watcher, got exit $rc: $(cat "$ERR")"
   [ ! -s "$ERR" ] || fail "worker live-lock allow wrote stderr: $(cat "$ERR")"
-  pass "continuity gate compares the home's own watcher, so a worker in a task worktree is not falsely refused"
+  pass "continuity gate compares the watcher of the checkout FM_ROOT names, so a worker in a task worktree is not falsely refused"
 }
 
 # The pid half of the check is untouched, so the case the check exists for - a
