@@ -255,9 +255,14 @@ test_a_foreign_or_dead_lock_holder_is_never_deliverable() {
   home=$(make_home dead-holder)
   make_live_listener "$home"
   queue_wake "$home"
-  sleep 300 &
-  dead=$!
-  kill "$dead" 2>/dev/null || true
+  # A pid that has already exited, obtained the way tests/fm-turnend-guard.test.sh
+  # obtains one: a subshell that exits at once, reaped before its number is used.
+  # Never `sleep N &` then `kill $!`: the signal can land before the child has
+  # exec'd sleep, while it is still a bash that inherited this test's TERM trap,
+  # and that trap's EXIT cleanup removes the temp root and kills every holder
+  # under the test's feet (or the child swallows the signal and sleeps out the
+  # full N seconds, past the listener holder's own lifetime).
+  ( exit 0 ) & dead=$!
   wait "$dead" 2>/dev/null || true
   printf '%s\n' "$dead" > "$home/state/.lock"
   publish_endpoint "$home"
