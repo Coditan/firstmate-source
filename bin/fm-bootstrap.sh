@@ -43,7 +43,8 @@
 #                 "FORGE_STATUS: the forge status watch could not be armed on this home (...)",
 #                 "SLOT_GUARD: the worktree-ownership watch could not be armed on this home (...)",
 #                 "FINDINGS_SURFACE: <the surface ... does not exist|... is not a
-#                 directory|... cannot be read by this process> (...)", printed
+#                 directory|... cannot be read by this process|... cannot be
+#                 appended to by this process> (...)", printed
 #                 only where the first-mate watch has taken a reading or the seat
 #                 keeper is running on this home, because those are the watchers
 #                 whose give-up record is a finding,
@@ -1764,7 +1765,7 @@ fi
 # bin/fm-finding.sh init stays the only creator, deliberately, so a mistyped
 # pointer cannot become a fresh empty surface nobody reads.
 findings_surface_diagnostic() {
-  local dir state
+  local dir reason
   # Only where something here actually files findings, and only on evidence that
   # a watcher HAS RUN rather than that one was armed a moment ago by this very
   # digest: the alarm's own record of its last reading, and the keeper's own pid
@@ -1775,12 +1776,11 @@ findings_surface_diagnostic() {
     echo "FINDINGS_SURFACE: this home's findings surface could not be resolved, so the seat watchers' give-up records have nowhere to land; run $SCRIPT_DIR/fm-finding.sh check to see why"
     return 0
   }
-  state=$(fm_finding_surface_state "$dir")
-  [ "$state" = ok ] && return 0
+  reason=$(SURFACE=$dir fm_finding_require_surface append 2>&1 >/dev/null) && return 0
   # The reason is the surface owner's own sentence, which already names the one
   # creator where that is the fix; nothing is restated here.
   printf 'FINDINGS_SURFACE: %s, so a give-up record from the first-mate watch or the seat keeper would be lost\n' \
-    "$(fm_finding_surface_reason "$dir" "$state" | tr -d '\n')"
+    "$(printf '%s' "$reason" | tr -d '\n')"
 }
 findings_surface_diagnostic
 [ -f "$STATE/firstmate-update.available" ] && cat "$STATE/firstmate-update.available"

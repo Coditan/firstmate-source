@@ -1221,7 +1221,22 @@ test_findings_surface_is_reported_where_a_seat_watcher_runs() {
   case "$out" in
     *FINDINGS_SURFACE:*) fail "bootstrap still demanded a surface that exists: $out" ;;
   esac
-  pass "bootstrap reports an absent findings surface only where a seat watcher would file one"
+
+  # A surface that exists and can be read but not appended to loses the give-up
+  # exactly as an absent one does: the test is the emit path's own append gate,
+  # not a readable-only reading of the directory.
+  if [ "$(id -u)" -eq 0 ]; then
+    echo "skip: running as root, so mode bits do not block a write"
+  else
+    chmod 500 "$case_dir/home/data/findings"
+    out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
+      "$ROOT/bin/fm-bootstrap.sh")
+    chmod 700 "$case_dir/home/data/findings"
+    printf '%s\n' "$out" | grep -F "FINDINGS_SURFACE: the findings surface $case_dir/home/data/findings cannot be appended to by this process" >/dev/null \
+      || fail "bootstrap did not report a findings surface the give-up emit cannot append to: $out"
+    [ -d "$case_dir/home/data/findings" ] || fail "bootstrap must not replace the unwritable surface"
+  fi
+  pass "bootstrap reports an unreachable findings surface only where a seat watcher would file one"
 }
 
 test_bootstrap_reporting
