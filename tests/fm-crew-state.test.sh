@@ -105,10 +105,19 @@ set -u
 case "${1:-}" in
   status)
     [ "${2:-}" = --json ] && {
-      printf '{"client":{"version":"0.7.1","protocol":14},"server":{"running":true}}\n'
+      if [ "${FM_FAKE_HERDR_SERVER_DOWN:-0}" = 1 ]; then
+        printf '{"client":{"version":"0.7.1","protocol":14},"server":{"running":false}}\n'
+      else
+        printf '{"client":{"version":"0.7.1","protocol":14},"server":{"running":true}}\n'
+      fi
       exit 0
     } ;;
   server)
+    # A real herdr server is long-lived. Sleeping here without redirecting is
+    # what makes the hang reproducible: whatever descriptors the starter leaves
+    # open in this child stay open for the server's whole life.
+    printf 'server\n' >> "${FM_FAKE_HERDR_SERVER_LOG:-/dev/null}"
+    [ "${FM_FAKE_HERDR_SERVER_DOWN:-0}" = 1 ] && sleep 30
     exit 0 ;;
   pane)
     case "${2:-}" in
@@ -227,11 +236,14 @@ reset_fakes() {
   FM_FAKE_TMUX_MISSING=0
   FM_FAKE_HERDR_BUSY=0
   FM_FAKE_HERDR_MISSING=0
+  FM_FAKE_HERDR_SERVER_DOWN=0
+  FM_FAKE_HERDR_SERVER_LOG=""
   FM_FAKE_HERDR_AGENT_STATUS=""
   FM_FAKE_CI_LOGS=""
   FM_FAKE_PANE_FILE=""
   export FM_FAKE_AXI_STATUS FM_FAKE_AXI_STATUS_RUN FM_FAKE_RUNS_LIST FM_FAKE_BUSY FM_FAKE_TMUX_MISSING
   export FM_FAKE_HERDR_BUSY FM_FAKE_HERDR_MISSING FM_FAKE_HERDR_AGENT_STATUS FM_FAKE_CI_LOGS FM_FAKE_PANE_FILE
+  export FM_FAKE_HERDR_SERVER_DOWN FM_FAKE_HERDR_SERVER_LOG
 }
 
 # The pane a claude worker renders while idle at its composer with its own
@@ -1022,6 +1034,45 @@ test_no_run_herdr_unknown_uses_backend_capture() {
   assert_contains "$out" "state: working" "herdr busy pane -> working"
   assert_contains "$out" "source: pane" "herdr busy pane -> pane source"
   pass "herdr unknown native state falls back to backend capture busy regex"
+}
+
+# Regression (2026-09-06, report F1): reading crew state for a herdr task whose
+# server is down used to hang the CALLING pipeline forever. The reader reached
+# fm_backend_herdr_target_ready, which started the server by backgrounding a
+# shell FUNCTION; bash kept a saved copy of the caller's stdout on a high
+# descriptor inside that subshell for as long as the server lived, so the
+# reader's own output pipe never reached EOF and `timeout` did not help - the
+# subshell outlived the script. Two things now stop it: the reader exports
+# FM_BACKEND_HERDR_NO_AUTOSTART=1 so a read never starts a server at all, and
+# the start itself execs the binary fully detached (docs/herdr-backend.md
+# "Server start detachment"). This asserts the pipe reaches EOF and no server
+# was started; the detachment half is asserted in tests/fm-backend-herdr.test.sh.
+test_herdr_server_down_read_never_starts_a_server_and_closes_its_pipe() {
+  command -v jq >/dev/null 2>&1 || { pass "herdr no-autostart read skipped without jq"; return; }
+  command -v timeout >/dev/null 2>&1 || { pass "herdr no-autostart read skipped without timeout"; return; }
+  reset_fakes
+  local d; d=$(new_case herdr-server-down)
+  make_repo_on_branch "$d/wt" fm/feat-herdr-down
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/feat-herdr-down.meta" "window=default:w1:p2" "worktree=$d/wt" "kind=ship" "backend=herdr"
+  FM_FAKE_AXI_STATUS=""
+  FM_FAKE_RUNS_LIST=""
+  FM_FAKE_TMUX_MISSING=1
+  FM_FAKE_HERDR_SERVER_DOWN=1
+  FM_FAKE_HERDR_SERVER_LOG="$d/server-starts"
+  : > "$FM_FAKE_HERDR_SERVER_LOG"
+  local out rc
+  # The single quotes are deliberate: $0 and $1 must expand inside the inner
+  # `bash -c` shell, not in this outer test shell.
+  # shellcheck disable=SC2016
+  out=$( PATH="$d/fakebin:$PATH" FM_STATE_OVERRIDE="$d/state" \
+    timeout 20 bash -c '"$0" "$1" 2>/dev/null | head -1' "$CREW_STATE" feat-herdr-down )
+  rc=$?
+  expect_code 0 $rc "the reader's pipeline must return, not hang, when the herdr server is down"
+  [ -n "$out" ] || fail "the reader should still emit one reading line with the server down"
+  # No `herdr server` may have been started for this read.
+  [ ! -s "$d/server-starts" ] || fail "a read started a herdr server"
+  pass "a crew-state read of a herdr task with the server down returns, closes its pipe, and starts no server"
 }
 
 # Regression: herdr's agent.get reports generation state ("working" only while
@@ -2040,6 +2091,7 @@ test_no_run_idle_pane_prose_about_shells_is_not_evidence
 test_no_run_idle_pane_stale_shell_summary_is_not_evidence
 test_no_run_turn_ended_with_status_line_reads_the_log
 test_no_run_herdr_unknown_uses_backend_capture
+test_herdr_server_down_read_never_starts_a_server_and_closes_its_pipe
 test_no_run_herdr_idle_agent_status_corroborated_by_busy_pane
 test_no_run_herdr_idle_agent_status_and_idle_pane_stays_idle
 test_no_run_idle_pane_uses_log

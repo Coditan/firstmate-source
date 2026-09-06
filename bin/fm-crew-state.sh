@@ -149,6 +149,13 @@ FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 
+# This reader never starts a backend's server. Reading crew state used to bring
+# the herdr server up as a side effect, which made the fleet's whole worker
+# runtime a child of a one-shot reader and hung the reader's own pipeline
+# (docs/herdr-backend.md "Server start"). A server that is down is a reading,
+# not something for a read-only helper to repair.
+export FM_BACKEND_HERDR_NO_AUTOSTART=1
+
 # shellcheck source=bin/fm-tmux-lib.sh
 . "$SCRIPT_DIR/fm-tmux-lib.sh"
 # shellcheck source=bin/fm-backend.sh

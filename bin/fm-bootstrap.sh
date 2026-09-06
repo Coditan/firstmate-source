@@ -235,7 +235,7 @@ fleet_sync_path_may_speak() {  # <path>: false only when this path is provably a
 }
 
 fleet_sync() {
-  local rc
+  local rc start
   [ -x "$FM_ROOT/bin/fm-fleet-sync.sh" ] || return 0
   # A home that genuinely keeps no clones and registers no projects must still cost
   # nothing here. Every other reading falls through: a path that is PRESENT as

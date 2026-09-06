@@ -307,6 +307,153 @@ test_cli_helper_sets_env_and_appends_trailing_session_flag() {
   pass "fm_backend_herdr_cli: sets HERDR_SESSION AND appends a trailing --session flag on every call"
 }
 
+# --- server start detachment / no-autostart reads -----------------------------
+
+# make_slow_server_fakebin: a `herdr` whose `server` subcommand is long-lived,
+# like the real one. `status --json` reports the server down on its first call
+# and up afterwards, so `fm_backend_herdr_server_ensure` starts it and its first
+# poll succeeds. Every invocation inherits whatever descriptors the starter left
+# open, which is exactly what the detachment assertion below measures.
+make_slow_server_fakebin() {  # <dir> -> echoes fakebin dir
+  local dir=$1 fb="$1/fakebin"
+  mkdir -p "$fb"
+  cat > "$fb/herdr" <<'SH'
+#!/usr/bin/env bash
+set -u
+STARTS="${FM_HERDR_SERVER_STARTS:?}"
+POLLS="${FM_HERDR_POLLS:?}"
+if [ "${1:-}" = status ] && [ "${2:-}" = --json ]; then
+  n=$(( $(cat "$POLLS" 2>/dev/null || echo 0) + 1 ))
+  echo "$n" > "$POLLS"
+  if [ "$n" -le "${FM_HERDR_DOWN_POLLS:-1}" ]; then
+    printf '{"client":{"version":"0.7.1","protocol":14},"server":{"running":false}}\n'
+  else
+    printf '{"client":{"version":"0.7.1","protocol":14},"server":{"running":true}}\n'
+  fi
+  exit 0
+fi
+if [ "${1:-}" = server ]; then
+  # Record the started server's own session id and its parent's command, so a
+  # test can assert it was exec'd detached rather than run inside a bash
+  # subshell that is still waiting on it.
+  printf '%s %s\n' "$(ps -o sess= -p $$ | tr -d ' ')" "$(ps -o comm= -p "$PPID" | tr -d ' ')" >> "$STARTS"
+  sleep 30
+  exit 0
+fi
+exit 0
+SH
+  chmod +x "$fb/herdr"
+  printf '%s\n' "$fb"
+}
+
+# make_no_setsid_path: a PATH holding only the tools the server start, the
+# fake herdr and the test's own bash -c need, deliberately without setsid, so
+# the fallback branch of fm_backend_herdr_server_start_detached runs on hosts
+# that do have setsid.
+make_no_setsid_path() {  # <dir> <fakebin> -> echoes PATH
+  local dir=$1 fb=$2 bin="$1/nosetsid" tool src
+  mkdir -p "$bin"
+  for tool in bash env sh jq seq sleep ps tr cat awk timeout dirname basename readlink realpath \
+      mkdir date head tail grep sed cut sort wc mktemp uname id; do
+    src=$(command -v "$tool" 2>/dev/null) || continue
+    ln -s "$src" "$bin/$tool"
+  done
+  printf '%s:%s\n' "$fb" "$bin"
+}
+
+# Regression (2026-09-06, report F1): the start backgrounded a shell FUNCTION,
+# so bash forked a subshell that ran the function and waited for herdr while
+# holding a saved copy of the caller's stdout on a high descriptor for the
+# server's whole life. Readers of crew state hung forever on that. The start now
+# execs the binary with all three standard descriptors on /dev/null, under
+# setsid where it exists (docs/herdr-backend.md "Server start detachment").
+# <path> is the PATH the start runs under; <mode> is "setsid" or "no-setsid".
+check_server_ensure_start_detached() {  # <dir> <path> <mode>
+  local dir=$1 path=$2 mode=$3 out rc
+  # The reader of server_ensure's stdout must see EOF. A command substitution is
+  # the faithful shape: it blocks until every holder of that pipe's write end
+  # closes it, which the old backgrounded shell function never did while the
+  # server lived. The outer timeout is what turns that hang into a failure.
+  # The single quotes are deliberate: $0 and $r must expand inside the inner
+  # `bash -c` shell, not in this outer test shell.
+  # shellcheck disable=SC2016
+  out=$( PATH="$path" FM_HERDR_SERVER_STARTS="$dir/starts" FM_HERDR_POLLS="$dir/polls" \
+    timeout 20 bash -c 'r=$(. "$0/bin/backends/herdr.sh"; fm_backend_herdr_server_ensure fmtest && echo ensured); printf %s "$r"' "$ROOT" 2>"$dir/stderr" )
+  rc=$?
+  expect_code 0 $rc "[$mode] the pipeline around server_ensure must reach EOF while the server it started is still alive"
+  ! grep -q 'command not found' "$dir/stderr" \
+    || fail "[$mode] the start ran with a tool missing from PATH, so the run is not faithful: $(cat "$dir/stderr")"
+  [ "$out" = ensured ] || fail "[$mode] server_ensure should have reported success, got '$out'"
+  local i
+  for i in $(seq 1 100); do [ -s "$dir/starts" ] && break; sleep 0.1; done
+  [ -s "$dir/starts" ] || fail "[$mode] server_ensure should have started the server"
+  # The started server's parent must not be a bash still waiting on it, on both
+  # paths. Whether bash actually parks the caller's stdout on a saved high
+  # descriptor around a redirected function call varies by bash build, so the
+  # EOF assertion above cannot be relied on to fail everywhere; this one does.
+  local started_sid started_parent caller_sid
+  started_sid=$(awk 'NR==1{print $1}' "$dir/starts")
+  started_parent=$(awk 'NR==1{print $2}' "$dir/starts")
+  [ "$started_parent" != bash ] \
+    || fail "[$mode] the started server's parent is a bash subshell still waiting on it; the start must exec the binary, not background a shell function"
+  if [ "$mode" = setsid ]; then
+    # With setsid the started server must also be its OWN process session, not a
+    # member of the reader's. The fallback path has no way to provide that.
+    caller_sid=$(ps -o sess= -p $$ | tr -d ' ')
+    [ -n "$started_sid" ] && [ "$started_sid" != "$caller_sid" ] \
+      || fail "[$mode] the started server must run in its own process session, got '$started_sid' against the caller's '$caller_sid'"
+  fi
+}
+
+test_server_ensure_start_does_not_hold_the_callers_stdout() {
+  command -v timeout >/dev/null 2>&1 || { pass "server-start detachment skipped without timeout"; return; }
+  command -v setsid >/dev/null 2>&1 || { pass "server-start detachment (setsid path) skipped without setsid; the no-setsid path is covered separately"; return; }
+  local dir fb
+  dir="$TMP_ROOT/server-detach"; mkdir -p "$dir"
+  fb=$(make_slow_server_fakebin "$dir")
+  check_server_ensure_start_detached "$dir" "$fb:$PATH" setsid
+  pass "fm_backend_herdr_server_ensure: the started server does not hold the caller's stdout open (setsid path)"
+}
+
+test_server_ensure_start_detaches_without_setsid() {
+  command -v timeout >/dev/null 2>&1 || { pass "server-start detachment skipped without timeout"; return; }
+  local dir fb path
+  dir="$TMP_ROOT/server-detach-nosetsid"; mkdir -p "$dir"
+  fb=$(make_slow_server_fakebin "$dir")
+  path=$(make_no_setsid_path "$dir" "$fb")
+  PATH="$path" command -v setsid >/dev/null 2>&1 && fail "the no-setsid PATH still resolves setsid: $path"
+  check_server_ensure_start_detached "$dir" "$path" no-setsid
+  pass "fm_backend_herdr_server_ensure: the started server is exec'd detached when setsid is absent"
+}
+
+test_target_ready_no_autostart_refuses_a_down_server_without_starting_one() {
+  local dir fb err rc
+  dir="$TMP_ROOT/no-autostart-down"; mkdir -p "$dir"
+  fb=$(make_slow_server_fakebin "$dir")
+  err=$( PATH="$fb:$PATH" FM_HERDR_SERVER_STARTS="$dir/starts" FM_HERDR_POLLS="$dir/polls" \
+    FM_HERDR_DOWN_POLLS=99 FM_BACKEND_HERDR_NO_AUTOSTART=1 \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_target_ready fmtest:w1:p2' "$ROOT" 2>&1 )
+  rc=$?
+  expect_code 1 $rc "target_ready must fail when the server is down and autostart is off"
+  assert_contains "$err" "error: herdr server for session 'fmtest' is not running" \
+    "the no-autostart reading must be its own message, distinct from the ensure path's start-timeout"
+  [ ! -s "$dir/starts" ] || fail "the no-autostart path must never start a server"
+  pass "fm_backend_herdr_target_ready: FM_BACKEND_HERDR_NO_AUTOSTART=1 reports a down server and starts nothing"
+}
+
+test_target_ready_no_autostart_accepts_a_running_server() {
+  local dir fb rc
+  dir="$TMP_ROOT/no-autostart-up"; mkdir -p "$dir"
+  fb=$(make_slow_server_fakebin "$dir")
+  PATH="$fb:$PATH" FM_HERDR_SERVER_STARTS="$dir/starts" FM_HERDR_POLLS="$dir/polls" \
+    FM_HERDR_DOWN_POLLS=0 FM_BACKEND_HERDR_NO_AUTOSTART=1 \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_target_ready fmtest:w1:p2' "$ROOT"
+  rc=$?
+  expect_code 0 $rc "target_ready must succeed against a running server with autostart off"
+  [ ! -s "$dir/starts" ] || fail "the no-autostart path must never start a server"
+  pass "fm_backend_herdr_target_ready: FM_BACKEND_HERDR_NO_AUTOSTART=1 still accepts a running server"
+}
+
 # --- container_ensure / create_task ------------------------------------------
 
 test_container_ensure_starts_server_and_workspace() {
@@ -2805,6 +2952,10 @@ test_workspace_label_secondmate_marker_trims_whitespace
 test_workspace_label_empty_marker_falls_back_to_primary
 test_workspace_label_different_secondmates_get_different_labels
 test_cli_helper_sets_env_and_appends_trailing_session_flag
+test_server_ensure_start_does_not_hold_the_callers_stdout
+test_server_ensure_start_detaches_without_setsid
+test_target_ready_no_autostart_refuses_a_down_server_without_starting_one
+test_target_ready_no_autostart_accepts_a_running_server
 test_container_ensure_starts_server_and_workspace
 test_container_ensure_reuses_existing_workspace
 test_container_ensure_creates_with_no_focus_flag
