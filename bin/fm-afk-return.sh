@@ -148,6 +148,11 @@ return_reconcile() {
   blockers=$(mktemp "$STATE/.afk-return-blockers.XXXXXX") || { rm -f "$evidence"; return 1; }
   preserve_evidence "$evidence"
 
+  if ! "$SCRIPT_DIR/fm-omega.sh" close; then
+    lifecycle_ok=0
+    append_evidence lifecycle 'omega-window close failed; marker and return gate preserved for retry' "$evidence"
+  fi
+
   if [ -e "$STATE/.afk" ] || [ -e "$STATE/.afk-daemon-terminal" ]; then
     if ! "$SCRIPT_DIR/fm-afk-launch.sh" stop; then
       lifecycle_ok=0

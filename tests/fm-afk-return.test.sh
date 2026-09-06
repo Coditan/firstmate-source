@@ -17,6 +17,7 @@ install_runner() {  # <case-dir>
   local dir=$1
   mkdir -p "$dir/bin" "$dir/home/state" "$dir/home/data" "$dir/home/config"
   cp "$ROOT/bin/fm-afk-return.sh" "$dir/bin/"
+  cp "$ROOT/bin/fm-omega.sh" "$dir/bin/"
   cp "$ROOT/bin/fm-wake-lib.sh" "$dir/bin/"
   cp "$ROOT/bin/fm-journal-lib.sh" "$dir/bin/"
   cp "$ROOT/bin/fm-classify-lib.sh" "$dir/bin/"
@@ -65,6 +66,8 @@ test_return_gate_orders_catchup_before_bearings() {
   install_runner "$dir"
   seed_live_blocker "$dir" herdr synthetic-dependency
   date +%s > "$dir/home/state/.afk"
+  FM_HOME="$dir/home" FM_STATE_OVERRIDE="$dir/home/state" \
+    "$dir/bin/fm-omega.sh" open --task 'synthetic repair' --record synthetic-decision
   printf 'repair-task.status: blocked synthetic dependency\n' > "$dir/home/state/.subsuper-escalations"
   printf 'fm away-mode inject WEDGED: 4555s undelivered\n' > "$dir/home/state/.subsuper-inject-wedged"
   {
@@ -87,6 +90,9 @@ test_return_gate_orders_catchup_before_bearings() {
   grep -F $'evidence\twedge\tfm away-mode inject WEDGED: 4555s undelivered' "$gate" >/dev/null || fail "wedge evidence was not retained in the durable gate"
   grep -F $'evidence\tescalation\trepair-task.status: blocked synthetic dependency' "$gate" >/dev/null || fail "buffered escalation evidence was not retained in the durable gate"
   [ "$(wc -l < "$dir/home/stop.log" | tr -d ' ')" -eq 1 ] || fail "return begin did not stop away mode exactly once"
+  [ ! -e "$dir/home/state/.omega" ] || fail "return begin left the omega marker open"
+  grep -F $'\ttask=synthetic repair\trecord=synthetic-decision' "$dir/home/state/omega-window.log" >/dev/null \
+    || fail "return begin did not preserve the omega close record"
 
   # The exact incident regression: Bearings is an ordinary request and must
   # refuse before reading/rendering while this shared gate remains open.

@@ -110,7 +110,8 @@
 #   7. fleet digest   - a compact data/backlog.md identity/metadata listing,
 #                       the standing context-ceiling condition from
 #                       docs/context-reset.md, every state/*.meta, a bounded
-#                       state/*.status tail, state/.afk, and a cheap per-task endpoint-liveness read:
+#                       state/*.status tail, state/.afk, the omega-window state,
+#                       and a cheap per-task endpoint-liveness read:
 #                       read-only, always runs. The status tail is labeled as
 #                       wake-EVENT history rather than current state, and prints
 #                       the full log path so a deeper read is one command away.
@@ -927,6 +928,14 @@ if [ -e "$STATE/.afk" ]; then
 else
   printf 'absent\n'
 fi
+
+subsection "OMEGA"
+"$SCRIPT_DIR/fm-omega.sh" status
+omega_rc=$?
+case "$omega_rc" in
+  0|3|4) ;;
+  *) printf 'OMEGA: UNREADABLE - fm-omega.sh status exited %s\n' "$omega_rc" ;;
+esac
 
 timing_mark fleet-state
 
