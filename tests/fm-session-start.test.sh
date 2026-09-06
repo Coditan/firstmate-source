@@ -540,7 +540,7 @@ EOF
     || fail "the record must name the harness pid the new lock names, not the dead container's: $(cat "$record")"
   [ "$(transcript_record_field "$record" status)" = error ] \
     || fail "a rebind without the hook payload must be an explicit error record, never an invented transcript: $(cat "$record")"
-  [ "$(transcript_record_field "$record" error)" = superseded-without-hook-payload ] \
+  [ "$(transcript_record_field "$record" error)" = rebound-without-hook-payload ] \
     || fail "the error record must name why the transcript is unknown: $(cat "$record")"
   ! transcript_record_field "$record" transcript_path >/dev/null \
     || fail "the previous container's transcript path must not be carried into the new seat's record: $(cat "$record")"
@@ -613,7 +613,7 @@ EOF
     || fail "the fixture must make the new lock name the same pid the stale record names: $(cat "$home/state/.lock")"
   [ "$(transcript_record_field "$record" status)" = error ] \
     || fail "a record older than this container must be replaced even when it names the reused pid: $(cat "$record")"
-  [ "$(transcript_record_field "$record" error)" = superseded-without-hook-payload ] \
+  [ "$(transcript_record_field "$record" error)" = rebound-without-hook-payload ] \
     || fail "the replacement must be the explicit supersede error record: $(cat "$record")"
   [ "$(transcript_record_field "$record" harness_pid)" = "$holder_pid" ] \
     || fail "the replacement must name this session's harness pid: $(cat "$record")"
@@ -625,6 +625,67 @@ EOF
   pass "a stale ok record naming the pid this container's harness reused is replaced by the supersede error record rather than left to measure the previous container's transcript"
 }
 
+
+# The half of this that never involves a supersede at all, and the shape this
+# seat actually ran in for a working day: the hook fired once against a lock it
+# was right to refuse, the lock was cleared, and session start ran again inside
+# the same harness process where no second hook fires. An ordinary acquisition
+# must rebind the record too, and when the refused hook kept its own payload the
+# rebind restores a record the ceiling can actually be measured from.
+test_an_ordinary_acquisition_rebinds_a_record_naming_a_dead_pid() {
+  local rec root home fakebin out status=0 record pending holder_pid transcript class
+  rec=$(new_world lock-ordinary-rebind)
+  IFS='|' read -r root home fakebin <<EOF
+$rec
+EOF
+  make_fake_toolchain "$fakebin"
+  sleep 300 &
+  holder_pid=$!
+  make_fake_ps_claude_holder "$fakebin" "$holder_pid"
+  : > "$root/AGENTS.md"
+  mkdir -p "$root/bin"
+
+  record="$home/state/.primary-transcript"
+  pending="$record.pending"
+  transcript="$home/session.jsonl"
+  {
+    printf '{"type":"user","isMeta":true,"message":{"role":"user","content":"session-start nudge"},"timestamp":"2020-01-01T00:00:00.000Z"}\n'
+    printf '{"type":"assistant","message":{"usage":{"input_tokens":1000,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}}\n'
+  } > "$transcript"
+  printf 'status=ok\nharness_pid=4242\nsession_id=aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee\ntranscript_path=/previous/container/transcript.jsonl\nrecorded_at=978307200\n' > "$record"
+  touch -d 2001-01-01 "$record"
+  printf 'status=ok\nharness_pid=%s\nsession_id=99999999-8888-7777-6666-555555555555\ntranscript_path=%s\nrecorded_at=%s\n' \
+    "$holder_pid" "$transcript" "$(date +%s)" > "$pending"
+
+  out=$(FM_GATE_REFUSE_BYPASS=1 run_session_start "$home" "$root" "$fakebin:$BASE_PATH") || status=$?
+  expect_code 0 "$status" "fm-session-start.sh must exit 0 on an ordinary acquisition"
+  assert_not_contains "$out" "READ-ONLY SESSION" "the fixture must let session start take a free lock"
+  [ "$(sed -n '1p' "$home/state/.lock")" = "$holder_pid" ] \
+    || fail "the fixture must make the new lock name this session's harness: $(cat "$home/state/.lock")"
+  [ "$(transcript_record_field "$record" harness_pid)" = "$holder_pid" ] \
+    || fail "an ordinary acquisition must rebind a record naming a dead pid: $(cat "$record")"
+  [ "$(transcript_record_field "$record" status)" = ok ] \
+    || fail "the kept payload must be promoted rather than replaced by an error: $(cat "$record")"
+  [ "$(transcript_record_field "$record" transcript_path)" = "$transcript" ] \
+    || fail "the record must name this session's own transcript: $(cat "$record")"
+  assert_contains "$out" "context-ceiling record: rebound to harness pid $holder_pid" \
+    "session start must say the record was rebound and to whom"
+
+  # The measurement the record exists for: with the record rebound, the ceiling
+  # check reads this session rather than reporting a mismatch against a dead one.
+  # shellcheck disable=SC2016 # The inner script's variables are the child shell's, on purpose.
+  class=$(env -u FM_ROOT_OVERRIDE FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" bash -c '
+      set -u
+      . "$1" >/dev/null 2>&1
+      fm_context_ceiling_reason "$FM_STATE_OVERRIDE" "$FM_HOME" "$2" >/dev/null
+      printf "%s/%s\n" "$FM_CONTEXT_CEILING_CLASS" "$FM_CONTEXT_CEILING_STATE"
+    ' fm-session-start-test "$ROOT/bin/fm-watch.sh" "$ROOT")
+  kill "$holder_pid" 2>/dev/null || true
+  [ "$class" = "/resolved" ] \
+    || fail "the ceiling must be enforced against this session after the rebind, got class/state '$class'"
+
+  pass "an ordinary acquisition rebinds a record naming a dead pid, from the payload the refused hook kept, and the ceiling is enforced again"
+}
 
 test_lock_refusal_read_only_path() {
   local rec root home fakebin holder_pid out status
@@ -1812,6 +1873,7 @@ test_required_session_reads_reach_a_short_preview
 test_lock_refusal_read_only_path
 test_a_dead_containers_lock_is_superseded_by_session_start
 test_a_superseding_seat_rebinds_the_context_ceiling_record_to_itself
+test_an_ordinary_acquisition_rebinds_a_record_naming_a_dead_pid
 test_a_stale_record_naming_the_reused_harness_pid_is_still_replaced
 test_captain_and_learnings_head_leads_the_digest
 test_oversized_first_lines_deliver_bounded_partial_content

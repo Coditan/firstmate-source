@@ -231,6 +231,41 @@ test_every_verdict_reaches_the_machine_line_with_its_exit_status() {
   pass "every verdict reaches the machine line through the service command with its documented exit status"
 }
 
+# A rebuilt container leaves this home's own lock record and its own endpoint
+# record behind, both naming the same pid of a process that died with the
+# previous container - and in a pid table this session cannot see into. Pid
+# equality alone reads that pair as deliverable, and the listener then types a
+# drain nudge into a seat that holds no lock, on every retry. Two fixtures, one
+# for each half of what the classifier must now establish: the holder's table,
+# and the holder's liveness.
+test_a_foreign_or_dead_lock_holder_is_never_deliverable() {
+  local home dead
+
+  home=$(make_home foreign-table)
+  make_live_listener "$home"
+  queue_wake "$home"
+  publish_endpoint "$home"
+  check_verdict "$home" delivering ''
+  {
+    printf '%s\n' "$$"
+    printf 'pidns=linux:00000000000000000000000000000000:pid:[4026531836]\n'
+  } > "$home/state/.lock"
+  check_verdict "$home" undeliverable endpoint-stale-session
+
+  home=$(make_home dead-holder)
+  make_live_listener "$home"
+  queue_wake "$home"
+  sleep 300 &
+  dead=$!
+  kill "$dead" 2>/dev/null || true
+  wait "$dead" 2>/dev/null || true
+  printf '%s\n' "$dead" > "$home/state/.lock"
+  publish_endpoint "$home"
+  check_verdict "$home" undeliverable endpoint-stale-session
+
+  pass "an endpoint whose lock holder sits in another pid table, or is no longer alive, is undeliverable rather than typed into"
+}
+
 test_the_library_vocabulary_is_covered_and_agrees_with_the_documented_exits() {
   local verdict lib_exit
   for verdict in $(lib_verdicts); do
@@ -300,6 +335,7 @@ test_the_documentation_names_every_verdict_and_every_key() {
 }
 
 test_every_verdict_reaches_the_machine_line_with_its_exit_status
+test_a_foreign_or_dead_lock_holder_is_never_deliverable
 test_the_library_vocabulary_is_covered_and_agrees_with_the_documented_exits
 test_the_reason_token_travels_with_the_listener_record
 test_unknown_flags_are_refused_rather_than_ignored

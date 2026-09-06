@@ -954,6 +954,138 @@ test_outer_whitespace_on_parent_pid_is_accepted() {
 # every tracked script under bin/ that NAMES the record path; it does not prove
 # what writes that path, and forces every new name to be reviewed instead of
 # appearing quietly.
+# make_fake_ps_two_claudes <fakebin> <own-pid> <other-pid>: two live claude
+# processes in one home - this session's own harness, which every ancestry walk
+# from here resolves to, and another session's, which the lock names.
+make_fake_ps_two_claudes() {
+  local fakebin=$1 own_pid=$2 other_pid=$3
+  cat > "$fakebin/ps" <<SH
+#!/usr/bin/env bash
+set -u
+pid=""
+prev=""
+for arg in "\$@"; do
+  [ "\$prev" = "-p" ] && pid="\$arg"
+  prev="\$arg"
+done
+case "\$*" in
+  *"comm="*)
+    case "\$pid" in
+      $own_pid|$other_pid) printf '/usr/local/bin/claude\n' ;;
+      *) printf '/bin/bash\n' ;;
+    esac
+    exit 0 ;;
+  *"args="*)
+    case "\$pid" in
+      $own_pid|$other_pid) printf 'claude\n' ;;
+      *) printf 'bash\n' ;;
+    esac
+    exit 0 ;;
+  *"ppid="*)
+    case "\$pid" in
+      $own_pid|$other_pid) printf '1\n' ;;
+      *) printf '%s\n' "$own_pid" ;;
+    esac
+    exit 0 ;;
+esac
+exit 1
+SH
+  chmod +x "$fakebin/ps"
+}
+
+# The hook fires once per harness session, and a session refused the record at
+# its own start never gets a second payload. Measured on this seat 2026-09-06:
+# a seat that started against a dead container's lock, then took the lock after
+# it was cleared, kept a record naming the previous session's pid 147 and left
+# the context ceiling unenforced from 11:32Z to the end of the day. So a refused
+# session keeps its own payload, and the rebind that runs after it takes the lock
+# promotes that stash - the ceiling is then measured against this session's real
+# transcript rather than an error record.
+test_a_refused_session_keeps_its_payload_and_the_rebind_promotes_it() {
+  local root="$TMP_ROOT/record-pending-promotion" fakebin record pending
+  local other own out status=0 ns
+  make_primary "$root"
+  fakebin=$(fm_fakebin "$root")
+  sleep 30 &
+  other=$!
+  sleep 30 &
+  own=$!
+  make_fake_ps_two_claudes "$fakebin" "$own" "$other"
+  record="$root/state/.primary-transcript"
+  pending="$record.pending"
+  ns=$(fm_pid_namespace_token) || fail "this host cannot name its own pid table"
+  printf 'status=ok\nharness_pid=%s\nsession_id=first-session\ntranscript_path=/tmp/first-session.jsonl\nrecorded_at=1\n' \
+    "$other" > "$record"
+  { printf '%s\n' "$other"; printf 'pidns=%s\n' "$ns"; } > "$root/state/.lock"
+
+  out=$(run_nudge_with_payload "$root" "$fakebin" "$CLAUDE_PAYLOAD") || status=$?
+  expect_code 0 "$status" "the refused session's run"
+  [ "$out" = "$NUDGE_LINE" ] || fail "the refused session was not told to run session start: $out"
+  [ "$(record_field "$record" session_id)" = first-session ] \
+    || fail "the refused session took over the running session's record: $(cat "$record")"
+  [ -f "$pending" ] || fail "the refused session kept no payload to rebind from later"
+  [ "$(record_field "$pending" harness_pid)" = "$own" ] \
+    || fail "the stash must name the refused session's own harness: $(cat "$pending")"
+
+  # The first session ends and this one takes the lock, inside the same harness
+  # process, where no second SessionStart hook ever fires.
+  kill "$other" 2>/dev/null || true
+  wait "$other" 2>/dev/null || true
+  { printf '%s\n' "$own"; printf 'pidns=%s\n' "$ns"; } > "$root/state/.lock"
+  out=$(env -u NO_MISTAKES_GATE PATH="$fakebin:$PATH" FM_GATE_REFUSE_BYPASS=0 \
+    FM_ROOT_OVERRIDE="$root" FM_HOME="$root" "$NUDGE" --rebind-to-lock </dev/null) || status=$?
+  kill "$own" 2>/dev/null || true
+  wait "$own" 2>/dev/null || true
+  expect_code 0 "$status" "the rebind run"
+  [ "$(record_field "$record" status)" = ok ] \
+    || fail "the promoted record must be a usable one, not an error: $(cat "$record")"
+  [ "$(record_field "$record" harness_pid)" = "$own" ] \
+    || fail "the promoted record must name the holder the lock now names: $(cat "$record")"
+  [ "$(record_field "$record" session_id)" = 11111111-2222-3333-4444-555555555555 ] \
+    || fail "the promoted record must carry this session's own session id: $(cat "$record")"
+  [ "$(record_field "$record" transcript_path)" = /home/cap/.claude/projects/-home-cap-fm/11111111-2222-3333-4444-555555555555.jsonl ] \
+    || fail "the promoted record must carry this session's own transcript path: $(cat "$record")"
+  [ ! -f "$pending" ] || fail "the stash must be spent by the promotion, not left to be promoted again"
+  assert_contains "$out" "context-ceiling record: rebound to harness pid $own" \
+    "the rebind must say what it did"
+
+  pass "fm-sessionstart-nudge: a session refused the record keeps its own payload, and the rebind after it takes the lock promotes it into a measurable record"
+}
+
+# A stash belongs to the session that wrote it. One naming any other holder is
+# never promoted, or a session that never took the lock would hand its own
+# transcript to the one that did.
+test_a_stash_naming_another_holder_is_never_promoted() {
+  local root="$TMP_ROOT/record-pending-foreign" fakebin record pending own ns status=0
+  make_primary "$root"
+  fakebin=$(fm_fakebin "$root")
+  sleep 30 &
+  own=$!
+  make_fake_ps_two_claudes "$fakebin" "$own" 999001
+  record="$root/state/.primary-transcript"
+  pending="$record.pending"
+  ns=$(fm_pid_namespace_token) || fail "this host cannot name its own pid table"
+  printf 'status=ok\nharness_pid=4242\nsession_id=dead-session\ntranscript_path=/previous/container.jsonl\nrecorded_at=1\n' \
+    > "$record"
+  printf 'status=ok\nharness_pid=999001\nsession_id=other-session\ntranscript_path=/tmp/other.jsonl\nrecorded_at=1\n' \
+    > "$pending"
+  { printf '%s\n' "$own"; printf 'pidns=%s\n' "$ns"; } > "$root/state/.lock"
+
+  env -u NO_MISTAKES_GATE PATH="$fakebin:$PATH" FM_GATE_REFUSE_BYPASS=0 \
+    FM_ROOT_OVERRIDE="$root" FM_HOME="$root" "$NUDGE" --rebind-to-lock </dev/null >/dev/null || status=$?
+  kill "$own" 2>/dev/null || true
+  wait "$own" 2>/dev/null || true
+  expect_code 0 "$status" "the rebind run"
+  [ "$(record_field "$record" status)" = error ] \
+    || fail "another session's stash must never become this session's record: $(cat "$record")"
+  [ "$(record_field "$record" error)" = rebound-without-hook-payload ] \
+    || fail "the record must name why the transcript is unknown: $(cat "$record")"
+  [ "$(record_field "$record" harness_pid)" = "$own" ] \
+    || fail "the error record must still name the holder the lock names: $(cat "$record")"
+  [ ! -f "$pending" ] || fail "an unpromotable stash must be discarded rather than left to be tried again"
+  pass "fm-sessionstart-nudge: a stash naming a holder other than the lock's is discarded, and the record becomes an explicit error"
+}
+
 test_primary_transcript_path_name_allowlist_contract() {
   local expected found
   expected=$(printf '%s\n' fm-context-lib.sh fm-harness-pid-lib.sh fm-sessionstart-nudge.sh)
@@ -1078,6 +1210,8 @@ test_a_settled_lookup_failure_is_recorded_with_its_cause
 test_each_process_table_probe_failure_is_recorded_as_unknown
 test_an_unusable_parent_pid_is_recorded_as_unknown
 test_outer_whitespace_on_parent_pid_is_accepted
+test_a_refused_session_keeps_its_payload_and_the_rebind_promotes_it
+test_a_stash_naming_another_holder_is_never_promoted
 test_primary_transcript_path_name_allowlist_contract
 test_opencode_plugin_delivers_exact_nudge_once
 test_tracked_harness_registration

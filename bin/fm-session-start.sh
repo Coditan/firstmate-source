@@ -616,11 +616,6 @@ LOCK_RC=$?
 # an unreadable record - is left exactly as it is. The verdict, both readings
 # and the name the superseded record was kept under are printed, because a seat
 # that takes another record's place says what it took.
-# The SessionStart hook ran before this and read the same record as foreign, so
-# it wrote no context-ceiling transcript record for this session; the hook is
-# asked to rebind that record to the holder the supersede just published, and
-# what it did is printed with the rest, so the new seat's ceiling is not left
-# measured against the previous container's harness for the life of the session.
 if [ "$LOCK_RC" -ne 0 ]; then
   LOCK_STATUS=$("$SCRIPT_DIR/fm-lock.sh" status 2>&1)
   case "$LOCK_STATUS" in
@@ -628,11 +623,8 @@ if [ "$LOCK_RC" -ne 0 ]; then
       LOCK_SUPERSEDE_RC=0
       LOCK_SUPERSEDE=$("$SCRIPT_DIR/fm-lock.sh" acquire --supersede-dead-container 2>&1) || LOCK_SUPERSEDE_RC=$?
       if [ "$LOCK_SUPERSEDE_RC" -eq 0 ]; then
-        LOCK_REBIND=$("$SCRIPT_DIR/fm-sessionstart-nudge.sh" --rebind-after-supersede </dev/null 2>&1) || true
         LOCK_OUT="$LOCK_STATUS
 $LOCK_SUPERSEDE"
-        [ -z "$LOCK_REBIND" ] || LOCK_OUT="$LOCK_OUT
-$LOCK_REBIND"
         LOCK_RC=0
       else
         LOCK_OUT="$LOCK_OUT
@@ -641,6 +633,20 @@ $LOCK_SUPERSEDE"
       fi
       ;;
   esac
+fi
+# Whichever of the two paths above took the lock, the SessionStart hook may have
+# run before it against a record it was right to leave alone - a dead container's
+# record it read as foreign, or a holder cleared only after the hook had already
+# run in this same harness process, where no second hook ever fires. So after
+# every acquisition the hook is asked, through its one rebind owner, to bring the
+# context-ceiling record back to the holder now published, and what it did is
+# printed with the rest: the seat's ceiling is not left measured against a dead
+# harness for the life of the session. A record already naming this holder is left
+# untouched and prints nothing new.
+if [ "$LOCK_RC" -eq 0 ]; then
+  LOCK_REBIND=$("$SCRIPT_DIR/fm-sessionstart-nudge.sh" --rebind-to-lock </dev/null 2>&1) || true
+  [ -z "$LOCK_REBIND" ] || LOCK_OUT="$LOCK_OUT
+$LOCK_REBIND"
 fi
 printf '%s\n' "$LOCK_OUT"
 READ_ONLY=0

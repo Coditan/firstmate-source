@@ -176,8 +176,10 @@ fm_delivery_endpoint_read() {  # <state>
 #   ok              a well-formed record whose session still holds the fleet lock
 #   absent          no session has published where the model turn lives
 #   malformed       a record exists but carries no usable backend/target pair
-#   stale-session   the session that published it is not the one holding the
-#                   lock now, so its pane is somebody else's or nobody's
+#   stale-session   the session that published it does not hold the lock now -
+#                   the lock names a different holder, a holder in a pid table
+#                   this session cannot see into, or a holder that is no longer
+#                   alive - so its pane is somebody else's or nobody's
 #   unproven-server a tmux endpoint carries no valid server identity, so its
 #                   pane id is ambiguous across servers on the same machine
 FM_DELIVERY_ENDPOINT_STATUS=
@@ -197,8 +199,26 @@ fm_delivery_endpoint_status() {  # <state>
     FM_DELIVERY_ENDPOINT_STATUS=unproven-server
     return 1
   fi
-  fm_session_lock_record_read "$state/.lock" || true
-  if [ -z "$FM_DELIVERY_ENDPOINT_SESSION" ] || [ "$FM_DELIVERY_ENDPOINT_SESSION" != "$FM_LOCK_RECORD_PID" ]; then
+  # The endpoint is deliverable only while the session that published it still
+  # holds this home, and that is three questions rather than one. Pid equality
+  # alone answered none of them: a home whose container was rebuilt keeps the
+  # previous container's lock record and its own endpoint record, both naming the
+  # same dead pid in a pid table this session cannot even see into, and the two
+  # numbers match. Recorded on this seat 2026-09-03: with the pane's server
+  # unchanged, the listener kept typing the same drain nudge into a read-only
+  # seat, ten times in half an hour, because nothing in this test could see that
+  # the holder it matched was dead. So the holder must name this session's own pid table - which is what
+  # fm_session_lock_held_by_other's `mine` verdict tests, handed the endpoint's
+  # own session pid rather than this process's - and it must still be alive,
+  # which that verdict deliberately does not test for a holder equal to the pid
+  # it was handed. Liveness is `kill -0` rather than the harness-shaped test,
+  # because the question here is only whether that process still exists in this
+  # table, and the `mine` verdict has already established the table. Both, or
+  # stale-session.
+  if [ -z "$FM_DELIVERY_ENDPOINT_SESSION" ] \
+     || fm_session_lock_held_by_other "$state/.lock" "$FM_DELIVERY_ENDPOINT_SESSION" \
+     || [ "$FM_SESSION_LOCK_VERDICT" != mine ] \
+     || ! kill -0 "$FM_DELIVERY_ENDPOINT_SESSION" 2>/dev/null; then
     FM_DELIVERY_ENDPOINT_STATUS=stale-session
     return 1
   fi

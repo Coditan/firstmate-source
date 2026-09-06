@@ -8,7 +8,7 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | Script                   | Purpose                                                                              |
 | ------------------------ | ------------------------------------------------------------------------------------ |
 | `fm-session-start.sh`    | Put bounded captain and learnings context first, then compose the complete ordered session-start digest |
-| `fm-sessionstart-nudge.sh` | Record the primary session's transcript position, then print the native session-start hook nudge when it has not already run the digest; with `--rebind-after-supersede`, rebind that record after a dead-container lock supersede |
+| `fm-sessionstart-nudge.sh` | Record the primary session's transcript position, then print the native session-start hook nudge when it has not already run the digest; with `--rebind-to-lock`, rebind that record to the holder this home's session lock now names |
 | `fm-vessel-identity.sh`  | State which home on which host a session is driving, and stamp it on that session's own tmux status bar where an attaching person meets it without running a command (docs/vessel-identity.md) |
 | `fm-operational-input.sh` | Construct and parse the canonical cross-language operational-input protocol |
 | `fm-bootstrap.sh`        | Detect toolchain and fleet problems, run the locked session-start sweeps, and install approved tools |

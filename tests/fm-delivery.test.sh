@@ -109,11 +109,17 @@ publish_endpoint() {  # <home> <backend> <target> [tmux-server]
 }
 
 test_endpoint_status_reads_the_holder_from_a_multiline_lock_record() {
-  local home status
+  local home status ns
   home=$(make_home multiline-session-lock)
+  # This host's own pid-table token, not a literal: a holder recorded in another
+  # table is one this session cannot see into, and the classifier is right to
+  # call that endpoint stale rather than deliverable. What is under test here is
+  # only that the holder pid is taken from line one of a multiline record.
+  ns=$(bash -c '. "$1/bin/fm-harness-pid-lib.sh"; fm_pid_namespace_token' _ "$ROOT") \
+    || fail "this host cannot name its own pid table"
   {
     printf '%s\n' "$$"
-    printf 'pidns=pid:[12345]\n'
+    printf 'pidns=%s\n' "$ns"
   } > "$home/state/.lock"
   FM_HOME="$home" bash -c \
     '. "$1/bin/fm-delivery-lib.sh"; fm_delivery_endpoint_write "$2" pi local pi "$3"' \
@@ -128,7 +134,7 @@ test_endpoint_status_reads_the_holder_from_a_multiline_lock_record() {
 
   {
     printf '%s\n' "$$"
-    printf 'pidns=pid:[12345]\n'
+    printf 'pidns=%s\n' "$ns"
     printf 'handover=one-time-ticket\n'
   } > "$home/state/.lock"
   status=$(FM_HOME="$home" bash -c \
@@ -139,7 +145,7 @@ test_endpoint_status_reads_the_holder_from_a_multiline_lock_record() {
 
   {
     printf '%s\n' "999999"
-    printf 'pidns=pid:[12345]\n'
+    printf 'pidns=%s\n' "$ns"
     printf 'handover=one-time-ticket\n'
   } > "$home/state/.lock"
   status=$(FM_HOME="$home" bash -c \
