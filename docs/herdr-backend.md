@@ -331,7 +331,7 @@ Herdr tasks additionally record:
 | Operation | Verified herdr call | What was verified |
 |---|---|---|
 | Version/protocol gate | `herdr status --json` -> `.client.protocol` | Session-independent; `.server.*` fields ARE session-dependent. |
-| Headless server start | `HERDR_SESSION=<name> herdr server --session <name>` (backgrounded) | A bare socket call does NOT auto-start the server; the adapter always starts-then-polls before any workspace/tab/pane call. This fact is for start only, not cleanup, and the explicit `--session` flag is intentional because `HERDR_SESSION` alone is not safe session targeting. |
+| Headless server start | `( HERDR_SESSION=<name> setsid herdr server --session <name> </dev/null >/dev/null 2>&1 & )` | A bare socket call does NOT auto-start the server; the adapter always starts-then-polls before any workspace/tab/pane call. This fact is for start only, not cleanup, and the explicit `--session` flag is intentional because `HERDR_SESSION` alone is not safe session targeting. The start execs the binary directly and fully detached; see "Server start detachment" below for why backgrounding a shell wrapper instead is a defect. |
 | Duplicate task check | `herdr tab list --workspace <id>`, match by `.label` | Herdr does NOT enforce tab-label uniqueness itself; two tabs can share a label. The adapter's own duplicate check is required. |
 | Send literal (unsubmitted) | `herdr pane send-text <pane> <text>` | Does NOT auto-submit, contrary to the original design addendum's guess. Verified directly: a unique marker sent this way sits unexecuted in the composer until a separate Enter. Behaves exactly like tmux's `send-keys -l`. |
 | Send + submit atomically | `herdr pane run <pane> <command>` | Runs and submits a command in one call; used for the fixed spawn-time commands (`treehouse get`, the `GOTMPDIR` export, the owning vessel's AXI `PATH` export) exactly where tmux used one `send-keys ... Enter` call. |
@@ -347,6 +347,36 @@ Herdr tasks additionally record:
 | Recovery / list-live | `herdr tab list --workspace <id>`, filter labels starting with `fm-` | Label-based, never trusts a stored id blindly - see "ID stability" below. `<id>` is always THIS home's own workspace (`fm_backend_herdr_workspace_find`), so recovery never sees a sibling home's tabs. |
 | Workspace create / tab create (focus) | `herdr workspace create --no-focus`, `herdr tab create --no-focus` | Verified: neither focuses by default once a workspace already exists in the session, matching pre-P3 (flagless) behavior; `--no-focus` is passed anyway for defense in depth, since the very first workspace ever created in a brand-new session focuses regardless of the flag. `--focus` was separately verified to reliably focus, confirming the flag has real effect. |
 | Session targeting for DESTRUCTIVE calls | `herdr session stop <name> --session <name> --json`, then `herdr session delete <name> --session <name> --json`; never `herdr server stop` | Owned by `bin/fm-herdr-lab.sh` (which `tests/herdr-test-safety.sh` sources), re-querying `herdr session list --json` before every destructive call. See "Session targeting" below - `HERDR_SESSION` alone is not reliably honored once another herdr server is already running on the machine. |
+
+## Server start detachment, and why a read never starts a server
+
+Measured 2026-09-06 on the primary vessel, at `0eafd2e6`.
+`fm_backend_herdr_server_ensure` started the server with `( fm_backend_herdr_cli "$session" server >/dev/null 2>&1 & )`.
+`fm_backend_herdr_cli` is a shell function, so `&` forked a bash subshell that ran the function and waited for herdr, and bash keeps a saved copy of the caller's stdout on a high descriptor for the duration of a function call with redirections.
+
+```
+$ ls -l /proc/53754/fd        # bash subshell: "bash bin/fm-crew-state.sh bridge-roster-test-reads-live-data", ppid 1
+0 -> /dev/null  1 -> /dev/null  2 -> /dev/null  10 -> pipe:[120321879]  11 -> /dev/null
+$ ps -o pid,ppid,args -p 53756
+53756 53754 herdr server --session default        # every live crewmate pane was a descendant of this
+$ ls -l /proc/174885/fd       # "head -20" of `timeout 120 bin/fm-crew-state.sh cm1 2>&1 | head -20`
+0 -> pipe:[120476485]         # still blocked 6 h 9 min after `timeout 120` killed the script
+```
+
+Three consequences, all live at the time of measurement.
+Any reader of crew state whose server was down hung its calling pipeline forever, and `timeout` did not help because the subshell outlived the script it was started from.
+The fleet's whole worker runtime became a child of an accidental one-shot reader, so cleaning up a "hung" `fm-crew-state.sh` killed every worker.
+A stale `state/<id>.meta` from a torn-down lab made the reader start a server for a session that no longer existed, and that server was orphaned too.
+
+Two changes:
+
+- The start execs the herdr binary directly in the forked child, under `setsid` with stdin, stdout and stderr on `/dev/null`.
+  `exec` closes the saved high descriptors, so the caller's pipe reaches EOF, and `setsid` puts the server in its own session so a signal to the reader's process group never reaches it.
+  Never background a shell function here again; background the binary.
+- `FM_BACKEND_HERDR_NO_AUTOSTART=1` makes `fm_backend_herdr_target_ready` refuse to start a server at all: it reads `status --json` and, when the server is not running, reports `error: herdr server for session '<s>' is not running` and fails.
+  That is a distinct message from the ensure path's start-timeout, so the two readings are never confused.
+  `bin/fm-crew-state.sh` exports it at the top, because a read-only reader has no business bringing the worker runtime up.
+  Spawn-time callers keep the ensure path unchanged; the flag is opt-in exactly so a caller that legitimately needs a server started still gets one.
 
 ## Incident (2026-07-13): the ASCII request separator erased the secondmate marker
 

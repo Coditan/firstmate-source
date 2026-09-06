@@ -686,11 +686,21 @@ fm_backend_herdr_projection_order_best_effort() {  # <session> <created-workspac
 # has-session || tmux new-session -d`. Verified: a bare socket CLI call does
 # NOT auto-start the server, so this must run before any workspace/tab/pane
 # call. Bounded poll for the server to report running.
+#
+# The start MUST exec the herdr binary directly in the forked child, never a
+# shell function: `( fm_backend_herdr_cli ... & )` forks a bash subshell that
+# runs the function and waits for herdr, and bash keeps a saved copy of the
+# caller's stdout on a high descriptor for the whole function call. That kept
+# the caller's pipe open for as long as the server lived, so any reader of crew
+# state whose server was down hung its pipeline forever and the fleet's whole
+# worker runtime became a child of that one-shot reader. `exec` closes the saved
+# descriptors, and `setsid` puts the server in its own session so a signal to
+# the reader's process group never reaches it.
 fm_backend_herdr_server_ensure() {  # <session>
   local session=$1 running out i
   running=$(fm_backend_herdr_cli "$session" status --json 2>/dev/null | jq -r '.server.running // false' 2>/dev/null)
   [ "$running" = "true" ] && return 0
-  ( fm_backend_herdr_cli "$session" server >/dev/null 2>&1 & ) || return 1
+  ( HERDR_SESSION="$session" setsid herdr server --session "$session" </dev/null >/dev/null 2>&1 & ) || return 1
   for i in $(seq 1 20); do
     running=$(fm_backend_herdr_cli "$session" status --json 2>/dev/null | jq -r '.server.running // false' 2>/dev/null)
     [ "$running" = "true" ] && return 0
@@ -1292,8 +1302,21 @@ fm_backend_herdr_parse_target() {  # <target>
   [ -n "$FM_BACKEND_HERDR_SESSION" ] && [ -n "$FM_BACKEND_HERDR_PANE" ] && [ "$FM_BACKEND_HERDR_PANE" != "$target" ]
 }
 
+# fm_backend_herdr_target_ready: parse the target and make sure its server can
+# answer. With FM_BACKEND_HERDR_NO_AUTOSTART=1 it never STARTS one: a read of
+# crew state has no business bringing the fleet's worker runtime up, and a
+# stale .meta naming a torn-down lab session would otherwise start a server for
+# a session that does not exist. It then reports the server as not running and
+# fails, which is a distinct reading from the ensure path's start-timeout.
 fm_backend_herdr_target_ready() {  # <target>
   fm_backend_herdr_parse_target "$1" || return 1
+  if [ "${FM_BACKEND_HERDR_NO_AUTOSTART:-0}" = "1" ]; then
+    local running
+    running=$(fm_backend_herdr_cli "$FM_BACKEND_HERDR_SESSION" status --json 2>/dev/null | jq -r '.server.running // false' 2>/dev/null)
+    [ "$running" = "true" ] && return 0
+    echo "error: herdr server for session '$FM_BACKEND_HERDR_SESSION' is not running" >&2
+    return 1
+  fi
   fm_backend_herdr_server_ensure "$FM_BACKEND_HERDR_SESSION" || return 1
 }
 
