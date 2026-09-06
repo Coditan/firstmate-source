@@ -239,9 +239,12 @@ SH
 printf 'z-spoke\n'
 SH
   chmod 0700 "$first" "$last"
-  FM_STATE_OVERRIDE="$state" "$ROOT/bin/fm-check-register.sh" a-speaks >/dev/null \
+  # FM_HOME as well as the state directory, for the same reason as
+  # test_check_output_is_queued: the registrar refuses a state directory that
+  # belongs to a home other than the one it is running as.
+  FM_HOME="$dir" FM_STATE_OVERRIDE="$state" "$ROOT/bin/fm-check-register.sh" a-speaks >/dev/null \
     || fail "could not register the first check"
-  FM_STATE_OVERRIDE="$state" "$ROOT/bin/fm-check-register.sh" z-behind-it >/dev/null \
+  FM_HOME="$dir" FM_STATE_OVERRIDE="$state" "$ROOT/bin/fm-check-register.sh" z-behind-it >/dev/null \
     || fail "could not register the check behind it"
 
   PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="$state" FM_POLL=1 FM_SIGNAL_GRACE=1 \
