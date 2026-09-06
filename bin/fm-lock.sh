@@ -359,6 +359,7 @@ lock acquired by superseding a dead container's record: harness pid $me
 superseded: pid $superseded_pid, kept at $kept
   recorded machine id $superseded_machine, this machine is $running_machine
   record modified at $superseded_mtime, this container started at $container_start
+  not excluded by these readings: a live seat on another machine sharing this home over a network filesystem
 TXT
   exit 0
 fi

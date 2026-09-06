@@ -649,6 +649,80 @@ SH
   [ ! -e "$root/state/.lock" ] || fail "no lock may exist after a refused acquisition"
 }
 
+# The other identification failure: the ancestry walk did not complete because
+# a `ps` probe itself failed. That is an UNKNOWN answer rather than a settled
+# one, so it is retried on the shared bounded budget before it is believed. The
+# fake `ps` below counts its own probes in a file so the first ones can fail
+# and the later ones answer as a live harness ancestry would.
+# make_fake_ps_flaky <fakebin> <ancestor-pid> <failing-probes>: the first
+# <failing-probes> invocations exit 1; every later one answers like
+# make_fake_ps_holder. A count of "always" never answers.
+make_fake_ps_flaky() {
+  local fakebin=$1 ancestor=$2 failing=$3
+  : > "$fakebin/ps.calls"
+  cat > "$fakebin/ps" <<SH
+#!/usr/bin/env bash
+set -u
+calls=\$(wc -l < "$fakebin/ps.calls")
+printf 'x\n' >> "$fakebin/ps.calls"
+if [ "$failing" = always ] || [ "\$calls" -lt "$failing" ]; then
+  exit 1
+fi
+pid=""
+prev=""
+for arg in "\$@"; do
+  [ "\$prev" = "-p" ] && pid="\$arg"
+  prev="\$arg"
+done
+case "\$*" in
+  *"comm="*)
+    if [ "\$pid" = "$ancestor" ]; then printf '/usr/local/bin/claude\n'; else printf '/bin/bash\n'; fi
+    exit 0 ;;
+  *"args="*)
+    if [ "\$pid" = "$ancestor" ]; then printf 'claude\n'; else printf 'bash\n'; fi
+    exit 0 ;;
+  *"ppid="*) printf '%s\n' "$ancestor"; exit 0 ;;
+esac
+exit 1
+SH
+  chmod +x "$fakebin/ps"
+}
+
+test_a_probe_that_fails_then_answers_is_retried_and_the_lock_is_written() {
+  local root fakebin harness out
+  root=$(fixture flaky-probe-recovers)
+  fakebin=$(fm_fakebin "$root")
+  live_pid harness
+  make_fake_ps_flaky "$fakebin" "$harness" 2
+
+  out=$(FM_HARNESS_PID_RETRY_DELAYS="0.01 0.01 0.01" run_lock "$root" "$fakebin") \
+    || fail "a probe failure that clears on retry must still yield the lock: $out"
+  assert_contains "$out" "lock acquired: harness pid $harness" \
+    "the acquisition after a retried probe must name this session's harness"
+  [ "$(lock_pid "$root/state/.lock")" = "$harness" ] \
+    || fail "the lock written after the bounded retry must name this session"
+  [ "$(wc -l < "$fakebin/ps.calls")" -gt 2 ] \
+    || fail "the walk must have been retried past the probes that failed"
+}
+
+test_a_probe_that_always_fails_is_refused_and_names_the_probe_failure() {
+  local root fakebin harness out status=0
+  root=$(fixture flaky-probe-never-answers)
+  fakebin=$(fm_fakebin "$root")
+  live_pid harness
+  make_fake_ps_flaky "$fakebin" "$harness" always
+
+  out=$(FM_HARNESS_PID_RETRY_DELAYS="0.01 0.01 0.01" run_lock "$root" "$fakebin") || status=$?
+  expect_code 1 "$status" "a session whose process probes never answer must not take the lock"
+  assert_contains "$out" "the process probes themselves failed" \
+    "the refusal must name the probe failure rather than a missing harness"
+  assert_contains "$out" "this home now has NO record while this session is live" \
+    "the refusal must name what a later status will report"
+  [ "$(wc -l < "$fakebin/ps.calls")" -ge 4 ] \
+    || fail "the unknown answer must have been retried on the bounded budget before being refused"
+  [ ! -e "$root/state/.lock" ] || fail "no lock may exist after a refused acquisition"
+}
+
 # --- the pid table the holder pid came from --------------------------------
 
 # ns_available: whether this machine will hand an unprivileged process a real
@@ -1194,6 +1268,8 @@ test_a_dangling_lock_symlink_is_refused_rather_than_created
 test_a_state_directory_that_cannot_be_written_refuses_before_claiming
 test_a_state_directory_that_cannot_be_created_refuses
 test_a_session_that_cannot_identify_itself_acquires_nothing
+test_a_probe_that_fails_then_answers_is_retried_and_the_lock_is_written
+test_a_probe_that_always_fails_is_refused_and_names_the_probe_failure
 test_linux_refuses_when_its_pid_namespace_identity_is_unreadable
 test_linux_refuses_when_its_machine_identity_is_unusable
 test_the_same_namespace_inode_on_another_machine_is_foreign

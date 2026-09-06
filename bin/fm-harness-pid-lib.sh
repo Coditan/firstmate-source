@@ -90,9 +90,11 @@ fm_harness_pid() {
 # bin/fm-sessionstart-nudge.sh is the one that needs it: its answer is written
 # into state/.primary-transcript, is not rewritten until the next primary
 # session start, and an unidentified owner there leaves the context ceiling
-# unenforced for the whole life of the session. bin/fm-lock.sh deliberately does
-# not use it - a lock it cannot acquire stops session start with a message on
-# the spot, which is already the loudest possible failure.
+# unenforced for the whole life of the session. bin/fm-lock.sh uses it for the
+# UNKNOWN answer only - an incomplete ancestry walk, published as
+# FM_HARNESS_PID_ERROR=harness-lookup-failed - because that answer may change on
+# the next probe; a completed walk that found no harness is a settled negative,
+# and fm-lock.sh refuses it at once rather than asking the same question again.
 # It publishes FM_HARNESS_PID and FM_HARNESS_PID_ERROR from the LAST attempt, so
 # a caller that has to record its own failure records the one it actually ended
 # on rather than the first one it saw.
@@ -312,8 +314,8 @@ fm_session_lock_held_by_other() {  # <lock-file> <my-harness-pid>
 # longer exists, on a machine identity that no longer exists either. The
 # `foreign` verdict above is correct about that record - this reader cannot see
 # that pid - but it is not the whole reading available: two facts, taken
-# together, say the recorded holder cannot be running ANYWHERE, and neither of
-# them is a guess about a process.
+# together, say the recorded holder cannot be running in THIS CONTAINER'S pid
+# namespace, and neither of them is a guess about a process.
 #
 #   1. the record's machine-id half differs from the running /etc/machine-id, so
 #      the record was written under a machine identity this host no longer has;
@@ -324,6 +326,15 @@ fm_session_lock_held_by_other() {  # <lock-file> <my-harness-pid>
 # differing machine id alone is also what a genuinely foreign live seat sharing
 # this home over a network filesystem looks like; an older mtime alone is what
 # any long-lived holder of this same container looks like.
+#
+# The known bound, stated here because the two readings do not reach past it: a
+# home reachable from a second machine over a network filesystem can hold a
+# record written by a LIVE seat on that other machine whose mtime precedes this
+# container's start. Both readings hold for that record - the machine id differs
+# and the mtime is older - and neither excludes it, because the mtime only
+# proves no process of THIS container wrote the record and says nothing about a
+# writer elsewhere. The supersede path prints that bound with the readings it
+# acted on, so the seat that takes the lock says what it did not establish.
 
 # Print the epoch second at which pid 1 started: btime from /proc/stat plus
 # field 22 of /proc/1/stat divided by the clock tick. Return 1 when either
