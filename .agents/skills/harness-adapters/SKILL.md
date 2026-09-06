@@ -273,6 +273,7 @@ A Codex CREWMATE additionally receives `-c sandbox_workspace_write.network_acces
 A Codex secondmate does not receive it, and it never reaches the supervising session.
 It is a whole-dimension grant that also admits general outbound network from that crewmate, because 0.145.0 has no narrower knob; `docs/codex-sandbox-network.md` owns the measurements and the reason it rides the launch line rather than the tracked profile.
 Do not diagnose a Codex worker's blocked outbound connection as a missing filesystem permission, and do not reach for `danger-full-access` or `--dangerously-bypass-approvals-and-sandbox` to unblock one.
+The only launch path that composes `danger-full-access` is the spawn's own host probe, on a host whose kernel refuses to start a sandbox at all; `docs/codex-sandbox-unavailable.md` owns that case, and a worker stopped there at its isolation check is reading its brief's stop rule wrong, not short of a grant.
 
 A Codex crewmate also receives its worktree's git common directory as a second `sandbox_workspace_write.writable_roots` entry, because a linked worktree keeps its refs in the project's primary checkout and the sandbox otherwise refuses the branch creation that opens every ship task.
 The project's working tree is never a writable root, and a secondmate receives neither this grant nor the network one; `docs/codex-sandbox-git-directory.md` owns the measurements and the blast radius.

@@ -49,6 +49,10 @@
 #   local-only   implement on branch, stop and report "ready in branch" (no push/PR);
 #                captain approves, firstmate merges to local main
 # Ship briefs begin with a worktree-isolation assertion before the branch step.
+# That assertion is a shell command, so on a host whose kernel refuses to start a
+# sandbox it is the first thing a sandboxed worker fails at; the brief therefore
+# states in the same breath that the stop rule bans skipping the check, never
+# running it unsandboxed (docs/codex-sandbox-unavailable.md).
 # Scout tasks ignore mode - their deliverable is a report, not a merge.
 # Every scaffold carrying a numbered rule 1 - all three ship modes and scout -
 # scopes that rule to code pushes: publishing a Bridge envelope also targets the
@@ -478,6 +482,8 @@ You are in a disposable git worktree of $REPO, at a detached HEAD on a clean def
 **Verify isolation before anything else.** Run \`pwd -P\` and \`git rev-parse --show-toplevel\`; both must resolve to the disposable task worktree you were launched in, such as a treehouse pool path or an Orca-managed worktree, not the primary checkout firstmate operates from.
 The path check is authoritative: \`git rev-parse --git-dir\` and \`git rev-parse --git-common-dir\` can help inspect the repo, but they do not prove you are outside the primary checkout.
 If the top-level path is the primary checkout or not the worktree you were launched in, STOP - do not branch or commit here - write \`$STATUS_WRITER $STATUS_FILE blocked "launched in primary checkout, not an isolated worktree"\` and stop.
+That stop rule forbids SKIPPING the isolation check; it never forbids running it outside a sandbox.
+If your runtime cannot start a sandbox on this host and refuses the check for that reason, run the check unsandboxed - that is the sanctioned path here, not a blocker to report.
 
 1. First action: create your branch: \`git checkout -b fm/$ID\`$SETUP2
 

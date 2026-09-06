@@ -32,7 +32,8 @@ CONNECT OK
 ```
 
 That a filesystem-shaped grant does not help - neither `writable_roots` naming the no-mistakes directory nor `danger-full-access` being an acceptable route - was established by the experiment that opened this work and is not re-derived here.
-`danger-full-access` and `--dangerously-bypass-approvals-and-sandbox` are not used by any firstmate launch path, and `tests/fm-spawn-dispatch-profile.test.sh` asserts their absence from the composed Codex launch.
+`danger-full-access` and `--dangerously-bypass-approvals-and-sandbox` are not used by any firstmate launch path on a host whose sandbox starts, and `tests/fm-spawn-dispatch-profile.test.sh` asserts their absence from the composed Codex launch there.
+The one exception is not a network fix: on a host whose kernel refuses to start a sandbox at all, the spawn's host probe degrades `sandbox_mode` to `danger-full-access` per launch, which [`codex-sandbox-unavailable.md`](codex-sandbox-unavailable.md) owns.
 
 ## 2. Codex 0.145.0 cannot scope the grant more narrowly than the whole dimension
 

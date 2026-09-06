@@ -27,6 +27,10 @@
 #   Those grants live on the launch line rather than in the profile file on purpose
 #   (docs/codex-sandbox-network.md, docs/codex-sandbox-git-directory.md,
 #   docs/codex-sandbox-gate-repo.md, docs/codex-status-signalling.md).
+#   On a host whose kernel refuses to start a sandbox at all, the launched
+#   sandbox_mode degrades to "danger-full-access" and the spawn says so once on
+#   stderr; the tracked profile's shipped value is never rewritten, and a host
+#   whose sandbox starts keeps it (docs/codex-sandbox-unavailable.md).
 #   --backend <name> is the explicit runtime session-provider backend for this
 #   spawn. Without it, the script resolves FM_BACKEND, then config/backend, then
 #   runtime auto-detection (the runtime firstmate itself is executing inside -
@@ -734,6 +738,98 @@ codex_config_value() {
 # moving it into the profile would widen it no matter how this branch is gated.
 CODEX_CREW_NETWORK_FLAG='sandbox_workspace_write.network_access=true'
 
+# Whether this host can start a sandbox at all, and what Codex sandbox_mode a
+# launch therefore gets.
+#
+# Codex's workspace-write sandbox needs an unprivileged user namespace. Some hosts
+# refuse to create one - measured on this fleet 2026-09-05, an AppArmor policy with
+# kernel.apparmor_restrict_unprivileged_userns=1 - and on such a host EVERY sandboxed
+# command fails before it runs, including the worktree-isolation assertion a ship
+# brief demands as its first action. The worker then correctly reports blocked and
+# changes nothing, and the task needs a steer to move (docs/codex-sandbox-unavailable.md).
+#
+# The probe is the capability itself, never the sysctl bubblewrap's error message
+# names: kernel.unprivileged_userns_clone was already 1 on the host this was measured
+# on, so anyone following that message changes a correct setting and concludes the fix
+# failed.
+#
+# The tracked .codex/config.toml is NOT rewritten. It ships to hosts whose sandbox
+# starts perfectly, and weakening it there would impose one host's kernel policy on
+# everyone. The degradation is a per-launch override on a host that fails the probe,
+# and nothing else changes: approval_policy and approvals_reviewer stay as configured.
+#
+# A probe that cannot be taken - no unshare(1) on a Linux host - is not a failure:
+# it renders as unreadable, keeps the shipped sandbox, and says so, because a reading
+# nobody could take must never silently buy a weaker launch.
+#
+# The question does not apply on Darwin. Codex sandboxes there through Seatbelt and
+# never needs a user namespace, and macOS ships no unshare(1), so taking the probe
+# would render every Mac as unreadable and announce it on every spawn - a permanent
+# false alarm that trains people to ignore the real one. A Darwin host is therefore
+# sandbox-capable without a probe and without a notice.
+CODEX_SANDBOX_PROBE_CACHE=
+CODEX_SANDBOX_NOTICE_SENT=
+
+# Sets CODEX_SANDBOX_PROBE to yes (a sandbox starts here), no (it does not), or
+# unknown (the probe could not be taken). The cache and the one-shot flag are plain
+# shell state, and the sole caller, codex_config_flags_for_harness, is itself run
+# inside a command substitution, so both live only for that subshell. The probe
+# runs once and the notice prints once per spawn because there is exactly one call
+# per spawn, not because this state outlives it; a second call site would take the
+# probe again and repeat the notice.
+CODEX_SANDBOX_PROBE=
+codex_host_sandbox_probe() {
+  if [ -z "$CODEX_SANDBOX_PROBE_CACHE" ]; then
+    case "${FM_CODEX_SANDBOX_PROBE:-}" in
+      yes|no|unknown) CODEX_SANDBOX_PROBE_CACHE=$FM_CODEX_SANDBOX_PROBE ;;
+      "")
+        if [ "$(uname)" = Darwin ]; then
+          CODEX_SANDBOX_PROBE_CACHE=yes
+        elif ! command -v unshare >/dev/null 2>&1; then
+          CODEX_SANDBOX_PROBE_CACHE=unknown
+        elif unshare --user --map-root-user true >/dev/null 2>&1; then
+          CODEX_SANDBOX_PROBE_CACHE=yes
+        else
+          CODEX_SANDBOX_PROBE_CACHE=no
+        fi
+        ;;
+      *)
+        echo "error: FM_CODEX_SANDBOX_PROBE must be yes, no, or unknown; got '$FM_CODEX_SANDBOX_PROBE'" >&2
+        return 1
+        ;;
+    esac
+  fi
+  CODEX_SANDBOX_PROBE=$CODEX_SANDBOX_PROBE_CACHE
+}
+
+# The sandbox_mode this launch gets, announced once when it is not the shipped one,
+# so a degraded host is never a silent downgrade. Sets CODEX_LAUNCH_SANDBOX_MODE so
+# the notice on stderr is never captured alongside a printed result.
+CODEX_LAUNCH_SANDBOX_MODE=
+codex_launch_sandbox_mode() {  # <configured-mode>
+  local configured=$1
+  CODEX_LAUNCH_SANDBOX_MODE=$configured
+  codex_host_sandbox_probe || return 1
+  case "$CODEX_SANDBOX_PROBE" in
+    yes) return 0 ;;
+    unknown)
+      if [ -z "$CODEX_SANDBOX_NOTICE_SENT" ]; then
+        CODEX_SANDBOX_NOTICE_SENT=1
+        echo "notice: could not test whether this host can start a sandbox (no unshare(1) available); launching Codex with the shipped sandbox_mode=\"$configured\" unchanged (docs/codex-sandbox-unavailable.md)" >&2
+      fi
+      return 0
+      ;;
+  esac
+  case "$configured" in
+    danger-full-access) return 0 ;;
+  esac
+  if [ -z "$CODEX_SANDBOX_NOTICE_SENT" ]; then
+    CODEX_SANDBOX_NOTICE_SENT=1
+    echo "notice: this host cannot start a sandbox (unshare --user --map-root-user is refused), so a sandboxed Codex worker would fail its very first command; launching this worker with sandbox_mode=\"danger-full-access\" instead of the shipped \"$configured\". The tracked profile is unchanged and hosts whose sandbox starts keep it (docs/codex-sandbox-unavailable.md)." >&2
+  fi
+  CODEX_LAUNCH_SANDBOX_MODE=danger-full-access
+}
+
 toml_double_quoted_value() {  # <value>
   printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
 }
@@ -746,6 +842,10 @@ codex_config_flags_for_harness() {
   esac
   for key in sandbox_mode approval_policy approvals_reviewer; do
     value=$(codex_config_value "$key") || return 1
+    if [ "$key" = sandbox_mode ]; then
+      codex_launch_sandbox_mode "$value" || return 1
+      value=$CODEX_LAUNCH_SANDBOX_MODE
+    fi
     printf -- '-c %s ' "$(shell_quote "$key=\"$value\"")"
   done
   if [ -n "$signal_dir" ]; then

@@ -456,6 +456,11 @@ SH
 # spawn_secondmate_capture <world> <id> <home> <launchlog> [extra fm-spawn.sh args...]
 # Same shape as spawn_secondmate but captures the launch command into <launchlog>
 # and does not discard stderr, so callers can assert on both.
+# The host-sandbox probe is pinned rather than inherited from the real host, so the
+# workspace-write expectations below state "on a host whose sandbox starts" instead
+# of "on whatever host CI ran on": the degradation in bin/fm-spawn.sh is deliberately
+# not kind-conditional, a secondmate launch degrades exactly as a crewmate launch
+# does, and the machine this was written on fails the probe.
 spawn_secondmate_capture() {
   local world=$1 id=$2 home=$3 launchlog=$4 fakebin
   shift 4
@@ -467,6 +472,7 @@ spawn_secondmate_capture() {
     FM_STATE_OVERRIDE="$world/home/state" FM_DATA_OVERRIDE="$world/home/data" \
     FM_PROJECTS_OVERRIDE="$world/home/projects" FM_CONFIG_OVERRIDE="$world/home/config" \
     FM_SPAWN_NO_GUARD=1 FM_FAKE_LAUNCH_LOG="$launchlog" \
+    FM_CODEX_SANDBOX_PROBE="${FM_CODEX_SANDBOX_PROBE:-yes}" \
     "$ROOT/bin/fm-spawn.sh" "$id" "$home" "$@" --secondmate
 }
 

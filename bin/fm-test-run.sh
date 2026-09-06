@@ -284,6 +284,7 @@ family_for_basename() {
       printf '%s\n' session-bootstrap
       ;;
     fm-afk-pi-herdr-return-e2e.test.sh|fm-claude-continuity-live-e2e.test.sh|\
+    fm-codex-sandbox-walls-live-e2e.test.sh|\
     fm-opencode-primary-live-e2e.test.sh|fm-pi-primary-live-e2e.test.sh|\
     fm-send-secondmate-marker-herdr-e2e.test.sh)
       printf '%s\n' live-harness-optin
