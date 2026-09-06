@@ -376,14 +376,23 @@ fm_write_secondmate_meta() {
     "projects=$projects"
 }
 
-# fm_test_record_supervision_healthy <home> [state]: record identity-matched
-# watcher and delivery-listener locks owned by the long-lived test shell. This is
-# for fixtures whose subject merely passes through fm-guard.sh; tests of watcher
-# or delivery health itself should construct each state explicitly.
+# fm_test_record_supervision_healthy <home> [state] [root]: record
+# identity-matched watcher and delivery-listener locks owned by the long-lived
+# test shell. This is for fixtures whose subject merely passes through
+# fm-guard.sh; tests of watcher or delivery health itself should construct each
+# state explicitly.
+#
+# The watcher lock names the watcher of the checkout it was launched from, and
+# fm-guard.sh compares it against $FM_ROOT/bin/fm-watch.sh (docs/watcher-
+# continuity.md), so the recorded path must follow the root the guarded run
+# resolves: the exported FM_ROOT_OVERRIDE when a harness sets one, else this
+# checkout. A caller that passes FM_ROOT_OVERRIDE per invocation names that
+# root here as the third argument. The delivery lock keeps $ROOT: the guard
+# compares that one against its own SCRIPT_DIR copy.
 # shellcheck disable=SC2031 # false positive: fm-wake-lib.sh's *sourced-in-a-
 # subshell* locals of the same names (state/pid/home) never touch this scope.
 fm_test_record_supervision_healthy() {
-  local record_home=$1 record_state=${2:-$1/state} record_pid record_identity
+  local record_home=$1 record_state=${2:-$1/state} record_root=${3:-${FM_ROOT_OVERRIDE:-$ROOT}} record_pid record_identity
   record_pid=$$
   # Compute identity through the shared fm_pid_identity (subshell-scoped so its
   # STATE/FM_HOME/FM_ROOT side effects from sourcing fm-wake-lib.sh never leak
@@ -397,7 +406,7 @@ fm_test_record_supervision_healthy() {
   mkdir -p "$record_state/.watch.lock" "$record_state/.delivery.lock"
   printf '%s\n' "$record_pid" > "$record_state/.watch.lock/pid"
   printf '%s\n' "$record_home" > "$record_state/.watch.lock/fm-home"
-  printf '%s\n' "$ROOT/bin/fm-watch.sh" > "$record_state/.watch.lock/watcher-path"
+  printf '%s\n' "$record_root/bin/fm-watch.sh" > "$record_state/.watch.lock/watcher-path"
   printf '%s\n' "$record_identity" > "$record_state/.watch.lock/pid-identity"
   printf '%s\n' "$record_pid" > "$record_state/.delivery.lock/pid"
   printf '%s\n' "$record_home" > "$record_state/.delivery.lock/fm-home"
