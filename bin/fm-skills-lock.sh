@@ -52,8 +52,11 @@
 #   skipped     this seat has no `claude` on PATH, so it has no plugin
 #               mechanism at all and cannot be short of a plugin skill.
 #   unmeasured  `claude` is here but its plugin list could not be read or did
-#               not parse, or the fleet's own manifest could not be decoded, so
-#               this seat's standing is UNKNOWN, not clean.
+#               not parse, or the fleet's own manifest could not be decoded, or
+#               it decoded and carries no "plugins" key at all, so this seat's
+#               standing is UNKNOWN, not clean. An explicit empty "plugins"
+#               object is NOT this state: it says the fleet locks nothing and is
+#               correctly silent.
 #   missing / disabled / version-differs
 #               the list was read and it actually says so.
 #
@@ -73,12 +76,20 @@
 #                             whole script, so a slow list is reported here as
 #                             an unmeasured entry naming the seat and the id,
 #                             rather than killed from outside and reported as
-#                             one generic line for the whole check.
+#                             one generic line for the whole check. The deadline
+#                             itself is bin/fm-bounded-lib.sh's ladder, whose
+#                             last rung is perl's alarm: a two-branch
+#                             timeout/gtimeout form would fall back to running
+#                             the list bare, which is unbounded on exactly the
+#                             seat the fallback exists for, and no caller
+#                             upstream of here bounds it either.
 #   FM_SKILLS_LOCK_DISABLE=1  silence and skip everything (tests, diagnosis).
 #   FM_SKILLS_LOCK_FILE       override the manifest path (tests).
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=bin/fm-bounded-lib.sh
+. "$SCRIPT_DIR/fm-bounded-lib.sh"
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 LOCK="${FM_SKILLS_LOCK_FILE:-$(cd "$SCRIPT_DIR/.." && pwd)/skills-lock.json}"
@@ -110,22 +121,6 @@ esac
 
 [ "${FM_SKILLS_LOCK_DISABLE:-0}" = 1 ] && exit 0
 
-HAVE_TIMEOUT=none
-if command -v timeout >/dev/null 2>&1; then HAVE_TIMEOUT=timeout
-elif command -v gtimeout >/dev/null 2>&1; then HAVE_TIMEOUT=gtimeout
-fi
-
-# Run "$@" under the per-step ceiling. With no timeout binary the call runs
-# unbounded rather than being skipped, so a home without coreutils still gets
-# its readings; the caller's own timeout stays the backstop.
-bounded() {
-  case "$HAVE_TIMEOUT" in
-    timeout) timeout "$STEP_TIMEOUT" "$@" ;;
-    gtimeout) gtimeout "$STEP_TIMEOUT" "$@" ;;
-    *) "$@" ;;
-  esac
-}
-
 # Who this reading is about. A finding that names only the skill sends a
 # supervisor looking for the wrong thing: every seat reads the same manifest, so
 # the seat is the variable and it belongs in the line.
@@ -149,7 +144,15 @@ if [ -z "$EXPECTED_ERROR_FILE" ]; then
   # says that outright rather than shipping a blank cause.
   EXPECTED_ERROR_FILE=/dev/null
 fi
-trap '[ "$EXPECTED_ERROR_FILE" = /dev/null ] || rm -f "$EXPECTED_ERROR_FILE"' EXIT INT TERM
+trap '[ "$EXPECTED_ERROR_FILE" = /dev/null ] || rm -f "$EXPECTED_ERROR_FILE"' EXIT
+trap '[ "$EXPECTED_ERROR_FILE" = /dev/null ] || rm -f "$EXPECTED_ERROR_FILE"; exit 143' INT TERM
+
+# skills-lock.json is written by the `npx skills` installer, so a top-level key
+# that installer does not recognise can be dropped by a run of it. An absent
+# "plugins" key and an explicit empty one are therefore two different facts: the
+# second says this home locks no plugin skills and is correctly silent, the
+# first says nobody knows what this seat should carry.
+NO_PLUGINS_KEY="the manifest $LOCK decoded but carries no \"plugins\" key at all, so what this seat is expected to carry is unknown rather than empty; that file is written by the \`npx skills\` installer and a run of it may have dropped the key"
 
 expected_error() {
   printf '%s' "$1" > "$EXPECTED_ERROR_FILE" 2>/dev/null
@@ -163,8 +166,16 @@ expected_entries() {
     return 1
   fi
   if command -v jq >/dev/null 2>&1; then
+    if ! jq -e 'type == "object" and has("plugins")' "$LOCK" >/dev/null 2>&1; then
+      if jq -e . "$LOCK" >/dev/null 2>&1; then
+        expected_error "$NO_PLUGINS_KEY"
+      else
+        expected_error "the manifest $LOCK could not be decoded"
+      fi
+      return 1
+    fi
     jq -r '
-      (.plugins // {}) |
+      .plugins |
       if type != "object" then error("plugins must be an object") else . end |
       to_entries[] |
       if (.value | type) != "object" then
@@ -177,11 +188,14 @@ expected_entries() {
     return 1
   fi
   if command -v python3 >/dev/null 2>&1; then
-    python3 - "$LOCK" 2>/dev/null <<'PY' && return 0
+    local status=0
+    python3 - "$LOCK" 2>/dev/null <<'PY' || status=$?
 import json, sys
 with open(sys.argv[1], encoding="utf-8") as handle:
     manifest = json.load(handle)
-plugins = manifest.get("plugins", {})
+if not isinstance(manifest, dict) or "plugins" not in manifest:
+    sys.exit(3)
+plugins = manifest["plugins"]
 if not isinstance(plugins, dict):
     raise ValueError("plugins must be an object")
 for name, record in plugins.items():
@@ -189,7 +203,12 @@ for name, record in plugins.items():
         raise ValueError("plugins.%s must be an object" % name)
     print("\t".join([name, record.get("marketplace") or "", record.get("version") or ""]))
 PY
-    expected_error "the manifest $LOCK could not be decoded"
+    [ "$status" -eq 0 ] && return 0
+    if [ "$status" -eq 3 ]; then
+      expected_error "$NO_PLUGINS_KEY"
+    else
+      expected_error "the manifest $LOCK could not be decoded"
+    fi
     return 1
   fi
   expected_error "neither jq nor python3 is available to decode $LOCK"
@@ -214,7 +233,7 @@ read_installed() {
     INSTALLED_STATE=absent
     return 0
   fi
-  raw=$(bounded claude plugin list --json 2>/dev/null) || status=$?
+  raw=$(fm_run_bounded "$STEP_TIMEOUT" claude plugin list --json) || status=$?
   if [ "$status" -ne 0 ]; then
     INSTALLED_STATE=error
     INSTALLED_ERROR="\`claude plugin list --json\` exited $status (it may have exceeded ${STEP_TIMEOUT}s)"

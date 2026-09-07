@@ -40,6 +40,14 @@ Nothing runs this on the session-start critical path either: the daily round is 
 `bin/fm-skills-lock.sh`'s header owns the exact modes, flags, states, and environment.
 `skills-lock.json` records only what a seat should have and where it comes from; no third party's skill content is vendored here.
 
+## The manifest is written by an installer this fleet does not own
+
+The expected set lives in `skills-lock.json`, which is the `npx skills` installer's own file: `docs/axi-skill-provenance.md` records it as written by that installer, and the `version` and `skills` keys beside `plugins` are its shape.
+A future `npx skills add` or `npx skills update` could therefore rewrite the file and drop the top-level `plugins` key it does not recognise, which would quietly empty what the fleet expects of every seat.
+Two things guard that.
+An absent `plugins` key is reported as `unmeasured` naming the dropped key, distinct from an explicit `"plugins": {}` which genuinely means this home locks no plugin skills and is correctly silent.
+And `tests/fm-skills-lock.test.sh` parses this repository's own tracked manifest and fails if the `plugins` object is missing or empty, so a rewrite that drops it is caught in CI rather than discovered by a seat going quiet.
+
 ## Can a seat's installed plugin set be read reliably? The measurement
 
 This was the open question the work started from, and the answer is yes, but not by the route it looked like.

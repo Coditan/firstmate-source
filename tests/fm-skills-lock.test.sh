@@ -185,22 +185,51 @@ pass "fm-skills-lock: a reading that could not be taken is never rendered as a v
 # script's ceiling must fire first: a seat whose plugin list hangs has to be
 # reported here, by seat and by id, rather than killed from outside and reduced
 # to one generic line for the whole check.
-HOME_SLOW=$(make_home slow-list)
-write_lock "$HOME_SLOW/skills-lock.json" 1.2.3
-installed_with "$HOME_SLOW/installed.json" demo-skills@demo-market 1.2.3 true
-out=$(FAKE_CLAUDE_LIST_SLEEP=5 FM_SKILLS_LOCK_TIMEOUT=1 run_subject "$HOME_SLOW")
-assert_contains "$out" "could not be established" \
-  "a plugin list that outlasts the ceiling must be reported as unmeasured"
-assert_contains "$out" "demo-skills@demo-market" \
-  "a timed-out reading must still name the id it could not establish"
-assert_contains "$out" "$HOME_SLOW" \
-  "a timed-out reading must still name the seat"
-assert_contains "$out" "it may have exceeded 1s" \
-  "a timed-out reading must name the ceiling it exceeded, so a reader can act on it"
-assert_not_contains "$out" "does not have" \
-  "a timed-out reading must never be rendered as a missing plugin"
-assert_no_scratch_left "$HOME_SLOW" "a timed-out list read"
-pass "fm-skills-lock: a plugin list that outlasts the ceiling is reported as unmeasured by seat and id"
+assert_slow_list_is_unmeasured() {  # <home> <why> [env assignments applied by caller]
+  local home=$1 why=$2 out=$3
+  assert_contains "$out" "could not be established" \
+    "$why: a plugin list that outlasts the ceiling must be reported as unmeasured"
+  assert_contains "$out" "demo-skills@demo-market" \
+    "$why: a timed-out reading must still name the id it could not establish"
+  assert_contains "$out" "$home" \
+    "$why: a timed-out reading must still name the seat"
+  assert_contains "$out" "it may have exceeded 1s" \
+    "$why: a timed-out reading must name the ceiling it exceeded, so a reader can act on it"
+  assert_not_contains "$out" "does not have" \
+    "$why: a timed-out reading must never be rendered as a missing plugin"
+  assert_no_scratch_left "$home" "$why"
+}
+
+if command -v timeout >/dev/null 2>&1 || command -v gtimeout >/dev/null 2>&1 \
+  || command -v perl >/dev/null 2>&1; then
+  HOME_SLOW=$(make_home slow-list)
+  write_lock "$HOME_SLOW/skills-lock.json" 1.2.3
+  installed_with "$HOME_SLOW/installed.json" demo-skills@demo-market 1.2.3 true
+  out=$(FAKE_CLAUDE_LIST_SLEEP=5 FM_SKILLS_LOCK_TIMEOUT=1 run_subject "$HOME_SLOW")
+  assert_slow_list_is_unmeasured "$HOME_SLOW" "the ordinary rung" "$out"
+  pass "fm-skills-lock: a plugin list that outlasts the ceiling is reported as unmeasured by seat and id"
+else
+  pass "fm-skills-lock: skipped the ceiling case, this seat has no timeout, gtimeout or perl to bound with"
+fi
+
+# --- and the ceiling still holds on a seat with no timeout binary ------------
+#
+# A two-branch timeout/gtimeout form falls back to running the command BARE,
+# which is unbounded on exactly the seat the fallback exists for, and nothing
+# upstream bounds it either: the round wraps this script in the same shape.
+# FM_CHECK_FORCE_FALLBACK=1 makes bin/fm-bounded-lib.sh take its last rung, so
+# this drives that seat class rather than reasoning about it.
+if command -v perl >/dev/null 2>&1; then
+  HOME_FB=$(make_home slow-list-fallback)
+  write_lock "$HOME_FB/skills-lock.json" 1.2.3
+  installed_with "$HOME_FB/installed.json" demo-skills@demo-market 1.2.3 true
+  out=$(FM_CHECK_FORCE_FALLBACK=1 FAKE_CLAUDE_LIST_SLEEP=5 FM_SKILLS_LOCK_TIMEOUT=1 \
+    run_subject "$HOME_FB")
+  assert_slow_list_is_unmeasured "$HOME_FB" "the fallback rung" "$out"
+  pass "fm-skills-lock: the ceiling holds on a seat with neither timeout nor gtimeout"
+else
+  pass "fm-skills-lock: skipped the fallback-rung case, no perl on this seat"
+fi
 
 HOME_NOCLAUDE=$(make_home no-harness)
 write_lock "$HOME_NOCLAUDE/skills-lock.json" 1.2.3
@@ -262,6 +291,56 @@ assert_not_contains "$out" "could not be decoded" \
   "an absent manifest must not be reported as an undecodable one"
 pass "fm-skills-lock: each manifest failure is reported with its own cause, not a shared prefix"
 
+# --- a dropped plugins key is a different fact from an empty one --------------
+#
+# skills-lock.json is written by the `npx skills` installer, so a run of it can
+# drop the top-level key that installer does not recognise. An expected set that
+# silently becomes empty is the failure this whole three-state design refuses,
+# so the two shapes must read differently to a person running the check.
+HOME_EMPTY=$(make_home empty-plugins)
+cat > "$HOME_EMPTY/skills-lock.json" <<'JSON'
+{ "version": 1, "skills": {}, "plugins": {} }
+JSON
+out=$(run_subject "$HOME_EMPTY")
+[ -z "$out" ] || fail "a manifest that locks no plugin skills must report nothing, got: $out"
+status_empty=$(run_subject "$HOME_EMPTY" --status)
+assert_contains "$status_empty" "no plugin skills are locked" \
+  "an explicitly empty plugins object means this home locks nothing, and --status must say so"
+
+HOME_DROPPED=$(make_home dropped-plugins)
+cat > "$HOME_DROPPED/skills-lock.json" <<'JSON'
+{ "version": 1, "skills": {} }
+JSON
+out=$(run_subject "$HOME_DROPPED")
+assert_contains "$out" "no \"plugins\" key" \
+  "a manifest with no plugins key must be reported, never read as nothing to do"
+assert_contains "$out" "unknown rather than empty" \
+  "a dropped key must say the expected set is unknown, not that the fleet locks nothing"
+status_dropped=$(run_subject "$HOME_DROPPED" --status)
+assert_contains "$status_dropped" "state=unmeasured" \
+  "--status must show a dropped plugins key as unmeasured"
+assert_not_contains "$status_dropped" "no plugin skills are locked" \
+  "a dropped key must not render as the fleet deliberately locking nothing"
+[ "$status_empty" != "$status_dropped" ] \
+  || fail "an empty plugins object and an absent one must not read identically"
+pass "fm-skills-lock: an absent plugins key reads as unmeasured, an empty one as nothing locked"
+
+# --- this repository's own tracked manifest still carries its expected set ----
+#
+# The contract here is skills-lock.json itself: a tracked, machine-consumed
+# manifest this repository owns the plugins half of. It is parsed rather than
+# grepped. If an installer run ever drops the key, this fails loudly instead of
+# quietly emptying what the fleet expects of every seat.
+plugin_count=$(jq -r '(.plugins // {}) | if type == "object" then length else -1 end' "$ROOT/skills-lock.json")
+[ "$plugin_count" -gt 0 ] 2>/dev/null \
+  || fail "this repository's skills-lock.json must carry a non-empty plugins object, got count=$plugin_count"
+while IFS=$'\t' read -r id marketplace version; do
+  [ -n "$id" ] || fail "a locked plugin entry must have an id"
+  [ -n "$marketplace" ] || fail "locked plugin $id must name the marketplace it comes from"
+  [ -n "$version" ] || fail "locked plugin $id must record the version the fleet chose"
+done < <(jq -r '.plugins | to_entries[] | [.key, (.value.marketplace // ""), (.value.version // "")] | @tsv' "$ROOT/skills-lock.json")
+pass "fm-skills-lock: the tracked manifest still names what every seat is expected to carry"
+
 # --- the real manifest decodes, and the fleet pin states its basis ------------
 
 out=$(FM_SKILLS_LOCK_FILE="$ROOT/skills-lock.json" \
@@ -299,6 +378,9 @@ mutant() {
   mkdir -p "$dir"
   cp "$SUBJECT" "$dir/fm-skills-lock.sh"
   chmod +x "$dir/fm-skills-lock.sh"
+  # The subject sources the shared deadline ladder from beside itself, so a
+  # mutant at its own path needs it there too.
+  ln -sf "$ROOT/bin/fm-bounded-lib.sh" "$dir/fm-bounded-lib.sh"
   python3 - "$dir/fm-skills-lock.sh" "$@" <<'PY' || fail "mutant $name: a replacement did not match the subject"
 import sys
 path = sys.argv[1]

@@ -94,6 +94,10 @@ A check that runs every five minutes in bash is effectively free; the same check
 So the decision is made in bash, three times over.
 The round itself runs at most once per cadence window, so the other sweeps of the day are one file read and one integer comparison.
 Measured on this vessel on 2026-08-12, with every reading reaching the network: a full round took 3.8s against the watcher's 30s per-check ceiling, and the cadence-gated path took about 19ms per sweep.
+Re-measured on this vessel on 2026-09-07, after the `plugin:<id>` reading was added: three consecutive `--status` rounds took 2.0s, 2.2s and 2.3s, and `bin/fm-skills-lock.sh --reading` on its own accounted for 0.43s to 0.47s of that, leaving roughly 28s of headroom under the watcher's 30s ceiling.
+That 2026-09-07 run is not directly comparable with the 2026-08-12 one and should not be read as the round getting faster: it was taken in a detached gate worktree, so the instruction-surface reading returned `unmeasured` and the pin-age reading `skipped` without reaching the network, while the five tool probes and the new plugin reading did.
+Both figures are measurements from a moment rather than properties of the round, so re-measure before relying on either.
+The worst case the new step can contribute is bounded rather than measured: `bin/fm-skills-lock.sh` caps its plugin list read at 10s and this round caps the whole script at 12s.
 A finding surfaces only when its line differs from the one last surfaced, so an unchanged state is reported once rather than daily - the same discipline `AGENTS.md` section 8 states as "never restate an unchanged state".
 An `unmeasured` reading must repeat in two consecutive rounds before it surfaces, so one network blip is not a finding while sustained blindness is.
 
