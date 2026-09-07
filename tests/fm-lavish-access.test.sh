@@ -22,6 +22,13 @@
 # docs/lavish-access.md.
 set -u
 
+# The client-socket resolver reads the environment it is run in, and a real
+# vessel exports its own declaration into every process, so this suite would
+# otherwise report a different socket on a containerised host than on a bare
+# one. Cleared here so every case starts from a host that declared nothing; the
+# cases that need a declaration set one themselves.
+unset FM_TAILSCALE_SOCKET VESSEL_TAILNET_SOCKET
+
 # shellcheck source=tests/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
@@ -72,8 +79,9 @@ make_fake_tailscale() {
 # Real tailscale takes a global --socket= before the subcommand, and firstmate's
 # client wrapper passes it on every call (bin/fm-tailnet-cli-lib.sh owns why), so
 # this stub has to consume it the same way or every call arrives shifted by one.
+TS_SOCK=""
 case "${1:-}" in
-  --socket=*) shift ;;
+  --socket=*) TS_SOCK=${1#--socket=}; shift ;;
 esac
 if [ "${1:-}" = serve ]; then
   printf '%s\n' "$*" >> "${FM_TEST_TS_SERVE_LOG:-/dev/null}"
@@ -146,6 +154,11 @@ case "${FM_TEST_TS_MODE:-running}" in
     ;;
   kernel)
     printf '{"BackendState":"Running","MagicDNSSuffix":"","Self":{"HostName":"kernel","DNSName":"kernel.","TailscaleIPs":["127.0.0.2"]}}\n'
+    ;;
+  socketfail)
+    printf 'failed to connect to local tailscaled (which appears to be running as tailscaled, pid 176). Got error: dial unix %s: connect: no such file or directory\n' \
+      "${TS_SOCK:-/var/run/tailscale/tailscaled.sock}" >&2
+    exit 1
     ;;
   *) exit 1 ;;
 esac
@@ -262,6 +275,14 @@ field() {
   out=$(unset FM_TAILSCALE_SOCKET VESSEL_TAILNET_SOCKET; fm_tailscale_socket) && exit 3
   [ -z "$out" ] || exit 4
 
+  # UNSET and SET-TO-EMPTY are different answers, not the same absence. A vessel
+  # whose own declaration is WRONG is the case the override exists for, and a
+  # seat cannot unset what the runtime exported into PID 1, so the empty value
+  # has to mean "resolve nothing" rather than falling through to that
+  # declaration - otherwise the override can redirect but never stand down.
+  out=$(FM_TAILSCALE_SOCKET= VESSEL_TAILNET_SOCKET=/tmp/vessel.sock fm_tailscale_socket) && exit 9
+  [ -z "$out" ] || exit 10
+
   # The resolution is only worth anything if it reaches the client, so this
   # drives fm_tailscale against a `tailscale` that records the argv it was
   # handed. That pass-through IS the repair: without it the client dials its
@@ -277,6 +298,11 @@ field() {
 
   (unset FM_TAILSCALE_SOCKET VESSEL_TAILNET_SOCKET; fm_tailscale status --json) || exit 7
   [ "$(cat "$FM_TEST_TS_ARGV")" = "status --json" ] || exit 8
+
+  # The standing-down override has to reach the client as no --socket at all,
+  # which is the only thing that hands the client back its own default.
+  FM_TAILSCALE_SOCKET= VESSEL_TAILNET_SOCKET=/tmp/vessel.sock fm_tailscale status --json || exit 11
+  [ "$(cat "$FM_TEST_TS_ARGV")" = "status --json" ] || exit 12
   exit 0
 )
 expect_code 0 "$?" "the client socket is read from where it is declared and passed to the client"
@@ -1015,6 +1041,32 @@ assert_contains "$unread" "tailscale status could not be read as JSON" \
   || fail "the board still binds somewhere, got '$(field addr "$unread")'"
 assert_grep "reachability=untested" "$HOME_UR/state/service-port.lavish" \
   "and the record does not claim a tested no-reach"
+# The failure this cluster exists for is a daemon that IS running while
+# listening somewhere other than the path firstmate resolved. Under a reason
+# that names only jq and an unresponsive daemon that failure is invisible - the
+# reader eliminates both named causes and concludes the fault is elsewhere,
+# which is what once cost a live measurement to see through. So the reason
+# carries the socket that was dialled, because firstmate chose it, and what the
+# client itself said about it.
+dialled=$(FM_TEST_TS_MODE=socketfail FM_TAILSCALE_SOCKET=/tmp/declared-elsewhere.sock \
+  FM_HOME="$HOME_UR" FM_SERVICE_PORT_RANGE=4890-4891 "$ROOT/bin/fm-service-port.sh" lavish)
+expect_code 0 "$?" "a client that cannot reach its own daemon still gets a local board"
+[ "$(field reachability "$dialled")" = untested ] \
+  || fail "a client that could not be read establishes nothing either way, got '$(field reachability "$dialled")'"
+assert_contains "$dialled" "/tmp/declared-elsewhere.sock" \
+  "the reason names the socket firstmate dialled rather than leaving its own choice unsaid"
+assert_contains "$dialled" "no such file or directory" \
+  "and carries what the client said instead of discarding it"
+# A vessel that declared no socket at all is a DIFFERENT diagnosis from one whose
+# declaration points at the wrong path, so the two do not share one message.
+undeclared=$(FM_TEST_TS_MODE=socketfail FM_HOME="$HOME_UR" FM_SERVICE_PORT_RANGE=4892-4893 \
+  env -u FM_TAILSCALE_SOCKET -u VESSEL_TAILNET_SOCKET "$ROOT/bin/fm-service-port.sh" lavish)
+assert_contains "$undeclared" "no socket is declared" \
+  "a vessel that declared none says so rather than naming a path it never dialled"
+: > "$FM_TEST_TS_SERVE_STATE"
+: > "$FM_TEST_TS_SERVE_LOG"
+pass "an unreadable status names the socket that was dialled and what the client said"
+
 # A vessel that really has no tailnet is a different fact, and still says so.
 none_at_all=$(FM_TEST_TS_MODE=stopped FM_HOME="$HOME_UR" \
   FM_SERVICE_PORT_RANGE=4888-4889 "$ROOT/bin/fm-service-port.sh" lavish)
@@ -1227,8 +1279,8 @@ u2=$(FM_TEST_TS_MODE=unreadable FM_HOME="$HOME_U2" FM_SERVICE_PORT_RANGE=4891-48
   "$ROOT/bin/fm-lavish.sh" end "$HOME_U2/.lavish/board.html" 2>&1)
 assert_contains "$u2" "nothing here could read whether" \
   "an unreadable tailscale is reported as unread, not as a tested answer"
-assert_contains "$u2" "jq missing or tailscale not responding" \
-  "and the concrete cause is named"
+assert_contains "$u2" "no socket is declared for this vessel" \
+  "and the concrete cause is named rather than a list of causes to guess between"
 assert_not_contains "$u2" "the next open settles the rest" \
   "without promising a further open resolves what no further open can"
 assert_not_contains "$u2" "not reachable off this machine" \

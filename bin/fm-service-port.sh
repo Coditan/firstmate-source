@@ -355,28 +355,69 @@ add_reason() {
   fi
 }
 
-tailscale_json() {
-  command -v jq >/dev/null 2>&1 || return 1
-  fm_tailscale status --json 2>/dev/null
+# The status read reports through globals rather than through stdout, because
+# what a FAILED read has to say is the whole point of it: a caller taking the
+# JSON through a command substitution would lose the client's own message with
+# the subshell that captured it.
+TAILSCALE_STATUS_JSON=""
+TAILSCALE_STATUS_ERR=""
+
+read_tailscale_status() {
+  local err rc
+  TAILSCALE_STATUS_JSON=""
+  TAILSCALE_STATUS_ERR=""
+  command -v jq >/dev/null 2>&1 || {
+    TAILSCALE_STATUS_ERR="jq is not installed here, so nothing could parse it"
+    return 1
+  }
+  err=$(mktemp "${TMPDIR:-/tmp}/fm-service-port-tailscale.XXXXXX") || {
+    TAILSCALE_STATUS_ERR="no temporary file could be made to capture what the client said"
+    return 1
+  }
+  TAILSCALE_STATUS_JSON=$(fm_tailscale status --json 2>"$err")
+  rc=$?
+  # The client's text is carried verbatim apart from being folded onto one line
+  # and bounded, because a reason is one field of a single-line record and a
+  # multi-line or unbounded message would break that record's shape.
+  TAILSCALE_STATUS_ERR=$(tr '\n\t' '  ' < "$err" | sed 's/  */ /g; s/^ //; s/ *$//' | cut -c1-300)
+  rm -f "$err"
+  return "$rc"
+}
+
+# THREE things can leave a status unreadable, and the third is firstmate's own
+# choice of socket, so this names the socket that was dialled and repeats what
+# the client said rather than handing the reader a list of causes to guess
+# between. The failure this exists for looks like a daemon that is down and is
+# not one: the daemon is running and listening somewhere else.
+tailscale_read_detail() {
+  local dialled
+  dialled=$(fm_tailscale_dialled)
+  if [ -n "$TAILSCALE_STATUS_ERR" ]; then
+    printf '%s; the client said: %s' "$dialled" "$TAILSCALE_STATUS_ERR"
+  else
+    printf '%s; the client said nothing' "$dialled"
+  fi
 }
 
 # Returns 0 with the node's identity resolved, 1 when this host was READ and
 # genuinely has no usable tailnet, and 2 when the status could not be read at
-# all. The last is not a negative answer: a missing jq or a tailscaled that did
-# not respond tests nothing about reach, and calling it one would record a
-# tested no-reach on a vessel that may be perfectly reachable.
+# all. The last is not a negative answer: a missing jq, a tailscaled that did not
+# respond, or a client dialling a socket the daemon does not listen on all test
+# nothing about reach, and calling any of them one would record a tested
+# no-reach on a vessel that may be perfectly reachable.
 resolve_tailnet() {
   local json state addr host suffix dnsname
   command -v tailscale >/dev/null 2>&1 || {
     add_reason "tailscale is not installed on this host"
     return 1
   }
-  json=$(tailscale_json) || {
-    add_reason "tailscale status could not be read as JSON (jq missing or tailscale not responding)"
+  read_tailscale_status || {
+    add_reason "tailscale status could not be read as JSON ($(tailscale_read_detail))"
     return 2
   }
+  json=$TAILSCALE_STATUS_JSON
   [ -n "$json" ] || {
-    add_reason "tailscale status returned nothing"
+    add_reason "tailscale status returned nothing ($(tailscale_read_detail))"
     return 2
   }
   state=$(printf '%s' "$json" | jq -r '.BackendState // empty' 2>/dev/null)

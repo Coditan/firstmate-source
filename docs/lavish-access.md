@@ -42,6 +42,8 @@ Nothing vessel-specific is compiled in, which is what makes this work on every v
 That read has to reach the local daemon before it can answer, and on a containerised vessel it does not by default.
 `bin/fm-tailnet-cli-lib.sh` is the one owner of that hop, and every client call in this cluster goes through its `fm_tailscale`.
 It never writes a socket path down; it reads the one the image already declared, taking `$FM_TAILSCALE_SOCKET` first, then `$VESSEL_TAILNET_SOCKET` - which the vessel runtime exports into PID 1's environment, so every process the container starts inherits it - and passing nothing at all when neither answers so an undeclared host keeps the client's own default.
+The override is read for whether it is SET, not for whether it holds anything, so it has a value for every answer: a path redirects the client, `FM_TAILSCALE_SOCKET=` resolves nothing and hands the client back its own default, and leaving it unset falls through to the vessel's declaration.
+That empty value is the recovery for the one case the resolver can get wrong - a declaration that names the wrong path - which a seat cannot otherwise escape, because it cannot unset a variable the runtime exported into PID 1 for an already-running process tree.
 Recovering the path from a running `tailscaled`'s own command line was considered and rejected: a process-name match matches across every UNIX account on this machine, so an untrusted account could name an executable `tailscaled`, point it at a socket it owns, and thereby choose the address firstmate publishes to the captain.
 The file records that decision so a reader who does meet a stripped environment finds a reason rather than a gap.
 
@@ -61,6 +63,10 @@ Got error: ... dial unix /var/run/tailscale/tailscaled.sock: connect: no such fi
 
 The allocator read that failure as "could not be read", degraded to `addr=127.0.0.1` with an empty `tailaddr` and `dnsname`, and every board it opened bound loopback - on a vessel holding a perfectly good tailnet name.
 The repair is the resolver above, not a second copy of that path in firstmate: the declaration belongs to the image, and firstmate reads it.
+
+Seeing that through cost a live measurement, because the reason named two causes - a missing `jq`, a daemon not responding - while there were three: firstmate itself chose the socket the client dialled.
+So the reason now carries the socket that was dialled, or says that none was declared and the client used its own default, together with the client's own message verbatim.
+A reader meeting the same failure again reads which path was dialled and what the client said about it out of the run's own output.
 
 #### What that repair was and was not proved to do
 

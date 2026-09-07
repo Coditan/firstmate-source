@@ -17,7 +17,13 @@
 # in this order, and the first source that answers wins:
 #
 #   1. $FM_TAILSCALE_SOCKET   - an explicit override, for tests and for a host
-#                               that declares its socket some third way.
+#                               that declares its socket some third way. It is
+#                               read for whether it is SET, not for whether it
+#                               is non-empty, so it has a value for every answer
+#                               a resolution can have: set to a path redirects
+#                               the client there, set to the empty string
+#                               resolves nothing at all, and unset falls through
+#                               to the next source.
 #   2. $VESSEL_TAILNET_SOCKET - the vessel runtime's own declaration, present in
 #                               PID 1's environment and so inherited by every
 #                               process the container starts, this seat and its
@@ -25,7 +31,12 @@
 #
 # When neither answers, no `--socket` is passed at all and the client uses its
 # own default. That is deliberate: on a host that never declared a path, the
-# default is correct, and inventing one would break a working vessel.
+# default is correct, and inventing one would break a working vessel. It is also
+# why the override distinguishes unset from empty: a vessel whose declaration is
+# WRONG is exactly the situation this file was written for, and a seat cannot
+# unset a variable the runtime exported into PID 1 for an already-running
+# process tree - so `FM_TAILSCALE_SOCKET=` is how an operator hands the client
+# back its own default without touching the declaration.
 #
 # A third source was considered and DELIBERATELY REJECTED, and a later reader
 # who meets the stripped-environment case must find this decision rather than a
@@ -50,13 +61,17 @@
 #   fm_tailscale_socket        prints the resolved socket path, or nothing; 0
 #                              when one was resolved, 1 when none was
 #   fm_tailscale <args...>     runs `tailscale` against the resolved socket
+#   fm_tailscale_dialled       one clause naming what the client dialled, for a
+#                              caller reporting a call that failed: the socket
+#                              this file resolved, or that none was declared and
+#                              the client used its own default
 #
 # fm_tailscale passes its arguments through untouched and says nothing of its
 # own, so a caller keeps ownership of both the command and what its user reads.
 
 fm_tailscale_socket() {
   local sock=''
-  if [ -n "${FM_TAILSCALE_SOCKET:-}" ]; then
+  if [ -n "${FM_TAILSCALE_SOCKET+set}" ]; then
     sock=$FM_TAILSCALE_SOCKET
   elif [ -n "${VESSEL_TAILNET_SOCKET:-}" ]; then
     sock=$VESSEL_TAILNET_SOCKET
@@ -72,5 +87,18 @@ fm_tailscale() {
     tailscale --socket="$sock" "$@"
   else
     tailscale "$@"
+  fi
+}
+
+# A caller that has to explain a failed client call needs the one fact only this
+# file holds: which socket the call was made against. Naming it is what makes
+# the next instance of the original failure - a vessel whose daemon listens
+# somewhere other than the path we resolved - readable from the output alone.
+fm_tailscale_dialled() {
+  local sock
+  if sock=$(fm_tailscale_socket); then
+    printf 'firstmate dialled the socket declared for this vessel, %s' "$sock"
+  else
+    printf 'no socket is declared for this vessel, so the client dialled its own default'
   fi
 }
