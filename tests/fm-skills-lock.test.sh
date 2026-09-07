@@ -25,7 +25,7 @@ SUBJECT="$ROOT/bin/fm-skills-lock.sh"
 make_home() {
   local name=$1 home
   home="$TMP_ROOT/$name"
-  mkdir -p "$home/state" "$home/bin"
+  mkdir -p "$home/state" "$home/bin" "$home/tmp"
   cat > "$home/bin/claude" <<'SH'
 #!/usr/bin/env bash
 # Fake harness. FAKE_CLAUDE_STORE names the installed-set file. Reading the
@@ -36,6 +36,7 @@ set -u
 store=${FAKE_CLAUDE_STORE:?}
 case "${1:-} ${2:-}" in
   "plugin list")
+    [ "${FAKE_CLAUDE_LIST_SLEEP:-0}" = 0 ] || sleep "$FAKE_CLAUDE_LIST_SLEEP"
     [ "${FAKE_CLAUDE_LIST_RC:-0}" = 0 ] || exit "$FAKE_CLAUDE_LIST_RC"
     [ "${FAKE_CLAUDE_LIST_GARBAGE:-0}" = 0 ] || { printf 'not json at all\n'; exit 0; }
     cat "$store"
@@ -93,8 +94,17 @@ run_subject() {  # <home> <mode...>
   FM_SKILLS_LOCK_FILE="$home/skills-lock.json" \
   FAKE_CLAUDE_STORE="$home/installed.json" \
   FAKE_CLAUDE_UNEXPECTED_LOG="$home/unexpected-claude.log" \
+  TMPDIR="$home/tmp" \
   PATH="$home/bin:$PATH" \
     "${SUBJECT_OVERRIDE:-$SUBJECT}" "$@" 2>&1
+}
+
+# The subject's scratch file lives in this home's own TMPDIR, so a leak is
+# observable rather than lost among a shared /tmp.
+assert_no_scratch_left() {  # <home> <why>
+  local left
+  left=$(find "$1/tmp" -maxdepth 1 -name 'fm-skills-lock.*' 2>/dev/null)
+  [ -z "$left" ] || fail "$2: the subject left scratch files behind: $left"
 }
 
 command -v jq >/dev/null 2>&1 || { pass "fm-skills-lock: skipped, jq is required by the fixture harness"; exit 0; }
@@ -168,6 +178,29 @@ out=$(FAKE_CLAUDE_LIST_GARBAGE=1 run_subject "$HOME_BLIND")
 assert_contains "$out" "shape this check does not know" \
   "a plugin list that does not parse must be reported as unmeasured"
 pass "fm-skills-lock: a reading that could not be taken is never rendered as a value"
+
+# --- a list read that outlasts the ceiling is unmeasured, never silence -------
+#
+# The daily round wraps this whole script in its own 12s ceiling, so this
+# script's ceiling must fire first: a seat whose plugin list hangs has to be
+# reported here, by seat and by id, rather than killed from outside and reduced
+# to one generic line for the whole check.
+HOME_SLOW=$(make_home slow-list)
+write_lock "$HOME_SLOW/skills-lock.json" 1.2.3
+installed_with "$HOME_SLOW/installed.json" demo-skills@demo-market 1.2.3 true
+out=$(FAKE_CLAUDE_LIST_SLEEP=5 FM_SKILLS_LOCK_TIMEOUT=1 run_subject "$HOME_SLOW")
+assert_contains "$out" "could not be established" \
+  "a plugin list that outlasts the ceiling must be reported as unmeasured"
+assert_contains "$out" "demo-skills@demo-market" \
+  "a timed-out reading must still name the id it could not establish"
+assert_contains "$out" "$HOME_SLOW" \
+  "a timed-out reading must still name the seat"
+assert_contains "$out" "it may have exceeded 1s" \
+  "a timed-out reading must name the ceiling it exceeded, so a reader can act on it"
+assert_not_contains "$out" "does not have" \
+  "a timed-out reading must never be rendered as a missing plugin"
+assert_no_scratch_left "$HOME_SLOW" "a timed-out list read"
+pass "fm-skills-lock: a plugin list that outlasts the ceiling is reported as unmeasured by seat and id"
 
 HOME_NOCLAUDE=$(make_home no-harness)
 write_lock "$HOME_NOCLAUDE/skills-lock.json" 1.2.3

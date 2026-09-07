@@ -68,7 +68,12 @@
 #
 # Environment:
 #   FM_SKILLS_LOCK_TIMEOUT    ceiling in seconds for the plugin list read
-#                             (default 120).
+#                             (default 10). It is deliberately below
+#                             bin/fm-currency-round.sh's own 12s ceiling on this
+#                             whole script, so a slow list is reported here as
+#                             an unmeasured entry naming the seat and the id,
+#                             rather than killed from outside and reported as
+#                             one generic line for the whole check.
 #   FM_SKILLS_LOCK_DISABLE=1  silence and skip everything (tests, diagnosis).
 #   FM_SKILLS_LOCK_FILE       override the manifest path (tests).
 set -u
@@ -78,8 +83,8 @@ FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 LOCK="${FM_SKILLS_LOCK_FILE:-$(cd "$SCRIPT_DIR/.." && pwd)/skills-lock.json}"
 
-STEP_TIMEOUT=${FM_SKILLS_LOCK_TIMEOUT:-120}
-case "$STEP_TIMEOUT" in ''|*[!0-9]*) STEP_TIMEOUT=120 ;; esac
+STEP_TIMEOUT=${FM_SKILLS_LOCK_TIMEOUT:-10}
+case "$STEP_TIMEOUT" in ''|*[!0-9]*) STEP_TIMEOUT=10 ;; esac
 
 usage() {
   # The header comment block IS the help text, so the two cannot drift apart.
@@ -144,7 +149,7 @@ if [ -z "$EXPECTED_ERROR_FILE" ]; then
   # says that outright rather than shipping a blank cause.
   EXPECTED_ERROR_FILE=/dev/null
 fi
-trap '[ "$EXPECTED_ERROR_FILE" = /dev/null ] || rm -f "$EXPECTED_ERROR_FILE"' EXIT
+trap '[ "$EXPECTED_ERROR_FILE" = /dev/null ] || rm -f "$EXPECTED_ERROR_FILE"' EXIT INT TERM
 
 expected_error() {
   printf '%s' "$1" > "$EXPECTED_ERROR_FILE" 2>/dev/null
