@@ -94,6 +94,10 @@ A check that runs every five minutes in bash is effectively free; the same check
 So the decision is made in bash, three times over.
 The round itself runs at most once per cadence window, so the other sweeps of the day are one file read and one integer comparison.
 Measured on this vessel on 2026-08-12, with every reading reaching the network: a full round took 3.8s against the watcher's 30s per-check ceiling, and the cadence-gated path took about 19ms per sweep.
+Re-measured on this vessel on 2026-09-07, after the `plugin:<id>` reading was added: three consecutive `--status` rounds took 2.0s, 2.2s and 2.3s, and `bin/fm-skills-lock.sh --reading` on its own accounted for 0.43s to 0.47s of that, leaving roughly 28s of headroom under the watcher's 30s ceiling.
+That 2026-09-07 run is not directly comparable with the 2026-08-12 one and should not be read as the round getting faster: it was taken in a detached gate worktree, so the instruction-surface reading returned `unmeasured` and the pin-age reading `skipped` without reaching the network, while the five tool probes and the new plugin reading did.
+Both figures are measurements from a moment rather than properties of the round, so re-measure before relying on either.
+The worst case the new step can contribute is bounded rather than measured: `bin/fm-skills-lock.sh` caps its plugin list read at 10s and this round caps the whole script at 12s.
 A finding surfaces only when its line differs from the one last surfaced, so an unchanged state is reported once rather than daily - the same discipline `AGENTS.md` section 8 states as "never restate an unchanged state".
 An `unmeasured` reading must repeat in two consecutive rounds before it surfaces, so one network blip is not a finding while sustained blindness is.
 
@@ -111,6 +115,8 @@ An `unmeasured` reading must repeat in two consecutive rounds before it surfaces
   `bin/fm-bootstrap.sh`'s `SELF_DRIFT` check owns that.
   The `seat-can-update` reading answers a different question - whether an arriving update could be taken at all - and reports the consequence for delivery rather than restating `TANGLE`'s remediation.
 - It does not change `bin/fm-ff-lib.sh`'s refusal policy.
+- It does not install or enable anything a seat turns out to be short of.
+  The `plugin:<id>` reading names the third-party plugin skills `skills-lock.json` expects every seat to carry and reports a seat that lacks one; [fleet-plugin-skills.md](fleet-plugin-skills.md) owns that mechanism, the three states the reading keeps apart, and why nothing here installs.
 - It inherits one bound from the watcher rather than inventing one: the round runs on the watcher's check sweep, so its cadence is "at most once per window", not "exactly at".
   A check that speaks no longer ends that sweep, so no other watch can delay this one by sorting ahead of it; a round genuinely starved past the staleness limit still reports itself through `--armed` instead of going quiet.
 - It does not address the ad-hoc PATH finding from the same backlog item.

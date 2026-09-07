@@ -312,6 +312,7 @@ family_for_basename() {
       printf '%s\n' decision-backlog
       ;;
     fm-axi-suite.test.sh|fm-currency-round.test.sh|fm-firstmate-update-check.test.sh|\
+    fm-skills-lock.test.sh|\
     fm-fleet-update-check.test.sh|fm-self-drift.test.sh|\
     fm-upstream-distance.test.sh)
       printf '%s\n' currency-checks
