@@ -12,6 +12,7 @@ Shipped skills do name doctrine paths and route the reader to them: `.agents/ski
 Each of those pointers tells the session to read the file in the fleet repository by hand, and none of them puts a line of the doctrine's content in front of a running session.
 The captain's decision survives that correction, and it is recorded here re-checked against the corrected premise rather than quietly patched.
 Delivery rather than mention is what made the vendored skill the only route that reaches a vessel: a rule written into the fleet's own rulebook binds nobody who never loads it, while a rule written into the skill is read by every vessel that takes the pin.
+`docs/fleet-plugin-skills.md` owns that property of a vendored skill, including the measurement behind it, and it is pointed at here rather than restated.
 
 This placement delivers one half of the duty and not the other, and that is recorded here rather than left to be found later.
 The granting vessel loads the skill, because the captain names the protocol in its own chat, so the duty to announce reaches the vessel it binds.
