@@ -39,6 +39,14 @@ make_home() {
 [ -n "${STUB_UPDATE_OUT:-}" ] && printf '%s\n' "$STUB_UPDATE_OUT"
 exit "${STUB_UPDATE_RC:-0}"
 SH
+  # The expected-plugin-skill reading has its own suite; here it stands in as a
+  # seat with nothing locked, so this suite measures only the round.
+  cat > "$home/stub/fm-skills-lock.sh" <<'SH'
+#!/usr/bin/env bash
+[ "${STUB_SKILLS_LOCK_RC:-0}" = 0 ] || exit "$STUB_SKILLS_LOCK_RC"
+[ -n "${STUB_SKILLS_LOCK_OUT:-}" ] && printf '%s\n' "$STUB_SKILLS_LOCK_OUT"
+exit 0
+SH
   cat > "$home/stub/fm-fleet-update-check.sh" <<'SH'
 #!/usr/bin/env bash
 [ "${STUB_PIN_AGE_RC:-0}" = 0 ] || exit "$STUB_PIN_AGE_RC"
@@ -456,3 +464,25 @@ test_a_tool_announcing_a_newer_version_reads_behind
 test_a_tool_announcing_nothing_reads_ok_as_its_own_claim
 test_an_unreadable_announcement_is_never_an_all_clear
 test_an_uninstalled_announcing_tool_is_not_a_finding
+
+# --- the expected-plugin-skill reading --------------------------------------
+#
+# The round is the cadence and the seam, never a second implementation: it
+# passes bin/fm-skills-lock.sh's own answer through, collapsing the three ways a
+# seat can be short into one behind while leaving skipped and unmeasured alone.
+home=$(make_home plugin-skills)
+install_round "$home"
+out=$(STUB_SKILLS_LOCK_OUT='demo@market|missing|nowhere:/home/x does not have demo@market installed' \
+  run_round "$home" --status)
+assert_contains "$out" "plugin:demo@market hop=installed state=behind" \
+  "a seat short of an expected plugin skill must read as behind"
+assert_contains "$out" "nowhere:/home/x" \
+  "the reading must carry the seat the finding names"
+
+out=$(STUB_SKILLS_LOCK_OUT='demo@market|skipped|this seat has no harness' run_round "$home" --status)
+assert_contains "$out" "state=skipped" "a seat with no harness must stay skipped, not behind"
+
+out=$(STUB_SKILLS_LOCK_RC=3 run_round "$home" --status)
+assert_contains "$out" "plugin-skills hop=installed state=unmeasured" \
+  "a check that could not complete must read as unmeasured, never as a clean seat"
+pass "the expected-plugin-skill reading is passed through by state and names the seat"

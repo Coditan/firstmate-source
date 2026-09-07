@@ -44,6 +44,11 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # re-enables it against its isolated fake npm registry.
 export FM_AXI_SUITE_DISABLE=1
 
+# Bootstrap's production expected-plugin-skill convergence runs the harness and
+# can install a plugin. Behavior tests opt out globally; fm-skills-lock.test.sh
+# re-enables it explicitly against its own fake `claude`.
+export FM_SKILLS_LOCK_DISABLE=1
+
 # A suite launched from inside a firstmate session inherits that session's
 # watcher environment. FM_WATCH_DAEMON=1 is the one that silently changes a
 # subject's behavior rather than its inputs: it turns wake() from "exit after the

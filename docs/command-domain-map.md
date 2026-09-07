@@ -6,7 +6,7 @@ It is an evidence map for reviewing a possible later `bin/` reorganization, not 
 
 ## Summary
 
-- Command count: 186 top-level files in `bin/`.
+- Command count: 187 top-level files in `bin/`.
 - Domain count: 18 domains currently used.
 - Ambiguous command count: 5.
 - Unplaced command count: 0.
@@ -24,7 +24,7 @@ It is an evidence map for reviewing a possible later `bin/` reorganization, not 
 - `findings-urgency`: Findings-surface records, finding drain, urgency classification, and promotion of understated events. (5 commands.)
 - `pr-forge-landing`: Pull request checks, merge/landing helpers, teardown, review diffs, deploy verification, and forge-specific handoffs. (10 commands.)
 - `messaging-bridge`: Bridge relay and inbox traffic, frequency monitor, direct Telegram send/receive, and X-mode mentions/replies. (16 commands.)
-- `external-currency`: Checks that compare this home, its tools, or external services against upstream state on a cadence or on demand. (7 commands.)
+- `external-currency`: Checks that compare this home, its tools, or external services against upstream state on a cadence or on demand. (8 commands.)
 - `memory-context`: Memory readings and alarms, context-ceiling reset mechanics, stow receipts, and transcript archive/search tooling. (10 commands.)
 - `knowledge-review`: Research/review quality measurement, model panels, PDF production, Lavish boards, AGENTS.md maintenance, and generated command maps. (9 commands.)
 - `service-access`: Vessel-local service address resolution, reachable-link publication, and bind-proven port selection. (4 commands.)
@@ -240,6 +240,7 @@ Every command has at least one tracked caller or reference.
 | `fm-fleet-update-check.sh` | Answer "is this vessel running current shared code?" across ALL THREE HOPS | name:fm-fleet-update-check.sh, text:\bcurrency\b, text:\bpin\b, ref:docs/currency, ref:docs/pin-age | documentation: docs/configuration.md, docs/currency-round.md, docs/pin-age-check.md; scripts: bin/fm-currency-round.sh; skills: .agents/skills/run-fleet-update/SKILL.md; tests: tests/fm-currency-round.test.sh, tests/fm-fleet-update-check.test.sh |
 | `fm-forge-status.sh` | Record what the forge's own status page says, and wake firstmate only when the reading is new | name:fm-forge-status.sh, text:\bforge status\b, text:\bcadence\b, ref:docs/forge-status | documentation: docs/architecture.md, docs/configuration.md, docs/forge-status-watch.md; scripts: bin/fm-bootstrap.sh; skills: .agents/skills/bootstrap-diagnostics/SKILL.md; tests: tests/fm-check-arm-home.test.sh, tests/fm-forge-status.test.sh |
 | `fm-grossreinschiff-due.sh` | Report whether this home's Grossreinschiff cleanup sweep is due, and record a completed one | name:fm-grossreinschiff-due.sh, text:\bcadence\b | documentation: docs/grossreinschiff.md; scripts: bin/fm-bootstrap.sh; skills: .agents/skills/bootstrap-diagnostics/SKILL.md, .agents/skills/grossreinschiff/SKILL.md; tests: tests/fm-grossreinschiff.test.sh |
+| `fm-skills-lock.sh` | Keep this seat carrying the third-party plugin skills the fleet expects, and make a seat that is short of one visible without anyone remembering to look | text:\bcurrency\b, text:\bpin\b, text:\bdaily\b, text:\bcadence\b, ref:tests/*currency* | documentation: docs/configuration.md; scripts: bin/fm-bootstrap.sh, bin/fm-currency-round.sh; tests: tests/fm-currency-round.test.sh; tracked: skills-lock.json |
 | `fm-upstream-distance.sh` | Answer, ON DEMAND, what canonical upstream carries that this fork does not, and give every one of those changes a verdict that can be defended | name:fm-upstream-distance.sh, text:\bupstream\b, text:\bpin\b, text:\bdaily\b, text:\bcadence\b | documentation: docs/upstream-integration-plan.md; tests: tests/fm-upstream-distance.test.sh |
 
 ## Memory, context ceiling, and transcript archive

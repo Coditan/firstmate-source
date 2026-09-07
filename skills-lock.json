@@ -7,5 +7,20 @@
       "skillPath": ".agents/skills/axi/SKILL.md",
       "computedHash": "7de23a6b8171a06b7885712f3dd971e64d9301543d1b8c46f21660494303df95"
     }
+  },
+  "plugins": {
+    "mattpocock-skills@claude-plugins-official": {
+      "source": "mattpocock/skills",
+      "sourceType": "github",
+      "marketplace": "anthropics/claude-plugins-official",
+      "version": "1.2.3",
+      "versionBasis": "Not the version this seat happened to have. 1.2.3 is the release every tracked skill in this repository that depends on this plugin was derived from and verified against: docs/scout-research-provenance.md (read 2026-08-25), docs/design-it-twice-provenance.md (read 2026-08-20), docs/agents/domain.md and docs/agents/issue-tracker.md (2026-08-22) all record 1.2.3, and docs/grossreinschiff.md records the licence check at commit 2ab958093e83e0ec752e6c1c5932da465bf23e0c. The marketplace has since moved its source pointer to sha 6654f6b60cd9d5be8b54c6fafe44346dabeb3b76 (read 2026-09-07), so raising this pin means re-reading those provenance records against the newer release, which is a decision and not a repair. bin/fm-skills-lock.sh therefore reports a differing version and never changes one.",
+      "pinnedOn": "2026-09-07",
+      "requiredBy": [
+        ".agents/skills/codebase-sweep/SKILL.md",
+        ".agents/skills/design-it-twice/SKILL.md",
+        ".agents/skills/scout-research/SKILL.md"
+      ]
+    }
   }
 }

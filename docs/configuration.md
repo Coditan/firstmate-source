@@ -666,6 +666,12 @@ A seat whose daemon environment cannot be read is reported as unestablished rath
 The floor covers two verb surfaces rather than this fleet's own: `bin/fm-bootstrap.sh` owns the version constants and the evidence note, and [`docs/forgejo-axi-adoption.md`](forgejo-axi-adoption.md) owns the licence, provenance, maintenance risk, and the one coupling a version floor cannot cover.
 One fact from that record belongs here rather than only there, because this is where a home decides to depend on the client: `forgejo-axi` is a single maintainer's project with no external issues and no external contributor but this fleet, so a home that configures a forge instance is taking on a dependency the fleet watches rather than one anybody else exercises.
 
+### Expected plugin skills
+
+`skills-lock.json`'s `plugins` object names the third-party plugin skills every seat is expected to carry, with the marketplace each comes from, the version this fleet has chosen, and the basis for choosing it.
+`bin/fm-skills-lock.sh` installs what is missing from `bin/fm-bootstrap.sh` at session start, cadence-gated by `FM_SKILLS_LOCK_INTERVAL` (default 86400 seconds), and `bin/fm-currency-round.sh` takes the `plugin:<id>` reading daily between sessions.
+That script's header owns its modes, states, and remaining environment; `docs/fleet-plugin-skills.md` owns why the reading is taken through `claude plugin list --json` rather than the harness cache directory, and what its silence does and does not mean.
+
 ### AXI-suite self-update
 
 Locked bootstrap reports shadowing synchronously, then starts the AXI-suite currency check behind session start; the currency half reaches the registry at most once per `FM_AXI_SUITE_CHECK_INTERVAL` for the configured AXI commands.

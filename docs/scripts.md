@@ -188,6 +188,7 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-pr-check.sh`         | Record validated `pr=` and `pr_head=` values, then atomically arm a static merge poll; `--no-watch` records without arming and says no watch exists; `--disarm <id>` retires an armed poll, removing the poll's whole artifact set and leaving the recorded `pr=`, and refuses without removing anything unless it can prove the task's check IS that merge poll |
 | `fm-pr-merge.sh`         | Refuse a placeholder PR title, and separately a title it could not read, record PR metadata, then merge a task's canonical full PR URL on GitHub or on the fleet's own Forgejo instance, where it passes the head the forge requires and reports the branch deletion and merge watch it cannot give; `--no-local-task` lands a PR no task here owns, recording nothing and saying so |
 | `fm-promote.sh`          | Promote a scout task in place to a protected ship task                               |
+| `fm-skills-lock.sh`     | Install the third-party plugin skills the fleet expects this seat to carry, and answer whether it carries them (docs/fleet-plugin-skills.md) |
 | `fm-slot-guard.sh`       | Watch recorded pooled worktrees for conflicting live task holders                    |
 | `fm-teardown.sh`         | Fail-closed teardown: refuse another task's pooled worktree, return landed ship worktrees, require completed scout deliverables, retire secondmate homes |
 | `fm-harness.sh`          | Detect the running harness and resolve crew or secondmate harness, model, and effort |

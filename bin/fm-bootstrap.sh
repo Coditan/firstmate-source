@@ -42,6 +42,8 @@
 #                 "GITHUB_INBOX: the GitHub notification watch ... has stopped (...)",
 #                 "FORGE_STATUS: the forge status watch could not be armed on this home (...)",
 #                 "SLOT_GUARD: the worktree-ownership watch could not be armed on this home (...)",
+#                 "SKILLS_LOCK: <seat> is missing <plugin> (...)" and the other
+#                 expected-plugin-skill lines bin/fm-skills-lock.sh composes,
 #                 "CURATION_NUDGE|CODEBASE_SWEEP_NUDGE: <not armed|could not be armed|scheduler refusal|state persistence failure|state health indeterminate|supervision outage> (...)",
 #                 "FMX: X mode on ..." or "FMX: X mode off ...",
 #                 "WATCHER_UNIT: <consent, convergence, or fallback detail>",
@@ -121,8 +123,9 @@
 #          refresh relays any completed fm-fleet-sync.sh output before the
 #          aggregate timeout skip line with timeout and elapsed seconds.
 #          Set FM_FLEET_PRUNE=0 to skip branch pruning during that refresh.
-#          Set FM_BOOTSTRAP_DETECT_ONLY=1 to skip the eight MUTATING sweeps
+#          Set FM_BOOTSTRAP_DETECT_ONLY=1 to skip the nine MUTATING sweeps
 #          (PR-check migration, fm-currency-round.sh --arm,
+#          fm-skills-lock.sh,
 #          fm-memory-alarm.sh --arm, fm-axi-suite.sh,
 #          secondmate_sync, secondmate_liveness_sweep, x_mode_setup, fleet_sync)
 #          while still printing every read-only detect line above; the TANGLE line
@@ -1661,6 +1664,13 @@ if [ "${FM_BOOTSTRAP_DETECT_ONLY:-0}" != 1 ]; then
   if ! "$SCRIPT_DIR/fm-slot-guard.sh" --arm >/dev/null 2>&1; then
     echo "SLOT_GUARD: the worktree-ownership watch could not be armed on this home, so nothing will notice a pooled worktree two tasks both claim; run $SCRIPT_DIR/fm-slot-guard.sh --arm to see why"
   fi
+  # Converge the third-party plugin skills the fleet expects this seat to
+  # carry. Here rather than in an instruction for the same reason the arming
+  # steps above are here: a seat that has to be told to install something is a
+  # seat that stays short of it. Cadence-gated inside the script, so all but one
+  # session a day is a stamp read and an exit; bin/fm-currency-round.sh takes
+  # the reading between sessions.
+  "$SCRIPT_DIR/fm-skills-lock.sh" || true
   # Which copy of the suite THIS session resolves is a question only this
   # process tree can answer, so that half stays inline and in front. It is a few
   # PATH lookups and no network.
