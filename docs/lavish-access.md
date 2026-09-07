@@ -65,8 +65,9 @@ The allocator read that failure as "could not be read", degraded to `addr=127.0.
 The repair is the resolver above, not a second copy of that path in firstmate: the declaration belongs to the image, and firstmate reads it.
 
 Seeing that through cost a live measurement, because the reason named two causes - a missing `jq`, a daemon not responding - while there were three: firstmate itself chose the socket the client dialled.
-So the reason now carries the socket that was dialled, or says that none was declared and the client used its own default, together with the client's own message verbatim.
-A reader meeting the same failure again reads which path was dialled and what the client said about it out of the run's own output.
+So a read that got as far as running the client now carries the socket that was dialled, or says that none was declared and the client used its own default - with the client's own message verbatim where there was one, and saying the client said nothing about why where there was not.
+Each reason claims only what is true of its own path, so a cause that stopped the read *before* any client ran - no `jq` on this host to parse a status, no temporary file to hold the client's output - names itself alone and claims neither a dial nor a client sentence that never existed.
+A reader meeting the same failure again reads which path was dialled and what the client said about it out of the run's own output, and is never sent to a socket that was in fact never opened.
 
 #### What that repair was and was not proved to do
 
@@ -147,7 +148,7 @@ The rule is that no URL is emitted implying reach the vessel has not established
 - **Nothing established either way** - `reachability=untested`, which several different runs produce, and the wrapper says a different sentence for each because those runs met different things and each sentence names what its own run met.
   On a vessel whose first port-claiming run neither published a route nor found one, and whose tailscale can serve, it prints `nothing has established whether this vessel is reachable off this machine (<reason>) - this board certainly opens here, and no tailscale serve route onto <tailaddr> has been established yet.`
   It stops at what this run met and says nothing about what the next one will do: a `--serving` run does attempt the publish - including on a live board whose port comes back through `--mine`, where the carried loopback address is itself the statement that a route is the one way off this machine, so the publish is retried rather than the recorded answer restated - but that attempt can be refused durably, by a serve policy or a `tailscale` too old for the flags, while `tailscale status` keeps reporting Running.
-  On a host whose `tailscale status` could not be READ at all, because `jq` is absent or tailscaled is not answering, it prints `nothing here could read whether this vessel has any reach off this machine (<reason>) - this board certainly opens here, and nothing more can be settled until that can be read.`
+  On a host whose `tailscale status` could not be READ at all - `jq` absent, no temporary file to hold the client's output, or a client call that failed against the socket it dialled - it prints `nothing here could read whether this vessel has any reach off this machine (<reason>) - this board certainly opens here, and nothing more can be settled until that can be read.`
   Every later run on that host returns the same non-answer, which is a fact about the read rather than a prediction; `bin/fm-service-port.sh`'s header owns which run resolves which value.
   On a host whose address IS known but whose tailscale cannot serve - tailscaled stopped between the identity read and the walk, say - it prints `... and no route could be published onto <tailaddr> because tailscale could not serve here just now.`
   That one names what blocked the route and stops there: the state is not durable, and what a later run meets on that host is not something this run established, in either direction.
