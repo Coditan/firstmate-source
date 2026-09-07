@@ -66,7 +66,10 @@
 #                                   and is skipped by name rather than faulted.
 #   plugin:<id>          installed  the third-party plugin skills the fleet
 #                                   expects every seat to carry, named in
-#                                   skills-lock.json's "plugins" object.
+#                                   skills-lock.json's "plugins" object. The
+#                                   separate `plugin-skills` subject is not a
+#                                   plugin: it reports that the expected set
+#                                   itself could not be read.
 #                                   bin/fm-skills-lock.sh owns the reading and
 #                                   installs nothing; this round is its cadence,
 #                                   and a short seat stays short until a person
@@ -468,8 +471,16 @@ read_seat_can_update() {
 # expects, and the detail says which. skipped and unmeasured are passed through
 # unchanged, because a seat that could not be read must never render as a seat
 # that is fine.
+#
+# One subject the check answers with is NOT a plugin: it reports a failure to
+# read the expected set itself under the reserved id "plugin-skills", which has
+# no @ and so can never be a plugin id. That one keeps its own subject, because
+# "plugin:plugin-skills" would send a reader looking for a plugin that does not
+# exist and cannot be installed. It is the same subject this function's own
+# could-not-complete branch uses, since both mean the expected set was never
+# established.
 read_plugin_skills() {
-  local out status=0 line id state detail
+  local out status=0 line id state detail subject
   out=$(bounded "$SCRIPT_DIR/fm-skills-lock.sh" --reading 2>/dev/null) || status=$?
   if [ "$status" -ne 0 ]; then
     reading plugin-skills installed unmeasured \
@@ -483,10 +494,12 @@ read_plugin_skills() {
     state=${line#*|}
     detail=${state#*|}
     state=${state%%|*}
+    subject="plugin:$id"
+    [ "$id" != plugin-skills ] || subject=plugin-skills
     case "$state" in
-      ok|skipped|unmeasured) reading "plugin:$id" installed "$state" "$detail" ;;
-      missing|disabled|version-differs) reading "plugin:$id" installed behind "$detail" ;;
-      *) reading "plugin:$id" installed unmeasured "the expected-plugin-skill check answered in a shape this round does not know: $line" ;;
+      ok|skipped|unmeasured) reading "$subject" installed "$state" "$detail" ;;
+      missing|disabled|version-differs) reading "$subject" installed behind "$detail" ;;
+      *) reading "$subject" installed unmeasured "the expected-plugin-skill check answered in a shape this round does not know: $line" ;;
     esac
   done <<< "$out"
 }

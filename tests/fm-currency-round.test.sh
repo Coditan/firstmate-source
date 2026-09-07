@@ -485,4 +485,14 @@ assert_contains "$out" "state=skipped" "a seat with no harness must stay skipped
 out=$(STUB_SKILLS_LOCK_RC=3 run_round "$home" --status)
 assert_contains "$out" "plugin-skills hop=installed state=unmeasured" \
   "a check that could not complete must read as unmeasured, never as a clean seat"
+
+# A failure to read the expected SET has no plugin to name. Rendering it under
+# `plugin:` would invent an id that cannot be installed and cannot be acted on,
+# and the wake line truncates, so the subject is the part a supervisor keeps.
+out=$(STUB_SKILLS_LOCK_OUT='plugin-skills|unmeasured|the fleet expected plugin set could not be read on nowhere:/home/x' \
+  run_round "$home" --status)
+assert_contains "$out" "plugin-skills hop=installed state=unmeasured" \
+  "a failure to read the expected set must keep its own subject"
+assert_not_contains "$out" "plugin:plugin-skills" \
+  "a failure to read the expected set must never be reported as a plugin by that name"
 pass "the expected-plugin-skill reading is passed through by state and names the seat"

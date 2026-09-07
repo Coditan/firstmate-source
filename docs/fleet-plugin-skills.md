@@ -87,10 +87,13 @@ But the cache path is not the only route.
 Reliability of the reading is therefore not assumed, and the check keeps three separate outcomes so its silence can be trusted:
 
 - **skipped** - no `claude` on this seat's `PATH`, so it has no plugin mechanism and cannot be short of a plugin skill.
-- **unmeasured** - `claude` is here and its plugin list could not be read or did not parse, so this seat's set is unknown rather than empty.
+- **unmeasured** - the reading could not be taken: `claude` is here and its plugin list could not be read or did not parse, or the fleet's own manifest could not be decoded, or it decoded and carries no `plugins` key at all.
 - **missing / disabled / version-differs** - the list was read and it actually says so.
 
-Only the third kind is ever reported as a finding, and `tests/fm-skills-lock.test.sh` drives all three.
+`skipped` is the only silent one, and it is silent because a seat with no plugin mechanism cannot be short of a plugin skill.
+Both `unmeasured` and the third kind are reported: `bin/fm-skills-lock.sh` prints a `SKILLS_LOCK` line for every reading that is neither `ok` nor `skipped`, and `bin/fm-currency-round.sh` passes `unmeasured` through as `unmeasured` rather than collapsing it into a clean seat.
+The distinction between the two is what the line says, never whether it appears: the third kind names a fact about this seat, and `unmeasured` says out loud that nobody knows.
+That is the whole point of keeping them apart, and `tests/fm-skills-lock.test.sh` drives all three.
 A `missing` finding quotes `claude plugin marketplace add <marketplace>` and `claude plugin install <id>`; a `disabled` one quotes `claude plugin enable <id>`.
 Quoting the command is the difference this design turns on: the documentation carries the command, and the code does not carry an installer.
 

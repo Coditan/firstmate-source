@@ -381,17 +381,20 @@ mutant() {
   # The subject sources the shared deadline ladder from beside itself, so a
   # mutant at its own path needs it there too.
   ln -sf "$ROOT/bin/fm-bounded-lib.sh" "$dir/fm-bounded-lib.sh"
-  python3 - "$dir/fm-skills-lock.sh" "$@" <<'PY' || fail "mutant $name: a replacement did not match the subject"
-import sys
-path = sys.argv[1]
-source = open(path, encoding="utf-8").read()
-for pair in sys.argv[2:]:
-    old, new = pair.split("\t", 1)
-    if old not in source:
-        raise SystemExit("no match for: " + old)
-    source = source.replace(old, new, 1)
-open(path, "w", encoding="utf-8").write(source)
-PY
+  # The substitution is pure bash. These two controls are the evidence the whole
+  # change rests on, so they must not go missing on a seat that happens to lack
+  # an interpreter the subject itself never needs. Quoting the needle inside the
+  # expansions makes it a literal rather than a glob.
+  local source pair old new prefix
+  source=$(cat "$dir/fm-skills-lock.sh")
+  for pair in "$@"; do
+    old=${pair%%$'\t'*}
+    new=${pair#*$'\t'}
+    prefix=${source%%"$old"*}
+    [ "$prefix" != "$source" ] || fail "mutant $name: a replacement did not match the subject"
+    source=$prefix$new${source#*"$old"}
+  done
+  printf '%s\n' "$source" > "$dir/fm-skills-lock.sh"
   printf '%s\n' "$dir/fm-skills-lock.sh"
 }
 

@@ -78,11 +78,22 @@
 #                             rather than killed from outside and reported as
 #                             one generic line for the whole check. The deadline
 #                             itself is bin/fm-bounded-lib.sh's ladder, whose
-#                             last rung is perl's alarm: a two-branch
-#                             timeout/gtimeout form would fall back to running
-#                             the list bare, which is unbounded on exactly the
-#                             seat the fallback exists for, and no caller
-#                             upstream of here bounds it either.
+#                             last rung is perl's alarm, because a two-branch
+#                             timeout/gtimeout form falls back to running the
+#                             list bare and is unbounded on exactly the seat the
+#                             fallback exists for.
+#                             What is upstream, read rather than assumed:
+#                             bin/fm-currency-round.sh wraps this whole script at
+#                             12s with its own TWO-branch form, so on a seat with
+#                             neither binary that wrap does not bound it;
+#                             bin/fm-watch.sh's run_check_process does bound the
+#                             round's whole check.sh at FM_CHECK_TIMEOUT (30s)
+#                             through a three-rung ladder ending in perl, so a
+#                             seat with perl is bounded there. But that rung kills
+#                             the process GROUP: the entire round dies and every
+#                             other reading of the day is lost, which is what the
+#                             ceiling here exists to prevent. A hand run has
+#                             nothing above it at all.
 #   FM_SKILLS_LOCK_DISABLE=1  silence and skip everything (tests, diagnosis).
 #   FM_SKILLS_LOCK_FILE       override the manifest path (tests).
 set -u
@@ -92,7 +103,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$SCRIPT_DIR/fm-bounded-lib.sh"
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
-LOCK="${FM_SKILLS_LOCK_FILE:-$(cd "$SCRIPT_DIR/.." && pwd)/skills-lock.json}"
+LOCK="${FM_SKILLS_LOCK_FILE:-$FM_ROOT/skills-lock.json}"
 
 STEP_TIMEOUT=${FM_SKILLS_LOCK_TIMEOUT:-10}
 case "$STEP_TIMEOUT" in ''|*[!0-9]*) STEP_TIMEOUT=10 ;; esac
@@ -286,6 +297,14 @@ installed_record() {
 # One record per entry as "<id>|<state>|<detail>", held in an array so the
 # report, the status listing and the round's reading are rendered from the same
 # measurement and cannot disagree.
+#
+# A failure to read the expected SET itself has no plugin to name, so it takes
+# this reserved subject rather than a made-up id. Every real plugin id is
+# <plugin>@<marketplace> and carries an @, so this name can never collide with
+# one, and bin/fm-currency-round.sh renders it as a subject of its own instead of
+# prefixing it into a plugin that does not exist.
+EXPECTED_SET_SUBJECT=plugin-skills
+
 READINGS=()
 
 read_all() {
@@ -294,7 +313,7 @@ read_all() {
   if ! entries=$(expected_entries); then
     reason=$(cat "$EXPECTED_ERROR_FILE" 2>/dev/null)
     [ -n "$reason" ] || reason="the reason could not be recovered"
-    READINGS+=("skills-lock|unmeasured|the fleet's expected plugin set could not be read on $SEAT: $reason")
+    READINGS+=("$EXPECTED_SET_SUBJECT|unmeasured|the fleet's expected plugin set could not be read on $SEAT: $reason")
     return 0
   fi
   [ -n "$entries" ] || return 0
