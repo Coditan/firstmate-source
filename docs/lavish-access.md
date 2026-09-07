@@ -39,9 +39,40 @@ The fix therefore has to be a firstmate-owned mechanism that is hard to bypass b
 Every value is resolved at runtime from `tailscale status --json`.
 Nothing vessel-specific is compiled in, which is what makes this work on every vessel including secondmate homes rather than only on the one it was built on.
 
-## The three failures this design is built around
+That read has to reach the local daemon before it can answer, and on a containerised vessel it does not by default.
+`bin/fm-tailnet-cli-lib.sh` is the one owner of that hop, and every client call in this cluster goes through its `fm_tailscale`.
+It never writes a socket path down; it reads the one the image already declared, taking `$FM_TAILSCALE_SOCKET` first, then `$VESSEL_TAILNET_SOCKET`, then the running daemon's own `--socket=` argument, and passing nothing at all when no source answers so an undeclared host keeps the client's own default.
 
-Each was measured on `crew-hlr` on 2026-07-30, not inferred.
+## The four failures this design is built around
+
+Each was measured, not inferred; the three below this one on `crew-hlr` on 2026-07-30, and the first on `coditan-vessel` on 2026-09-07.
+
+### The client cannot reach its own daemon
+
+Measured on `coditan-vessel` on 2026-09-07.
+This vessel's image starts `tailscaled --socket=/run/vessel/runtime/tailscale/tailscaled.sock`, so a bare `tailscale status` fails on the compiled-in default path while naming the daemon it could not reach:
+
+```
+failed to connect to local tailscaled (which appears to be running as tailscaled, pid 176).
+Got error: ... dial unix /var/run/tailscale/tailscaled.sock: connect: no such file or directory
+```
+
+The allocator read that failure as "could not be read", degraded to `addr=127.0.0.1` with an empty `tailaddr` and `dnsname`, and every board it opened bound loopback - on a vessel holding a perfectly good tailnet name.
+The repair is the resolver above, not a second copy of that path in firstmate: the declaration belongs to the image, and firstmate reads it.
+
+#### What that repair was and was not proved to do
+
+Measured on `coditan-vessel` on 2026-09-07, and recorded here because a previous attempt at this same repair was reported as proved on evidence that did not reach that far.
+
+Proved: the board binds the tailnet address and answers there.
+`ss -ltnp` showed the listener on `100.73.181.90:4451` and on nothing else, a request to `http://coditan-vessel.tail7b8448.ts.net:4451/session/<key>` returned `200` with the board's own title, and the same port on `127.0.0.1` returned nothing at all - so the answer came over the tailnet address rather than through a loopback shortcut.
+An answer submitted against that same tailnet URL came back to the seat through `bin/fm-lavish.sh poll` as `status: feedback`.
+
+Not proved: that a request from another device reaches it.
+Every request above originated inside this container, which traverses none of the hops between the captain's laptop and this vessel.
+It could not be tested from here: no tailnet node advertises Tailscale SSH (`sshHostKeys` empty on all eight), and plain SSH to `coditan`, `aurora`, `crew-hlr`, `crew-allesknut` and `tugboat-cloud` is refused by key or by a closed port.
+That hop is untested, which is neither a claim that it works nor a claim that it is broken.
+Testing it needs one request made from a device that is not this container, and until someone makes that request this section says so.
 
 ### A fixed default port is contended across UNIX accounts
 

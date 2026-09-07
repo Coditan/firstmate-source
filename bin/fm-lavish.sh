@@ -723,8 +723,17 @@ fi
 # captain told his board was stopped while his own tailnet name keeps answering
 # on that port.
 if [ "$SUBCOMMAND" = stop ]; then
+  # The command handed over has to be the one that works HERE. On a vessel whose
+  # image declares its own tailscaled socket, a bare `tailscale` reaches nothing
+  # (bin/fm-tailnet-cli-lib.sh owns that), so telling the captain to run the bare
+  # form would hand him a command that fails on the vessel it names.
+  if TS_SOCK=$(fm_tailscale_socket); then
+    TS_CMD="tailscale --socket=$TS_SOCK"
+  else
+    TS_CMD="tailscale"
+  fi
   withdraw_proxy "$PORT" \
-    || note "this board is stopping, but its published tailnet endpoint on port $PORT could not be withdrawn, so this vessel's tailnet name keeps answering there until \`tailscale serve --http=$PORT off\` succeeds"
+    || note "this board is stopping, but its published tailnet endpoint on port $PORT could not be withdrawn, so this vessel's tailnet name keeps answering there until \`$TS_CMD serve --http=$PORT off\` succeeds"
 fi
 
 if [ "$SUBCOMMAND" != open ]; then

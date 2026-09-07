@@ -220,6 +220,8 @@ CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 PROBE="$SCRIPT_DIR/fm-service-port-probe.mjs"
 
+# shellcheck source=bin/fm-tailnet-cli-lib.sh
+. "$SCRIPT_DIR/fm-tailnet-cli-lib.sh"
 # shellcheck source=bin/fm-tailnet-serve-lib.sh
 . "$SCRIPT_DIR/fm-tailnet-serve-lib.sh"
 # shellcheck source=bin/fm-reachability-lib.sh
@@ -355,7 +357,7 @@ add_reason() {
 
 tailscale_json() {
   command -v jq >/dev/null 2>&1 || return 1
-  tailscale status --json 2>/dev/null
+  fm_tailscale status --json 2>/dev/null
 }
 
 # Returns 0 with the node's identity resolved, 1 when this host was READ and
