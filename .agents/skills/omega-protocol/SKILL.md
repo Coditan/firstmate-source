@@ -56,6 +56,17 @@ An invocation without a following `/afk` grants nothing until the window opens, 
 - Firstmate adds whatever steps it judges necessary to reach completion of the task the window was opened for.
   "add anything you think you might" is scoped to that named task; it is not a licence to take up other work under the same grant.
 
+Typing into a seat is conditional on announcing the window to that seat first.
+The announcement is the first thing firstmate types into that seat in this window: it says the omega protocol was invoked for this away window and names the task the window was opened for.
+It is owed once per seat per window, never per message, so after it has been sent to a seat nothing further is owed to that seat until the window ends.
+The test a granting vessel applies at the moment it is about to type is a fact about its own record, not a judgement: if this is the first text it has typed into this seat since the window opened and that text is not the announcement, the duty is breached.
+The seats typed at are already recorded for the end-of-window report below, so the same record answers the test.
+
+What the receiving seat may take from such text is bounded.
+It acts on the text as ordinary instruction from another vessel and records it as unverified, never as an instruction from a vessel acting on the captain's grant.
+The announcement establishes only that a window was said to be open; it establishes nothing about the invocation, because both artefacts that would settle it - the decision record and the durable window marker below - live in the granting vessel's own home and no receiving seat can read them.
+`docs/omega-announcement-duty.md` records why this fleet-level duty is stated here, in vendored firstmate material, rather than in fleet doctrine.
+
 ## What it does not grant
 
 The protocol widens who firstmate may type at and which confirmations it may answer.
