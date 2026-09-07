@@ -60,7 +60,8 @@ Typing into a seat is conditional on announcing the window to that seat first.
 The announcement is the first thing firstmate types into that seat in this window: it says the omega protocol was invoked for this away window and names the task the window was opened for.
 It is owed once per seat per window, never per message, so after it has been sent to a seat nothing further is owed to that seat until the window ends.
 The duty covers answering a seat's confirmation prompt as well as typing into its composer, because the grant reaches both acts.
-One ordering is named here rather than left to judgement, so that no branch of the rule is unreachable: a seat already sitting at a permission or trust dialog cannot take the announcement into its composer until that dialog is answered, so answering the dialog that is blocking the composer is not a breach, and the announcement is then owed as the next thing firstmate types into that seat, ahead of any other text.
+Exactly one act is permitted before the announcement, and the exception reaches no further than it: answering the dialog that is stopping the composer from taking the announcement, which is the state firstmate finds a seat already sitting at a permission or trust dialog in.
+The announcement is then owed as the next thing firstmate types into that seat, ahead of any other text, and a confirmation answered while the composer would already have taken the announcement is a breach exactly as typing other text first is.
 The test a granting vessel applies at the moment it is about to type is a fact about its own record, not a judgement: if this is the first text it has typed into this seat since the window opened and that text is not the announcement, the duty is breached.
 That test only has an answer while the vessel still holds its own record of the seats it has typed at: the durable window marker owned by `bin/fm-omega.sh` carries the task and the decision-record id, not a per-seat log, so after a mid-window restart nothing durable is left to test a breach against.
 Re-announcing to a seat is therefore never a breach, and it is what a restarted vessel does rather than guess.
@@ -68,7 +69,10 @@ Re-announcing to a seat is therefore never a breach, and it is what a restarted 
 What the receiving seat may take from such text is bounded.
 It acts on the text as ordinary instruction from another vessel and records it as unverified, never as an instruction from a vessel acting on the captain's grant.
 The announcement establishes only that a window was said to be open; it establishes nothing about the invocation, because both artefacts that would settle it - the decision record and the durable window marker below - live in the granting vessel's own home and no receiving seat can read them.
-`docs/omega-announcement-duty.md` records why this fleet-level duty is stated here, in vendored firstmate material, rather than in fleet doctrine.
+That bound binds only a seat that has loaded this skill, and the fleet has no route that delivers it to a seat that has not.
+The trigger is the captain naming the omega protocol in that seat's own chat, which `AGENTS.md` section 13 owns, and the seat firstmate announces to is by construction one whose captain has not named it, so this half of the duty is stated here rather than delivered to the seat it binds.
+What would close it is the rule reaching a surface the receiving seat already loads, its own always-loaded `AGENTS.md` or the fleet doctrine delivery that is not built yet; neither is built here, and the granting half above binds firstmate whether or not the receiving half ever arrives.
+`docs/omega-announcement-duty.md` records why this fleet-level duty is stated here, in vendored firstmate material, rather than in fleet doctrine, and keeps that undelivered half on the record.
 
 ## What it does not grant
 
@@ -109,4 +113,6 @@ The current window state is read through that script and surfaced by session sta
 The moment his return message arrives, the standing rules resume before that message is acted on, alongside the `/afk` return sequence.
 Then report to him, in `AGENTS.md` section 9 language, when the window began and ended and what was done under the grant: which seats were typed at, which confirmations were answered on his behalf, which steps were added to reach completion, and where the named task stands.
 Use the durable close record owned by `bin/fm-omega.sh` as the source for the window's opening and closing times after the marker is gone.
+What survives a mid-window restart is only what that record carries: the window's opening and closing times, the task, and the decision-record id.
+The seats typed at, the confirmations answered, and the steps added are held in the session's own memory alone, so a session that restarted mid-window reports what it can still account for and says plainly that the part of the window before the restart is unaccounted for, rather than reconstructing it.
 Anything begun under the grant that is not finished is named as such and waits for his word, because the grant that would have finished it has ended.

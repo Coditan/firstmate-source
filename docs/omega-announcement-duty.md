@@ -13,6 +13,12 @@ Each of those pointers tells the session to read the file in the fleet repositor
 The captain's decision survives that correction, and it is recorded here re-checked against the corrected premise rather than quietly patched.
 Delivery rather than mention is what made the vendored skill the only route that reaches a vessel: a rule written into the fleet's own rulebook binds nobody who never loads it, while a rule written into the skill is read by every vessel that takes the pin.
 
+This placement delivers one half of the duty and not the other, and that is recorded here rather than left to be found later.
+The granting vessel loads the skill, because the captain names the protocol in its own chat, so the duty to announce reaches the vessel it binds.
+The receiving seat does not load it: the trigger in `AGENTS.md` section 13 is the captain naming the protocol in that seat's own chat, and the seat firstmate announces to is by construction one whose captain has not named it, so the clause telling it to record the text as unverified reaches nobody.
+That is the same failure this document argues against, one layer down: the rule is written into the skill because doctrine reaches no session, and the half of it aimed at the receiving seat reaches no seat for the same class of reason.
+Closing it needs the rule to reach a surface the receiving seat already loads, its own always-loaded `AGENTS.md` or the fleet doctrine delivery that is not built yet; this change builds neither, and it does not present the half it could not deliver as delivered.
+
 The objection, recorded because the choice was not free: this writes a fleet-level rule into firstmate's own instruction surface rather than the fleet's, which is arguably the wrong home for it and sets a precedent for putting fleet doctrine there whenever doctrine delivery is inconvenient.
 The captain was told this before choosing.
 If fleet doctrine delivery is ever built, this duty is a candidate to move, and moving it means the skill keeps a cross-reference rather than a second copy.
