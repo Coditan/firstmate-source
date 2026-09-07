@@ -93,7 +93,7 @@ run_subject() {  # <home> <mode...>
   FAKE_CLAUDE_STORE="$home/installed.json" \
   FAKE_CLAUDE_INSTALL_LOG="$home/install.log" \
   PATH="$home/bin:$PATH" \
-    "$SUBJECT" "$@" 2>&1
+    "${SUBJECT_OVERRIDE:-$SUBJECT}" "$@" 2>&1
 }
 
 command -v jq >/dev/null 2>&1 || { pass "fm-skills-lock: skipped, jq is required by the fixture harness"; exit 0; }
@@ -222,3 +222,107 @@ assert_not_contains "$out" "could not be read" \
 basis=$(jq -r '.plugins[] | .versionBasis // ""' "$ROOT/skills-lock.json")
 [ -n "$basis" ] || fail "every locked plugin must record the basis of its pinned version"
 pass "fm-skills-lock: this repository's manifest decodes and every pin states its basis"
+
+# --- the negative controls: both failure modes observed failing ---------------
+#
+# WHY THESE ARE HERE RATHER THAN IN A ONE-OFF RUN SOMEONE DID ONCE. Every claim
+# this change makes rests on the check reporting when a seat is short, and a
+# check nobody has watched fail is worth nothing. So each control is a MUTANT:
+# it breaks the subject in the exact way that would make its silence a lie, runs
+# the same fixture, and asserts the finding disappears. A later edit that makes
+# the check unable to go red fails here, instead of leaving a seat quietly
+# unreported.
+#
+# The assertions are made against what the mutant STOPS saying and what it starts
+# saying instead, never against a substring the healthy output already contains.
+# A control that plants the one shape the pattern already matched passes without
+# measuring anything, which is the failure this fleet has been caught by before.
+
+# mutant <name> <old-TAB-new>...: a copy of the subject with each replacement
+# applied, at its own path. It fails loudly when a replacement does not match, so
+# a mutant cannot silently degrade into an unmodified copy - which would satisfy
+# every precondition below for entirely the wrong reason.
+mutant() {
+  local name=$1 dir
+  shift
+  dir="$TMP_ROOT/mutant-$name"
+  mkdir -p "$dir"
+  cp "$SUBJECT" "$dir/fm-skills-lock.sh"
+  chmod +x "$dir/fm-skills-lock.sh"
+  python3 - "$dir/fm-skills-lock.sh" "$@" <<'PY' || fail "mutant $name: a replacement did not match the subject"
+import sys
+path = sys.argv[1]
+source = open(path, encoding="utf-8").read()
+for pair in sys.argv[2:]:
+    old, new = pair.split("\t", 1)
+    if old not in source:
+        raise SystemExit("no match for: " + old)
+    source = source.replace(old, new, 1)
+open(path, "w", encoding="utf-8").write(source)
+PY
+  printf '%s\n' "$dir/fm-skills-lock.sh"
+}
+
+# `fail` inside the command substitution above exits only that subshell, so the
+# caller must confirm it actually got a mutant. Without this, a stale mutation
+# falls back to the unmodified subject, and the control still goes red but blames
+# the wrong thing.
+require_mutant() {
+  [ -n "$1" ] && [ -x "$1" ] || fail "$2: the mutant was not produced, so this control measured nothing"
+}
+
+# CONTROL 1: a seat that IS short of an expected plugin skill.
+# The mutant classifies a missing plugin as ok, which is what a check that
+# cannot tell absence from health would do.
+HOME_NC1=$(make_home control-missing)
+write_lock "$HOME_NC1/skills-lock.json" 1.2.3
+printf '[]\n' > "$HOME_NC1/installed.json"
+
+healthy=$(FAKE_CLAUDE_INSTALL_RC=1 run_subject "$HOME_NC1" --force)
+assert_contains "$healthy" "SKILLS_LOCK:" \
+  "control 1 precondition: the healthy subject must report the short seat"
+
+printf '[]\n' > "$HOME_NC1/installed.json"
+rm -f "$HOME_NC1/state/skills-lock.checked" "$HOME_NC1/install.log"
+MUTANT1=$(mutant missing-reads-ok \
+  "$(printf 'READINGS+=("$id|missing|$SEAT does not have\tREADINGS+=("$id|ok|$SEAT does not have')")
+require_mutant "$MUTANT1" "control 1"
+broken=$(SUBJECT_OVERRIDE="$MUTANT1" FAKE_CLAUDE_INSTALL_RC=1 run_subject "$HOME_NC1" --force)
+assert_not_contains "$broken" "SKILLS_LOCK:" \
+  "control 1: the mutant must go silent, or this control is not measuring the reporting path"
+[ "$healthy" != "$broken" ] \
+  || fail "control 1: healthy and mutant output are identical, so nothing was measured"
+pass "fm-skills-lock: negative control - a short seat goes unreported the moment the check stops classifying it"
+
+# CONTROL 2: a seat whose plugin list cannot be read.
+# The mutant drops the unmeasured state, so an unreadable list falls through to
+# the record lookup, finds nothing, and is reported as a missing plugin. That is
+# the specific lie the third state exists to refuse, and the mutant is made to
+# commit it: it goes on to install against a reading it never took.
+HOME_NC2=$(make_home control-unmeasured)
+write_lock "$HOME_NC2/skills-lock.json" 1.2.3
+installed_with "$HOME_NC2/installed.json" demo-skills@demo-market 1.2.3 true
+
+healthy=$(FAKE_CLAUDE_LIST_RC=3 run_subject "$HOME_NC2" --force)
+assert_contains "$healthy" "could not be established" \
+  "control 2 precondition: the healthy subject must report an unreadable list as unmeasured"
+assert_not_contains "$healthy" "does not have" \
+  "control 2 precondition: the healthy subject must not call an unreadable list a missing plugin"
+[ ! -f "$HOME_NC2/install.log" ] \
+  || fail "control 2 precondition: the healthy subject must not install against an unreadable list"
+
+rm -f "$HOME_NC2/state/skills-lock.checked"
+MUTANT2=$(mutant unreadable-reads-empty "$(printf '      error)
+        READINGS+=("$id|unmeasured|whether $SEAT carries $id could not be established: $INSTALLED_ERROR")
+        continue
+        ;;\t      error)
+        ;;')")
+require_mutant "$MUTANT2" "control 2"
+broken=$(SUBJECT_OVERRIDE="$MUTANT2" FAKE_CLAUDE_LIST_RC=3 run_subject "$HOME_NC2" --force)
+assert_contains "$broken" "does not have" \
+  "control 2: the mutant must report the unreadable seat as missing, or this control is not measuring the unmeasured path"
+assert_not_contains "$broken" "could not be established" \
+  "control 2: the mutant must lose the unmeasured wording"
+assert_grep 'demo-skills@demo-market' "$HOME_NC2/install.log" \
+  "control 2: the mutant must install against a reading it never took - that is the harm this state prevents"
+pass "fm-skills-lock: negative control - an unreadable plugin list becomes a false missing the moment the third state is removed"
