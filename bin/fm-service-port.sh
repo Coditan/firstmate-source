@@ -361,19 +361,24 @@ add_reason() {
 # the subshell that captured it.
 TAILSCALE_STATUS_JSON=""
 TAILSCALE_STATUS_ERR=""
+TAILSCALE_PREFLIGHT_ERR=""
+TAILSCALE_CLIENT_RAN=0
 
 read_tailscale_status() {
   local err rc
   TAILSCALE_STATUS_JSON=""
   TAILSCALE_STATUS_ERR=""
+  TAILSCALE_PREFLIGHT_ERR=""
+  TAILSCALE_CLIENT_RAN=0
   command -v jq >/dev/null 2>&1 || {
-    TAILSCALE_STATUS_ERR="jq is not installed here, so nothing could parse it"
+    TAILSCALE_PREFLIGHT_ERR="jq is not installed here, so nothing on this host could parse a status"
     return 1
   }
   err=$(mktemp "${TMPDIR:-/tmp}/fm-service-port-tailscale.XXXXXX") || {
-    TAILSCALE_STATUS_ERR="no temporary file could be made to capture what the client said"
+    TAILSCALE_PREFLIGHT_ERR="no temporary file could be made here to hold the client's output, so the status was never read"
     return 1
   }
+  TAILSCALE_CLIENT_RAN=1
   TAILSCALE_STATUS_JSON=$(fm_tailscale status --json 2>"$err")
   rc=$?
   # The client's text is carried verbatim apart from being folded onto one line
@@ -385,17 +390,33 @@ read_tailscale_status() {
 }
 
 # THREE things can leave a status unreadable, and the third is firstmate's own
-# choice of socket, so this names the socket that was dialled and repeats what
-# the client said rather than handing the reader a list of causes to guess
-# between. The failure this exists for looks like a daemon that is down and is
-# not one: the daemon is running and listening somewhere else.
+# choice of socket, so a reason that named only the other two sent the last
+# reader past the actual cause. Each path may therefore claim only what is true
+# OF ITSELF, which is why the attribution is gated on whether the client was
+# actually invoked rather than attached to every failure:
+#
+#   - stopped before the client ran: neither a dial nor a client sentence. The
+#     socket was never opened and no client was ever started.
+#   - dialled and the client errored: both. This is the case the whole cluster
+#     exists to make legible - a vessel whose image starts tailscaled on a
+#     socket that is not the one we resolved.
+#   - dialled and answered something unusable: the socket, and no invented
+#     client message where there was none.
+#
+# Vague costs an afternoon, false costs trust in every reason line this script
+# emits. A reason line that is known to fabricate its attribution poisons the
+# ones that are telling the truth.
 tailscale_read_detail() {
   local dialled
+  if [ "$TAILSCALE_CLIENT_RAN" -eq 0 ]; then
+    printf '%s' "$TAILSCALE_PREFLIGHT_ERR"
+    return 0
+  fi
   dialled=$(fm_tailscale_dialled)
   if [ -n "$TAILSCALE_STATUS_ERR" ]; then
     printf '%s; the client said: %s' "$dialled" "$TAILSCALE_STATUS_ERR"
   else
-    printf '%s; the client said nothing' "$dialled"
+    printf '%s, and said nothing about why' "$dialled"
   fi
 }
 

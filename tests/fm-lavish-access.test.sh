@@ -1067,6 +1067,44 @@ assert_contains "$undeclared" "no socket is declared" \
 : > "$FM_TEST_TS_SERVE_LOG"
 pass "an unreadable status names the socket that was dialled and what the client said"
 
+# The other half of that: a cause that stopped the read BEFORE any client ran
+# may claim neither a dial nor a client sentence. A PATH holding everything the
+# allocator needs except jq is the real shape of that case, and the run has to
+# survive it - the point is the sentence it emits, not a crash.
+NOJQ_BIN="$TMP_ROOT/nojq-bin"
+mkdir -p "$NOJQ_BIN"
+# Mirrored from this host's own PATH rather than from a list of tools the
+# allocator is believed to use, because a list would make this case fail as a
+# missing symlink the day the script reaches for one more utility - which says
+# nothing about the sentence under test.
+for path_dir in $(printf '%s\n' "$PATH" | tr ':' '\n'); do
+  [ -d "$path_dir" ] || continue
+  for tool_path in "$path_dir"/*; do
+    tool=${tool_path##*/}
+    [ "$tool" = jq ] && continue
+    [ -x "$tool_path" ] || continue
+    [ -e "$NOJQ_BIN/$tool" ] && continue
+    ln -s "$tool_path" "$NOJQ_BIN/$tool"
+  done
+done
+cp "$FAKEBIN/tailscale" "$NOJQ_BIN/tailscale"
+PATH="$NOJQ_BIN" command -v jq >/dev/null 2>&1 \
+  && fail "this case only means anything while jq is genuinely absent from that PATH"
+nojq=$(PATH="$NOJQ_BIN" FM_TEST_TS_MODE=running FM_TAILSCALE_SOCKET=/tmp/never-dialled.sock \
+  FM_HOME="$HOME_UR" FM_SERVICE_PORT_RANGE=4894-4895 "$ROOT/bin/fm-service-port.sh" lavish)
+expect_code 0 "$?" "a host that cannot parse a status still gets a local board"
+[ "$(field reachability "$nojq")" = untested ] \
+  || fail "nothing was read, so nothing was established, got '$(field reachability "$nojq")'"
+assert_contains "$nojq" "jq is not installed here" \
+  "the cause that actually stopped the read is the one named"
+assert_not_contains "$nojq" "/tmp/never-dialled.sock" \
+  "a socket that was never opened is not claimed as dialled"
+assert_not_contains "$nojq" "the client said" \
+  "and a client that was never started is not quoted"
+: > "$FM_TEST_TS_SERVE_STATE"
+: > "$FM_TEST_TS_SERVE_LOG"
+pass "a read that stopped before the client ran claims neither a dial nor a client sentence"
+
 # A vessel that really has no tailnet is a different fact, and still says so.
 none_at_all=$(FM_TEST_TS_MODE=stopped FM_HOME="$HOME_UR" \
   FM_SERVICE_PORT_RANGE=4888-4889 "$ROOT/bin/fm-service-port.sh" lavish)
@@ -2054,11 +2092,17 @@ grep -qx "$y_port" "$FM_TEST_TS_SERVE_STATE" || fail "the open should have publi
 # port stays published, which is the one answer that means the withdrawal failed
 # rather than that there was nothing to withdraw.
 y_stop=$(FM_TEST_TS_MODE=userspace FM_TEST_TS_SERVE=broken FM_HOME="$HOME_Y" \
+  FM_TAILSCALE_SOCKET=/tmp/stop-note.sock \
   FM_SERVICE_PORT_RANGE=4826-4827 "$ROOT/bin/fm-lavish.sh" stop 2>&1)
 expect_code 0 "$?" "a failed withdrawal must be reported, never turned into a refusal to stop"
 assert_contains "$y_stop" "could not be withdrawn" \
   "a tailnet endpoint left standing must be said out loud, not left for the captain to find"
 assert_contains "$y_stop" "$y_port" "the report names the port still answering"
+# The command handed over has to be the one that works on THIS vessel: a bare
+# `tailscale` reaches nothing where the image declares its own socket, so advice
+# that dropped the socket would fail on the vessel it names.
+assert_contains "$y_stop" "tailscale --socket=/tmp/stop-note.sock serve --http=$y_port off" \
+  "the withdrawal the captain is asked to finish names the socket this vessel's client needs"
 assert_contains "$y_stop" "stopped" "the board really did stop, and the run says so"
 grep -qx "$y_port" "$FM_TEST_TS_SERVE_STATE" \
   || fail "this case only means anything while the withdrawal genuinely did not take"
