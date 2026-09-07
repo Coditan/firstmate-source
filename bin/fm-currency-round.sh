@@ -64,6 +64,19 @@
 #                                   stale passed its own currency check. A home
 #                                   with no firstmate.lock is not pin-delivered
 #                                   and is skipped by name rather than faulted.
+#   plugin:<id>          installed  the third-party plugin skills the fleet
+#                                   expects every seat to carry, named in
+#                                   skills-lock.json's "plugins" object. The
+#                                   separate `plugin-skills` subject is not a
+#                                   plugin: it reports that the expected set
+#                                   itself could not be read.
+#                                   bin/fm-skills-lock.sh owns the reading and
+#                                   installs nothing; this round is its cadence,
+#                                   and a short seat stays short until a person
+#                                   runs the command the finding names. A seat
+#                                   with no `claude` on PATH has no plugin
+#                                   mechanism and is skipped by name rather than
+#                                   faulted.
 #   tool:<name>          installed  the runtime tools nothing else updates. Each
 #                                   declares its own reference: a latest upstream
 #                                   release, a version this repo pins, or the
@@ -448,6 +461,49 @@ read_seat_can_update() {
   reading seat-can-update installed ok "this checkout is on $default, clean, and has an origin to take an update from"
 }
 
+# The third-party plugin skills the fleet expects this seat to carry.
+# bin/fm-skills-lock.sh owns the whole measurement and answers one
+# "<id>|<state>|<detail>" line per locked entry, so this is the seam and never a
+# second implementation that could disagree with what a hand-run check reports.
+#
+# missing, disabled, and version-differs are all reported as behind: from this
+# round's side they are one thing, a seat that is short of what the fleet
+# expects, and the detail says which. skipped and unmeasured are passed through
+# unchanged, because a seat that could not be read must never render as a seat
+# that is fine.
+#
+# One subject the check answers with is NOT a plugin: it reports a failure to
+# read the expected set itself under the reserved id "plugin-skills", which has
+# no @ and so can never be a plugin id. That one keeps its own subject, because
+# "plugin:plugin-skills" would send a reader looking for a plugin that does not
+# exist and cannot be installed. It is the same subject this function's own
+# could-not-complete branch uses, since both mean the expected set was never
+# established.
+read_plugin_skills() {
+  local out status=0 line id state detail subject
+  out=$(bounded "$SCRIPT_DIR/fm-skills-lock.sh" --reading 2>/dev/null) || status=$?
+  if [ "$status" -ne 0 ]; then
+    reading plugin-skills installed unmeasured \
+      "the expected-plugin-skill check could not complete (exit $status; it may have exceeded ${STEP_TIMEOUT}s)"
+    return 0
+  fi
+  [ -n "$out" ] || return 0
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    id=${line%%|*}
+    state=${line#*|}
+    detail=${state#*|}
+    state=${state%%|*}
+    subject="plugin:$id"
+    [ "$id" != plugin-skills ] || subject=plugin-skills
+    case "$state" in
+      ok|skipped|unmeasured) reading "$subject" installed "$state" "$detail" ;;
+      missing|disabled|version-differs) reading "$subject" installed behind "$detail" ;;
+      *) reading "$subject" installed unmeasured "the expected-plugin-skill check answered in a shape this round does not know: $line" ;;
+    esac
+  done <<< "$out"
+}
+
 read_tools() {
   local entry tool kind ref installed latest rel rc
   while IFS= read -r entry; do
@@ -535,6 +591,7 @@ run_round() {
   read_instruction_surface
   read_pin_age
   read_seat_can_update
+  read_plugin_skills
   read_tools
 }
 
