@@ -280,7 +280,7 @@ field() {
   # seat cannot unset what the runtime exported into PID 1, so the empty value
   # has to mean "resolve nothing" rather than falling through to that
   # declaration - otherwise the override can redirect but never stand down.
-  out=$(FM_TAILSCALE_SOCKET= VESSEL_TAILNET_SOCKET=/tmp/vessel.sock fm_tailscale_socket) && exit 9
+  out=$(FM_TAILSCALE_SOCKET='' VESSEL_TAILNET_SOCKET=/tmp/vessel.sock fm_tailscale_socket) && exit 9
   [ -z "$out" ] || exit 10
 
   # The resolution is only worth anything if it reaches the client, so this
@@ -291,6 +291,8 @@ field() {
     > "$CLI_SOCK_TMP/tailscale"
   chmod +x "$CLI_SOCK_TMP/tailscale"
   export FM_TEST_TS_ARGV="$CLI_SOCK_TMP/argv"
+  # shellcheck disable=SC2030 # The PATH change is deliberately confined to this
+  # subshell so the stub tailscale cannot leak into later assertions.
   export PATH="$CLI_SOCK_TMP:$PATH"
 
   FM_TAILSCALE_SOCKET=/tmp/explicit.sock fm_tailscale status --json || exit 5
@@ -301,7 +303,7 @@ field() {
 
   # The standing-down override has to reach the client as no --socket at all,
   # which is the only thing that hands the client back its own default.
-  FM_TAILSCALE_SOCKET= VESSEL_TAILNET_SOCKET=/tmp/vessel.sock fm_tailscale status --json || exit 11
+  FM_TAILSCALE_SOCKET='' VESSEL_TAILNET_SOCKET=/tmp/vessel.sock fm_tailscale status --json || exit 11
   [ "$(cat "$FM_TEST_TS_ARGV")" = "status --json" ] || exit 12
   exit 0
 )
@@ -310,6 +312,8 @@ pass "the tailscale client socket is read from where it is declared, never writt
 
 FAKEBIN=$(fm_fakebin "$TMP_ROOT")
 make_fake_tailscale "$FAKEBIN"
+# shellcheck disable=SC2031 # The earlier PATH change was scoped to its subshell
+# on purpose; this is the suite's own PATH, not a lost modification.
 PATH="$FAKEBIN:$PATH"
 export PATH
 export FM_TEST_TS_MODE=running
