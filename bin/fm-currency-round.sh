@@ -68,8 +68,10 @@
 #                                   expects every seat to carry, named in
 #                                   skills-lock.json's "plugins" object.
 #                                   bin/fm-skills-lock.sh owns the reading and
-#                                   the install; this round is its cadence. A
-#                                   seat with no `claude` on PATH has no plugin
+#                                   installs nothing; this round is its cadence,
+#                                   and a short seat stays short until a person
+#                                   runs the command the finding names. A seat
+#                                   with no `claude` on PATH has no plugin
 #                                   mechanism and is skipped by name rather than
 #                                   faulted.
 #   tool:<name>          installed  the runtime tools nothing else updates. Each
@@ -459,8 +461,7 @@ read_seat_can_update() {
 # The third-party plugin skills the fleet expects this seat to carry.
 # bin/fm-skills-lock.sh owns the whole measurement and answers one
 # "<id>|<state>|<detail>" line per locked entry, so this is the seam and never a
-# second implementation that could disagree with what the convergence pass at
-# session start actually did.
+# second implementation that could disagree with what a hand-run check reports.
 #
 # missing, disabled, and version-differs are all reported as behind: from this
 # round's side they are one thing, a seat that is short of what the fleet

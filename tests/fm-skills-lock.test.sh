@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
-# Behavior tests for the expected-plugin-skill lock, install, and check.
+# Behavior tests for the expected-plugin-skill lock and check.
 #
-# Every harness call is replaced by a fake `claude` whose installed set is a
-# file the test writes, so nothing here reaches a marketplace and nothing
-# touches this seat's real plugins. The fake is shaped like the real command
-# that was measured on 2026-09-07: `plugin list --json` prints an array of
-# objects carrying id, version and enabled, and `plugin install` appends to that
-# set. A tidied fixture would pass while the real parse failed.
+# The subject detects and reports; it installs nothing. So every harness call is
+# replaced by a fake `claude` that answers `plugin list --json` from a file the
+# test writes, and answers NOTHING else: any other subcommand is recorded and
+# refused, so a subject that ever tried to change this seat fails the suite
+# loudly instead of passing quietly. The list answer is shaped like the real
+# command measured on 2026-09-07 - an array of objects carrying id, version and
+# enabled - because a tidied fixture would pass while the real parse failed.
 set -u
 
 # shellcheck source=tests/lib.sh disable=SC1091
@@ -27,7 +28,10 @@ make_home() {
   mkdir -p "$home/state" "$home/bin"
   cat > "$home/bin/claude" <<'SH'
 #!/usr/bin/env bash
-# Fake harness. FAKE_CLAUDE_STORE names the installed-set file.
+# Fake harness. FAKE_CLAUDE_STORE names the installed-set file. Reading the
+# plugin list is the ONLY thing this seat allows: everything else is written to
+# FAKE_CLAUDE_UNEXPECTED_LOG and refused, so a subject that reaches for install,
+# enable, or a marketplace leaves evidence the suite asserts on.
 set -u
 store=${FAKE_CLAUDE_STORE:?}
 case "${1:-} ${2:-}" in
@@ -36,24 +40,21 @@ case "${1:-} ${2:-}" in
     [ "${FAKE_CLAUDE_LIST_GARBAGE:-0}" = 0 ] || { printf 'not json at all\n'; exit 0; }
     cat "$store"
     ;;
-  "plugin marketplace")
-    exit 0
+  *)
+    printf '%s\n' "$*" >> "${FAKE_CLAUDE_UNEXPECTED_LOG:-/dev/null}"
+    exit 64
     ;;
-  "plugin install")
-    id=$3
-    [ "${FAKE_CLAUDE_INSTALL_RC:-0}" = 0 ] || exit "$FAKE_CLAUDE_INSTALL_RC"
-    printf '%s\n' "$id" >> "${FAKE_CLAUDE_INSTALL_LOG:-/dev/null}"
-    tmp=$(mktemp)
-    jq --arg id "$id" --arg v "${FAKE_CLAUDE_INSTALL_VERSION:-1.2.3}" \
-      '. + [{id: $id, version: $v, scope: "user", enabled: true}]' "$store" > "$tmp"
-    mv "$tmp" "$store"
-    ;;
-  *) exit 64 ;;
 esac
 SH
   chmod +x "$home/bin/claude"
   printf '[]\n' > "$home/installed.json"
   printf '%s\n' "$home"
+}
+
+# The subject may never run a harness command other than the list read.
+assert_no_harness_change() {  # <home> <why>
+  [ ! -f "$1/unexpected-claude.log" ] || \
+    fail "$2: the subject invoked the harness beyond reading the list: $(cat "$1/unexpected-claude.log")"
 }
 
 write_lock() {  # <path> <version>
@@ -91,7 +92,7 @@ run_subject() {  # <home> <mode...>
   FM_STATE_OVERRIDE="$home/state" \
   FM_SKILLS_LOCK_FILE="$home/skills-lock.json" \
   FAKE_CLAUDE_STORE="$home/installed.json" \
-  FAKE_CLAUDE_INSTALL_LOG="$home/install.log" \
+  FAKE_CLAUDE_UNEXPECTED_LOG="$home/unexpected-claude.log" \
   PATH="$home/bin:$PATH" \
     "${SUBJECT_OVERRIDE:-$SUBJECT}" "$@" 2>&1
 }
@@ -103,73 +104,67 @@ command -v jq >/dev/null 2>&1 || { pass "fm-skills-lock: skipped, jq is required
 HOME_OK=$(make_home satisfied)
 write_lock "$HOME_OK/skills-lock.json" 1.2.3
 installed_with "$HOME_OK/installed.json" demo-skills@demo-market 1.2.3 true
-out=$(run_subject "$HOME_OK" --force)
+out=$(run_subject "$HOME_OK")
 [ -z "$out" ] || fail "a seat carrying the expected set must print nothing, got: $out"
 pass "fm-skills-lock: a seat with the expected set installed reports nothing"
 
 out=$(run_subject "$HOME_OK" --status)
 assert_contains "$out" "state=ok" "the status listing must still show the satisfied reading"
 
-# --- a short seat is reported, and the report names the seat -----------------
+# --- a short seat is reported, and the report names the seat and the command --
 #
 # THE NEGATIVE CONTROL. The check must be observed producing this line, not
 # assumed to: a check that cannot go red is a check whose silence means nothing.
-# It runs against a manifest whose entry is absent from the installed set and a
-# harness whose install fails, so the missing case survives convergence and
-# reaches the report.
 HOME_SHORT=$(make_home short)
 write_lock "$HOME_SHORT/skills-lock.json" 1.2.3
 printf '[]\n' > "$HOME_SHORT/installed.json"
-out=$(FAKE_CLAUDE_INSTALL_RC=1 run_subject "$HOME_SHORT" --force)
+out=$(run_subject "$HOME_SHORT")
 assert_contains "$out" "SKILLS_LOCK:" "a seat short of an expected plugin skill must report it"
 assert_contains "$out" "demo-skills@demo-market" "the report must name the missing skill"
 assert_contains "$out" "$HOME_SHORT" "the report must name the seat, not only the skill"
-pass "fm-skills-lock: a short seat is reported by seat and by skill"
+assert_contains "$out" "claude plugin marketplace add someone/demo-market" \
+  "the report must name the marketplace command an operator would run"
+assert_contains "$out" "claude plugin install demo-skills@demo-market" \
+  "the report must name the install command an operator would run"
+assert_no_harness_change "$HOME_SHORT" "a short seat is reported, never repaired"
+pass "fm-skills-lock: a short seat is reported by seat and by skill, and the line carries the command"
 
-# --- installing what is missing, and doing it twice --------------------------
+# --- running twice reports the same thing and changes nothing ----------------
+#
+# There is no install to be idempotent about; what must hold is that this is a
+# pure reader. Two runs against an unchanged seat answer identically, leave the
+# seat's installed set byte-identical, write no state, and never call the
+# harness for anything but the list.
+HOME_TWICE=$(make_home twice)
+write_lock "$HOME_TWICE/skills-lock.json" 1.2.3
+printf '[]\n' > "$HOME_TWICE/installed.json"
+before_set=$(cat "$HOME_TWICE/installed.json")
+first=$(run_subject "$HOME_TWICE")
+second=$(run_subject "$HOME_TWICE")
+[ -n "$first" ] || fail "the first run must report the short seat, got nothing"
+[ "$first" = "$second" ] || fail "two runs must report the same thing, got:
+$first
+---
+$second"
+[ "$before_set" = "$(cat "$HOME_TWICE/installed.json")" ] \
+  || fail "running the check must leave this seat's installed set byte-identical"
+[ -z "$(ls -A "$HOME_TWICE/state" 2>/dev/null)" ] \
+  || fail "the check must write no state, found: $(ls -A "$HOME_TWICE/state")"
+assert_no_harness_change "$HOME_TWICE" "running twice"
+pass "fm-skills-lock: running twice reports the same thing and changes nothing"
 
-HOME_CONV=$(make_home converge)
-write_lock "$HOME_CONV/skills-lock.json" 1.2.3
-printf '[]\n' > "$HOME_CONV/installed.json"
-out=$(run_subject "$HOME_CONV" --force)
-[ -z "$out" ] || fail "a successful convergence must report nothing, got: $out"
-assert_grep 'demo-skills@demo-market' "$HOME_CONV/install.log" \
-  "the first run must install the missing plugin skill"
-first_set=$(cat "$HOME_CONV/installed.json")
-first_installs=$(wc -l < "$HOME_CONV/install.log")
-
-out=$(run_subject "$HOME_CONV" --force)
-[ -z "$out" ] || fail "the second run must report nothing, got: $out"
-second_installs=$(wc -l < "$HOME_CONV/install.log")
-[ "$first_installs" = "$second_installs" ] \
-  || fail "the second run must attempt no install (attempts went $first_installs -> $second_installs)"
-[ "$first_set" = "$(cat "$HOME_CONV/installed.json")" ] \
-  || fail "the second run must leave the installed set byte-identical"
-pass "fm-skills-lock: installing twice changes nothing the second time"
-
-# --- the cadence gate --------------------------------------------------------
-
-HOME_CAD=$(make_home cadence)
-write_lock "$HOME_CAD/skills-lock.json" 1.2.3
-printf '[]\n' > "$HOME_CAD/installed.json"
-printf '%s\n' "$(date +%s)" > "$HOME_CAD/state/skills-lock.checked"
-out=$(FAKE_CLAUDE_INSTALL_RC=1 run_subject "$HOME_CAD")
-[ -z "$out" ] || fail "a run inside the cadence window must do nothing, got: $out"
-[ ! -f "$HOME_CAD/install.log" ] || fail "a run inside the cadence window must attempt no install"
-pass "fm-skills-lock: the cadence gate holds without --force"
-
-# --- cannot tell is never installed, and never silent ------------------------
+# --- cannot tell is never silent, and never a value --------------------------
 
 HOME_BLIND=$(make_home unreadable)
 write_lock "$HOME_BLIND/skills-lock.json" 1.2.3
-out=$(FAKE_CLAUDE_LIST_RC=3 run_subject "$HOME_BLIND" --force)
+out=$(FAKE_CLAUDE_LIST_RC=3 run_subject "$HOME_BLIND")
 assert_contains "$out" "could not be established" \
   "a seat whose plugin list cannot be read must say so rather than report it as missing"
 assert_not_contains "$out" "does not have" \
   "an unreadable list must never be rendered as a missing plugin"
-[ ! -f "$HOME_BLIND/install.log" ] || fail "an unreadable list must never trigger an install"
+assert_no_harness_change "$HOME_BLIND" "an unreadable list"
 
-out=$(FAKE_CLAUDE_LIST_GARBAGE=1 run_subject "$HOME_BLIND" --force)
+out=$(FAKE_CLAUDE_LIST_GARBAGE=1 run_subject "$HOME_BLIND")
 assert_contains "$out" "shape this check does not know" \
   "a plugin list that does not parse must be reported as unmeasured"
 pass "fm-skills-lock: a reading that could not be taken is never rendered as a value"
@@ -188,29 +183,51 @@ pass "fm-skills-lock: a seat with no harness is skipped by name"
 HOME_VER=$(make_home version)
 write_lock "$HOME_VER/skills-lock.json" 1.2.3
 installed_with "$HOME_VER/installed.json" demo-skills@demo-market 9.9.9 true
-out=$(run_subject "$HOME_VER" --force)
+out=$(run_subject "$HOME_VER")
 assert_contains "$out" "9.9.9" "a differing version must be reported"
 assert_contains "$out" "1.2.3" "the report must name the version the fleet records"
-[ ! -f "$HOME_VER/install.log" ] || fail "a differing version must never be changed automatically"
+assert_no_harness_change "$HOME_VER" "a differing version"
 pass "fm-skills-lock: a differing version is reported and left alone"
 
-# --- disabled is not installed ------------------------------------------------
+# --- disabled is reported, with the command that restores it -----------------
 
 HOME_DIS=$(make_home disabled)
 write_lock "$HOME_DIS/skills-lock.json" 1.2.3
 installed_with "$HOME_DIS/installed.json" demo-skills@demo-market 1.2.3 false
-out=$(run_subject "$HOME_DIS" --force)
+out=$(run_subject "$HOME_DIS")
 assert_contains "$out" "disabled" "an installed but disabled plugin skill must be reported"
-pass "fm-skills-lock: an installed but disabled plugin skill is reported"
+assert_contains "$out" "claude plugin enable demo-skills@demo-market" \
+  "the report must name the command that restores a disabled plugin skill"
+assert_no_harness_change "$HOME_DIS" "a disabled plugin skill"
+pass "fm-skills-lock: an installed but disabled plugin skill is reported with its command"
 
 # --- an unreadable manifest is never an empty expected set --------------------
-
+#
+# Two DIFFERENT failure modes, each asserted on its own cause text rather than
+# on the shared prefix. The reason is composed inside a command substitution, so
+# a prefix-only assertion passes while the cause reaches the report blank, and
+# every manifest failure becomes one indistinguishable reading. These two
+# assertions are what makes that regression visible.
 HOME_BADLOCK=$(make_home bad-manifest)
 printf '{ not json\n' > "$HOME_BADLOCK/skills-lock.json"
-out=$(run_subject "$HOME_BADLOCK" --force)
+out=$(run_subject "$HOME_BADLOCK")
 assert_contains "$out" "could not be read" \
   "a manifest that cannot be decoded must be reported, never read as nothing to do"
-pass "fm-skills-lock: an undecodable manifest is reported rather than read as an empty set"
+assert_contains "$out" "$HOME_BADLOCK/skills-lock.json could not be decoded" \
+  "an undecodable manifest must name decoding as the cause, not ship the reason blank"
+assert_not_contains "$out" "does not exist" \
+  "an undecodable manifest must not be reported as an absent one"
+
+HOME_NOLOCK=$(make_home absent-manifest)
+rm -f "$HOME_NOLOCK/skills-lock.json"
+out=$(run_subject "$HOME_NOLOCK")
+assert_contains "$out" "could not be read" \
+  "a manifest that is not there must be reported, never read as nothing to do"
+assert_contains "$out" "$HOME_NOLOCK/skills-lock.json does not exist" \
+  "an absent manifest must name absence as the cause, not ship the reason blank"
+assert_not_contains "$out" "could not be decoded" \
+  "an absent manifest must not be reported as an undecodable one"
+pass "fm-skills-lock: each manifest failure is reported with its own cause, not a shared prefix"
 
 # --- the real manifest decodes, and the fleet pin states its basis ------------
 
@@ -278,16 +295,15 @@ HOME_NC1=$(make_home control-missing)
 write_lock "$HOME_NC1/skills-lock.json" 1.2.3
 printf '[]\n' > "$HOME_NC1/installed.json"
 
-healthy=$(FAKE_CLAUDE_INSTALL_RC=1 run_subject "$HOME_NC1" --force)
+healthy=$(run_subject "$HOME_NC1")
 assert_contains "$healthy" "SKILLS_LOCK:" \
   "control 1 precondition: the healthy subject must report the short seat"
 
-printf '[]\n' > "$HOME_NC1/installed.json"
-rm -f "$HOME_NC1/state/skills-lock.checked" "$HOME_NC1/install.log"
+# shellcheck disable=SC2016 # The subject's own source is the literal here; nothing may expand.
 MUTANT1=$(mutant missing-reads-ok \
   "$(printf 'READINGS+=("$id|missing|$SEAT does not have\tREADINGS+=("$id|ok|$SEAT does not have')")
 require_mutant "$MUTANT1" "control 1"
-broken=$(SUBJECT_OVERRIDE="$MUTANT1" FAKE_CLAUDE_INSTALL_RC=1 run_subject "$HOME_NC1" --force)
+broken=$(SUBJECT_OVERRIDE="$MUTANT1" run_subject "$HOME_NC1")
 assert_not_contains "$broken" "SKILLS_LOCK:" \
   "control 1: the mutant must go silent, or this control is not measuring the reporting path"
 [ "$healthy" != "$broken" ] \
@@ -298,31 +314,32 @@ pass "fm-skills-lock: negative control - a short seat goes unreported the moment
 # The mutant drops the unmeasured state, so an unreadable list falls through to
 # the record lookup, finds nothing, and is reported as a missing plugin. That is
 # the specific lie the third state exists to refuse, and the mutant is made to
-# commit it: it goes on to install against a reading it never took.
+# commit it: it goes on to tell an operator to install against a reading it
+# never took.
 HOME_NC2=$(make_home control-unmeasured)
 write_lock "$HOME_NC2/skills-lock.json" 1.2.3
 installed_with "$HOME_NC2/installed.json" demo-skills@demo-market 1.2.3 true
 
-healthy=$(FAKE_CLAUDE_LIST_RC=3 run_subject "$HOME_NC2" --force)
+healthy=$(FAKE_CLAUDE_LIST_RC=3 run_subject "$HOME_NC2")
 assert_contains "$healthy" "could not be established" \
   "control 2 precondition: the healthy subject must report an unreadable list as unmeasured"
 assert_not_contains "$healthy" "does not have" \
   "control 2 precondition: the healthy subject must not call an unreadable list a missing plugin"
-[ ! -f "$HOME_NC2/install.log" ] \
-  || fail "control 2 precondition: the healthy subject must not install against an unreadable list"
+assert_not_contains "$healthy" "claude plugin install" \
+  "control 2 precondition: the healthy subject must not prescribe an install against a reading it never took"
 
-rm -f "$HOME_NC2/state/skills-lock.checked"
+# shellcheck disable=SC2016 # The subject's own source is the literal here; nothing may expand.
 MUTANT2=$(mutant unreadable-reads-empty "$(printf '      error)
         READINGS+=("$id|unmeasured|whether $SEAT carries $id could not be established: $INSTALLED_ERROR")
         continue
         ;;\t      error)
         ;;')")
 require_mutant "$MUTANT2" "control 2"
-broken=$(SUBJECT_OVERRIDE="$MUTANT2" FAKE_CLAUDE_LIST_RC=3 run_subject "$HOME_NC2" --force)
+broken=$(SUBJECT_OVERRIDE="$MUTANT2" FAKE_CLAUDE_LIST_RC=3 run_subject "$HOME_NC2")
 assert_contains "$broken" "does not have" \
   "control 2: the mutant must report the unreadable seat as missing, or this control is not measuring the unmeasured path"
 assert_not_contains "$broken" "could not be established" \
   "control 2: the mutant must lose the unmeasured wording"
-assert_grep 'demo-skills@demo-market' "$HOME_NC2/install.log" \
-  "control 2: the mutant must install against a reading it never took - that is the harm this state prevents"
+assert_contains "$broken" "claude plugin install demo-skills@demo-market" \
+  "control 2: the mutant must start prescribing an install against a reading it never took - that is the harm this state prevents"
 pass "fm-skills-lock: negative control - an unreadable plugin list becomes a false missing the moment the third state is removed"

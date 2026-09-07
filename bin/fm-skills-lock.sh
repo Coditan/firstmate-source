@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Keep this seat carrying the third-party plugin skills the fleet expects, and
-# make a seat that is short of one visible without anyone remembering to look.
+# Report whether this seat carries the third-party plugin skills the fleet
+# expects, and make a seat that is short of one visible without anyone
+# remembering to look.
 #
 # WHAT THIS IS FOR
 # Skills under .agents/skills/ reach every vessel on their own: they are
@@ -12,17 +13,31 @@
 # codebase-sweep, design-it-twice and scout-research all reach for
 # mattpocock-skills, and on a seat without it they simply find nothing.
 #
-# It is deliberately a mechanism and not an instruction. A rule saying "install
+# It is deliberately a mechanism and not an instruction. A rule saying "check
 # these" is carried by whoever remembers to read it, which in this fleet is
-# nobody: bin/fm-bootstrap.sh converges this on every session start, and
-# bin/fm-currency-round.sh takes its reading daily between sessions.
+# nobody: bin/fm-currency-round.sh takes this reading daily between sessions,
+# and that round is armed without anyone deciding to arm it.
+#
+# WHAT IT DOES NOT DO
+# It NEVER installs, enables, or changes anything. That is the captain's ruling
+# and it is the whole shape of this script: installing a plugin runs a command
+# whose content a third party decides, unattended, on a seat with no human
+# present, so this repository does not run it. Where a seat is short, the
+# finding NAMES the command an operator would run and stops there.
+#
+# The cost of that is a property of the mechanism rather than an oversight: a
+# seat that is short STAYS SHORT UNTIL A PERSON ACTS. Nothing here closes the
+# gap; it only refuses to let the gap stay quiet.
 #
 # WHAT IT READS AND HOW RELIABLY
 # The expected set is the "plugins" object in skills-lock.json at the repository
 # root, which also owns the existing installed-skill records. Each entry names a
 # plugin id (<plugin>@<marketplace>), the marketplace it comes from, the version
 # this fleet has chosen, and the basis for choosing it. Nothing of the plugin's
-# own content is vendored here; only what to install and where it comes from.
+# own content is vendored here; only what a seat should have and where it comes
+# from. The recorded version is a record of intent and not a constraint: nothing
+# in this fleet installs, so nothing can enforce it, and a differing version is
+# reported for a person to decide about.
 #
 # The installed set is read through `claude plugin list --json`, a documented
 # command of the harness, NOT through the versioned cache directory under
@@ -37,37 +52,23 @@
 #   skipped     this seat has no `claude` on PATH, so it has no plugin
 #               mechanism at all and cannot be short of a plugin skill.
 #   unmeasured  `claude` is here but its plugin list could not be read or did
-#               not parse, so this seat's set is UNKNOWN, not empty.
+#               not parse, or the fleet's own manifest could not be decoded, so
+#               this seat's standing is UNKNOWN, not clean.
 #   missing / disabled / version-differs
 #               the list was read and it actually says so.
 #
-# WHAT IT CHANGES
-# Only `missing` is installed automatically: installing an absent skill restores
-# what the fleet already decided, and running it twice installs nothing the
-# second time because the plugin is then present. A version that differs from
-# the locked one is REPORTED and never changed, because choosing which version
-# of a third party's skills this fleet runs on is a decision, not a repair, and
-# `claude plugin install` cannot target a version anyway.
-#
 # Usage:
-#   fm-skills-lock.sh             converge: install what is missing when the
-#                                 cadence window is open, print one SKILLS_LOCK
-#                                 line per entry still not satisfied, exit 0
-#   fm-skills-lock.sh --force     converge now, ignoring the cadence stamp
-#   fm-skills-lock.sh --status    print every reading; writes no cadence stamp
-#                                 and installs nothing
+#   fm-skills-lock.sh             print one SKILLS_LOCK line per entry this seat
+#                                 does not satisfy, each naming the command an
+#                                 operator would run; exit 0
+#   fm-skills-lock.sh --status    print every reading, satisfied ones included
 #   fm-skills-lock.sh --reading   print "<id>|<state>|<detail>" per entry for
-#                                 bin/fm-currency-round.sh; installs nothing
+#                                 bin/fm-currency-round.sh
 #   fm-skills-lock.sh --help
 #
-# State, under FM_HOME/state:
-#   skills-lock.checked           epoch of the last completed convergence
-#
 # Environment:
-#   FM_SKILLS_LOCK_INTERVAL   cadence in seconds (default 86400); 0 converges on
-#                             every invocation.
-#   FM_SKILLS_LOCK_TIMEOUT    ceiling in seconds for each harness call (default
-#                             120, because an install fetches a repository).
+#   FM_SKILLS_LOCK_TIMEOUT    ceiling in seconds for the plugin list read
+#                             (default 120).
 #   FM_SKILLS_LOCK_DISABLE=1  silence and skip everything (tests, diagnosis).
 #   FM_SKILLS_LOCK_FILE       override the manifest path (tests).
 set -u
@@ -75,13 +76,9 @@ set -u
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
-STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 LOCK="${FM_SKILLS_LOCK_FILE:-$(cd "$SCRIPT_DIR/.." && pwd)/skills-lock.json}"
-STAMP="$STATE/skills-lock.checked"
 
-INTERVAL=${FM_SKILLS_LOCK_INTERVAL:-86400}
 STEP_TIMEOUT=${FM_SKILLS_LOCK_TIMEOUT:-120}
-case "$INTERVAL" in ''|*[!0-9]*) INTERVAL=86400 ;; esac
 case "$STEP_TIMEOUT" in ''|*[!0-9]*) STEP_TIMEOUT=120 ;; esac
 
 usage() {
@@ -89,21 +86,20 @@ usage() {
   awk 'NR == 1 { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' "$0"
 }
 
-MODE=converge
+MODE=report
 case "${1:-}" in
   -h|--help) usage; exit 0 ;;
   '') ;;
-  --force) MODE=force ;;
   --status) MODE=status ;;
   --reading) MODE=reading ;;
   *)
     printf 'fm-skills-lock: unknown argument %s\n' "$1" >&2
-    printf 'usage: %s [--force|--status|--reading|--help]\n' "$(basename "$0")" >&2
+    printf 'usage: %s [--status|--reading|--help]\n' "$(basename "$0")" >&2
     exit 2
     ;;
 esac
 [ "$#" -le 1 ] || {
-  printf 'usage: %s [--force|--status|--reading|--help]\n' "$(basename "$0")" >&2
+  printf 'usage: %s [--status|--reading|--help]\n' "$(basename "$0")" >&2
   exit 2
 }
 
@@ -136,11 +132,29 @@ SEAT="$(hostname 2>/dev/null || echo unknown-host):$FM_HOME"
 # it; a manifest that cannot be decoded is an error rather than an empty set,
 # because an empty expected set is silence and silence here means "nothing to
 # do", which is exactly the claim an unreadable manifest may not make.
-EXPECTED_ERROR=
+#
+# The reason travels through a FILE and not a variable. expected_entries is read
+# with a command substitution, so it runs in a subshell and anything it assigns
+# dies with that subshell; a reason that cannot cross that boundary reaches the
+# report blank, which makes "no jq or python3", "manifest absent" and "manifest
+# undecodable" one indistinguishable reading.
+EXPECTED_ERROR_FILE=$(mktemp "${TMPDIR:-/tmp}/fm-skills-lock.XXXXXX" 2>/dev/null) || EXPECTED_ERROR_FILE=
+if [ -z "$EXPECTED_ERROR_FILE" ]; then
+  # Without a private file the reason cannot cross the subshell, so the reading
+  # says that outright rather than shipping a blank cause.
+  EXPECTED_ERROR_FILE=/dev/null
+fi
+trap '[ "$EXPECTED_ERROR_FILE" = /dev/null ] || rm -f "$EXPECTED_ERROR_FILE"' EXIT
+
+expected_error() {
+  printf '%s' "$1" > "$EXPECTED_ERROR_FILE" 2>/dev/null
+  return 1
+}
+
 expected_entries() {
-  EXPECTED_ERROR=
+  : > "$EXPECTED_ERROR_FILE" 2>/dev/null
   if [ ! -f "$LOCK" ]; then
-    EXPECTED_ERROR="the manifest $LOCK does not exist"
+    expected_error "the manifest $LOCK does not exist"
     return 1
   fi
   if command -v jq >/dev/null 2>&1; then
@@ -154,7 +168,7 @@ expected_entries() {
         [.key, (.value.marketplace // ""), (.value.version // "")] | @tsv
       end
     ' "$LOCK" 2>/dev/null && return 0
-    EXPECTED_ERROR="the manifest $LOCK could not be decoded"
+    expected_error "the manifest $LOCK could not be decoded"
     return 1
   fi
   if command -v python3 >/dev/null 2>&1; then
@@ -170,10 +184,10 @@ for name, record in plugins.items():
         raise ValueError("plugins.%s must be an object" % name)
     print("\t".join([name, record.get("marketplace") or "", record.get("version") or ""]))
 PY
-    EXPECTED_ERROR="the manifest $LOCK could not be decoded"
+    expected_error "the manifest $LOCK could not be decoded"
     return 1
   fi
-  EXPECTED_ERROR="neither jq nor python3 is available to decode $LOCK"
+  expected_error "neither jq nor python3 is available to decode $LOCK"
   return 1
 }
 
@@ -246,15 +260,17 @@ installed_record() {
 # --- readings ---------------------------------------------------------------
 #
 # One record per entry as "<id>|<state>|<detail>", held in an array so the
-# convergence pass, the status listing and the round's reading are rendered from
-# the same measurement and cannot disagree.
+# report, the status listing and the round's reading are rendered from the same
+# measurement and cannot disagree.
 READINGS=()
 
 read_all() {
-  local entries id marketplace want record have enabled
+  local entries id marketplace want record have enabled reason
   READINGS=()
   if ! entries=$(expected_entries); then
-    READINGS+=("skills-lock|unmeasured|the fleet's expected plugin set could not be read on $SEAT: $EXPECTED_ERROR")
+    reason=$(cat "$EXPECTED_ERROR_FILE" 2>/dev/null)
+    [ -n "$reason" ] || reason="the reason could not be recovered"
+    READINGS+=("skills-lock|unmeasured|the fleet's expected plugin set could not be read on $SEAT: $reason")
     return 0
   fi
   [ -n "$entries" ] || return 0
@@ -273,13 +289,15 @@ read_all() {
     esac
     record=$(installed_record "$id")
     if [ -z "$record" ]; then
-      READINGS+=("$id|missing|$SEAT does not have $id installed (from $marketplace); the fleet expects version $want")
+      # The line carries the command rather than running it: an operator decides
+      # whether this seat runs what the marketplace serves today.
+      READINGS+=("$id|missing|$SEAT does not have $id installed (from $marketplace); the fleet records version $want. Nothing here installs it: run \`claude plugin marketplace add $marketplace\` then \`claude plugin install $id\` on this seat")
       continue
     fi
     have=$(printf '%s' "$record" | cut -f2)
     enabled=$(printf '%s' "$record" | cut -f3)
     if [ "$enabled" != yes ]; then
-      READINGS+=("$id|disabled|$SEAT has $id installed at $have but disabled, so its skills never reach a session here")
+      READINGS+=("$id|disabled|$SEAT has $id installed at $have but disabled, so its skills never reach a session here; run \`claude plugin enable $id\` on this seat")
       continue
     fi
     if [ -n "$want" ] && [ "$have" != "$want" ]; then
@@ -288,41 +306,6 @@ read_all() {
     fi
     READINGS+=("$id|ok|$SEAT carries $id $have, enabled")
   done <<< "$entries"
-}
-
-# --- convergence ------------------------------------------------------------
-#
-# Installs only what is missing. Adding the marketplace first is what makes a
-# fresh seat converge rather than merely report: a seat that has never seen the
-# marketplace cannot resolve the plugin id at all. Both calls are idempotent, so
-# a second run of this whole script does nothing at all - the plugin is present
-# by then and no install is attempted.
-install_missing() {
-  local record id state marketplace want entries acted=0
-  entries=$(expected_entries) || return 0
-  for record in "${READINGS[@]:-}"; do
-    [ -n "$record" ] || continue
-    id=${record%%|*}
-    state=${record#*|}
-    state=${state%%|*}
-    [ "$state" = missing ] || continue
-    marketplace=$(printf '%s\n' "$entries" | awk -F'\t' -v id="$id" '$1 == id { print $2; exit }')
-    want=$(printf '%s\n' "$entries" | awk -F'\t' -v id="$id" '$1 == id { print $3; exit }')
-    acted=1
-    if [ -n "$marketplace" ] && ! bounded claude plugin marketplace add "$marketplace" >/dev/null 2>&1; then
-      # Not fatal on its own: the marketplace may already be configured, and the
-      # install below is the reading that settles it either way.
-      :
-    fi
-    if ! bounded claude plugin install "$id" --yes --scope user >/dev/null 2>&1; then
-      printf 'SKILLS_LOCK: %s is missing %s (expected %s, from %s) and installing it failed; run "claude plugin install %s" here to see why\n' \
-        "$SEAT" "$id" "$want" "$marketplace" "$id"
-    fi
-  done
-  [ "$acted" -eq 1 ] || return 0
-  # Re-read rather than assume: an install that reported success and produced
-  # nothing must not be recorded as a repair.
-  read_all
 }
 
 # --- rendering --------------------------------------------------------------
@@ -352,33 +335,18 @@ render_findings() {
   done
 }
 
+read_all
 case "$MODE" in
   status)
-    read_all
     render_status
-    exit 0
     ;;
   reading)
-    read_all
     for record in "${READINGS[@]:-}"; do
       [ -n "$record" ] && printf '%s\n' "$record"
     done
-    exit 0
+    ;;
+  *)
+    render_findings
     ;;
 esac
-
-NOW=$(date +%s 2>/dev/null || echo 0)
-if [ "$MODE" != force ] && [ -f "$STAMP" ]; then
-  checked=$(cat "$STAMP" 2>/dev/null || echo 0)
-  case "$checked" in ''|*[!0-9]*) checked=0 ;; esac
-  if [ "$NOW" -ge "$checked" ] && [ $((NOW - checked)) -lt "$INTERVAL" ]; then
-    exit 0
-  fi
-fi
-
-read_all
-install_missing
-render_findings
-mkdir -p "$STATE" 2>/dev/null || exit 0
-printf '%s\n' "$NOW" > "$STAMP"
 exit 0

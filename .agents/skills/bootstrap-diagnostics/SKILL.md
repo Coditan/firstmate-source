@@ -2,7 +2,7 @@
 name: bootstrap-diagnostics
 description: >-
   Agent-only handling playbook for session-start bootstrap diagnostics.
-  Use whenever the session-start digest's bootstrap section prints an actionable diagnostic line - MISSING, NEEDS_GH_AUTH, SELF_DRIFT, CURRENCY_ROUND, MEMORY_ALARM, RUN_READER, VALIDATION_DAEMON, TELEGRAM_RECEIVER_UNIT, GROSSREINSCHIFF, SLOT_GUARD, SKILLS_LOCK, or any of the other prefixes this playbook's body carries an entry for, the full set being the lines bin/fm-bootstrap.sh's header documents - or when a standalone bin/fm-bootstrap.sh run prints one of those lines.
+  Use whenever the session-start digest's bootstrap section prints an actionable diagnostic line - MISSING, NEEDS_GH_AUTH, SELF_DRIFT, CURRENCY_ROUND, MEMORY_ALARM, RUN_READER, VALIDATION_DAEMON, TELEGRAM_RECEIVER_UNIT, GROSSREINSCHIFF, SLOT_GUARD, or any of the other prefixes this playbook's body carries an entry for, the full set being the lines bin/fm-bootstrap.sh's header documents - or when a standalone bin/fm-bootstrap.sh run prints one of those lines.
   A silent bootstrap section, or a BOOTSTRAP_INFO fact, means no skill load.
 user-invocable: false
 metadata:
@@ -192,13 +192,6 @@ When any diagnostic needs captain attention, report the plain consequence and re
   An actual contested copy arrives as a `check:` wake instead, and it names both the finished task and the live worker standing in its copy.
   That wake is captain-facing only when it blocks a cleanup he is waiting on: cleanup of the named task is already refused, and the work of the live worker is not at risk while the refusal stands, so the ordinary handling is to let the live worker finish and then retry the cleanup.
   Never resolve one by forcing the cleanup through: `--force` deliberately does not override this refusal, because authority to discard one task's work is not authority to destroy another's.
-- `SKILLS_LOCK: <detail>` - this seat does not carry a third-party plugin skill the fleet expects of it, and the convergence at session start could not put that right.
-  The expected set is `skills-lock.json`'s `plugins` object and the whole mechanism is `docs/fleet-plugin-skills.md`; the line always names the seat, because every seat reads the same manifest and the seat is the variable.
-  `is missing <id> ... and installing it failed` means the install was attempted here and did not take; run the `claude plugin install` command the line quotes and report the reason it gives.
-  `installed at <version> but disabled` means the plugin is present and switched off, so its skills never reach a session on this seat; `claude plugin enable <id>` restores them.
-  `carries <id> <a>, and the fleet records <b>` is not a fault: it says this seat runs a version the fleet's own derived skills were never checked against, and raising or lowering that pin is a captain decision recorded in the manifest's `versionBasis`, never an automatic repair.
-  `could not be established` means this seat's plugin list could not be read at all, so it is unknown whether the seat is short rather than known to be fine; never relay one of these as an all-clear.
-  A seat with no `claude` on `PATH` has no plugin mechanism at all and prints nothing here, which is deliberate and not a silent pass.
 - `GROSSREINSCHIFF: weekly fleet cleanup sweep is due (...)` - this home has not completed its Thursday cleanup sweep for the current week; load the `grossreinschiff` skill and run it.
   Nothing is broken: the line is a cadence reminder, and it repeats each session start until `bin/fm-grossreinschiff-due.sh --record` marks a sweep that actually produced a report.
   The reported window-open days say only how far into the current week's window this session start falls; the count is bounded to 0 through 6 and never measures how long the home has been dark.

@@ -12,17 +12,33 @@ That is not hypothetical: `.agents/skills/codebase-sweep`, `.agents/skills/desig
 
 It is a mechanism rather than an instruction on purpose.
 A sentence telling a seat to install something is carried by whoever remembers to read it, and this fleet has already measured what that is worth.
+The mechanism is the noticing, not the fixing.
+
+## Two properties of this mechanism, stated rather than implied
+
+**The pinned version is a record of intent and not a constraint.**
+`claude plugin install` takes no version argument, and this repository does not do the installing at all, so nothing here can enforce the pin.
+It records which release this fleet's own derived skills were checked against, and a seat running something else is reported for a person to decide about.
+Read it as a statement of what was verified, never as a guarantee of what a seat runs.
+
+**A seat that is short stays short until a person acts.**
+Nothing in this mechanism installs, enables, or changes anything on a seat.
+It detects and reports, and the report names the exact command an operator would run.
+That is the cost the captain accepted in exchange for this repository never running a command whose content a third party decides, unattended, on a seat with nobody present.
 
 ## The three parts
 
 | Part | Owner | When it runs |
 | --- | --- | --- |
 | What the fleet expects | the `plugins` object in `skills-lock.json` | read by every part below |
-| Installing what is missing | `bin/fm-skills-lock.sh`, invoked from `bin/fm-bootstrap.sh` | every session start, cadence-gated to once a day |
+| Reading what this seat carries | `bin/fm-skills-lock.sh` | on demand, and whenever the round below asks it |
 | Reporting a seat that is short | the `plugin:<id>` reading in `bin/fm-currency-round.sh` | the daily currency round, between sessions |
 
+There is deliberately no fourth part that installs.
+Nothing runs this on the session-start critical path either: the daily round is the whole cadence, and it is armed without anyone deciding to arm it.
+
 `bin/fm-skills-lock.sh`'s header owns the exact modes, flags, states, and environment.
-`skills-lock.json` records only what to install and where it comes from; no third party's skill content is vendored here.
+`skills-lock.json` records only what a seat should have and where it comes from; no third party's skill content is vendored here.
 
 ## Can a seat's installed plugin set be read reliably? The measurement
 
@@ -66,11 +82,13 @@ Reliability of the reading is therefore not assumed, and the check keeps three s
 - **unmeasured** - `claude` is here and its plugin list could not be read or did not parse, so this seat's set is unknown rather than empty.
 - **missing / disabled / version-differs** - the list was read and it actually says so.
 
-Only the third kind is ever acted on, and `tests/fm-skills-lock.test.sh` drives all three.
+Only the third kind is ever reported as a finding, and `tests/fm-skills-lock.test.sh` drives all three.
+A `missing` finding quotes `claude plugin marketplace add <marketplace>` and `claude plugin install <id>`; a `disabled` one quotes `claude plugin enable <id>`.
+Quoting the command is the difference this design turns on: the documentation carries the command, and the code does not carry an installer.
 
-## Why a version is pinned and why it is not enforced by installing one
+## Why a version is pinned and why nothing enforces it
 
-`claude plugin install` takes no version argument, so the install path cannot target a pin even if it wanted to.
+`claude plugin install` takes no version argument, so no install could target a pin even if this repository ran one.
 That is not a gap the lock works around, because raising the pin is a decision rather than a repair.
 
 The pinned version of `mattpocock-skills` is `1.2.3`, and `skills-lock.json`'s `versionBasis` field states the basis in the file itself rather than here.
@@ -87,6 +105,6 @@ The provenance notices for the material this fleet actually derived from `mattpo
 
 ## What this does not cover
 
-It measures and converges **this seat only**.
+It measures **this seat only**.
 A silent round here never means the fleet carries the expected set: it means this seat does.
-Nothing in this mechanism reads, installs into, or reports on another vessel.
+Nothing in this mechanism reads, writes to, or reports on another vessel.

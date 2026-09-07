@@ -669,8 +669,9 @@ One fact from that record belongs here rather than only there, because this is w
 ### Expected plugin skills
 
 `skills-lock.json`'s `plugins` object names the third-party plugin skills every seat is expected to carry, with the marketplace each comes from, the version this fleet has chosen, and the basis for choosing it.
-`bin/fm-skills-lock.sh` installs what is missing from `bin/fm-bootstrap.sh` at session start, cadence-gated by `FM_SKILLS_LOCK_INTERVAL` (default 86400 seconds), and `bin/fm-currency-round.sh` takes the `plugin:<id>` reading daily between sessions.
-That script's header owns its modes, states, and remaining environment; `docs/fleet-plugin-skills.md` owns why the reading is taken through `claude plugin list --json` rather than the harness cache directory, and what its silence does and does not mean.
+`bin/fm-skills-lock.sh` reads whether this seat carries them and installs nothing; `bin/fm-currency-round.sh` takes its `plugin:<id>` reading daily between sessions, and a seat that is short stays short until a person runs the command the finding names.
+The recorded version is a record of intent rather than a constraint, because nothing here installs and so nothing can enforce it.
+That script's header owns its modes, states, and environment; `docs/fleet-plugin-skills.md` owns why the reading is taken through `claude plugin list --json` rather than the harness cache directory, and what its silence does and does not mean.
 
 ### AXI-suite self-update
 
