@@ -54,6 +54,8 @@ Two consequences follow, and both are enforced by `tests/fm-axi-tool-intake.test
 Update through the installer, never by hand: re-run `npx skills add kunchenguid/axi`, then re-record the commit, the hash, and the date in the table above in the same commit.
 A provenance record that is not re-taken at update time is a record of a version that is no longer installed.
 
+`skills-lock.json` also carries a top-level `plugins` key that this installer neither writes nor recognises, so an installer run can drop it; [fleet-plugin-skills.md](fleet-plugin-skills.md) owns that key and the guards against losing it, and re-running the installer means checking it survived.
+
 ## Notice
 
     MIT License
