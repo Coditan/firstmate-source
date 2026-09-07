@@ -15,9 +15,8 @@ Delivery rather than mention is what made the vendored skill the only route that
 
 This placement delivers one half of the duty and not the other, and that is recorded here rather than left to be found later.
 The granting vessel loads the skill, because the captain names the protocol in its own chat, so the duty to announce reaches the vessel it binds.
-The receiving seat does not load it: the trigger in `AGENTS.md` section 13 is the captain naming the protocol in that seat's own chat, and the seat firstmate announces to is by construction one whose captain has not named it, so the clause telling it to record the text as unverified reaches nobody.
+The receiving seat does not load it, and the receiving-seat bound in `.agents/skills/omega-protocol/SKILL.md` states that limit in full, where a granting vessel reads it.
 That is the same failure this document argues against, one layer down: the rule is written into the skill because doctrine reaches no session, and the half of it aimed at the receiving seat reaches no seat for the same class of reason.
-Closing it needs the rule to reach a surface the receiving seat already loads, its own always-loaded `AGENTS.md` or the fleet doctrine delivery that is not built yet; this change builds neither, and it does not present the half it could not deliver as delivered.
 
 The objection, recorded because the choice was not free: this writes a fleet-level rule into firstmate's own instruction surface rather than the fleet's, which is arguably the wrong home for it and sets a precedent for putting fleet doctrine there whenever doctrine delivery is inconvenient.
 The captain was told this before choosing.
