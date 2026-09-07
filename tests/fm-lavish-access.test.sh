@@ -238,35 +238,48 @@ field() {
 # daemon. A vessel whose image declares a non-default socket made every bare
 # `tailscale` call fail with a daemon that was running, which the allocator then
 # recorded as no tailnet at all - so these assert that the path is READ from
-# where it is declared and never written down here.
+# where it is declared, never written down here, and actually reaches the client
+# as the argument the real one takes.
+#
+# The assertions exit rather than fail: a `fail` inside a subshell ends only the
+# subshell, so the status has to be carried out to expect_code below or every
+# one of them is inert.
 (
   CLI_SOCK_TMP="$TMP_ROOT/cli-sock"
   mkdir -p "$CLI_SOCK_TMP"
   # shellcheck source=bin/fm-tailnet-cli-lib.sh
   . "$ROOT/bin/fm-tailnet-cli-lib.sh"
 
-  out=$(FM_TAILSCALE_SOCKET=/tmp/explicit.sock VESSEL_TAILNET_SOCKET=/tmp/vessel.sock     fm_tailscale_socket)
-  [ "$out" = /tmp/explicit.sock ]     || fail "an explicit override must win over the vessel declaration, got '$out'"
+  out=$(FM_TAILSCALE_SOCKET=/tmp/explicit.sock VESSEL_TAILNET_SOCKET=/tmp/vessel.sock \
+    fm_tailscale_socket)
+  [ "$out" = /tmp/explicit.sock ] || exit 1
 
   out=$(unset FM_TAILSCALE_SOCKET; VESSEL_TAILNET_SOCKET=/tmp/vessel.sock fm_tailscale_socket)
-  [ "$out" = /tmp/vessel.sock ]     || fail "the vessel runtime's declaration must be used, got '$out'"
-
-  # With no declaration in the environment, the running daemon's own command
-  # line carries the same declaration read from the other end.
-  printf '#!/usr/bin/env bash\nprintf "%%s\\n" "176 /usr/sbin/tailscaled --tun=tailscale0 --socket=/run/declared/tailscaled.sock"\n'     > "$CLI_SOCK_TMP/pgrep"
-  chmod +x "$CLI_SOCK_TMP/pgrep"
-  out=$(unset FM_TAILSCALE_SOCKET VESSEL_TAILNET_SOCKET
-    PATH="$CLI_SOCK_TMP:$PATH" fm_tailscale_socket)
-  [ "$out" = /run/declared/tailscaled.sock ]     || fail "the daemon's own --socket= must be recovered when the environment is stripped, got '$out'"
+  [ "$out" = /tmp/vessel.sock ] || exit 2
 
   # A host that declared no socket anywhere gets the client's own default, not
   # an invented path: writing one down here would break a working vessel.
-  printf '#!/usr/bin/env bash\nexit 1\n' > "$CLI_SOCK_TMP/pgrep"
-  out=$(unset FM_TAILSCALE_SOCKET VESSEL_TAILNET_SOCKET
-    PATH="$CLI_SOCK_TMP:$PATH" fm_tailscale_socket) && \
-    fail "an undeclared socket must not resolve, got '$out'"
-  [ -z "$out" ] || fail "an undeclared socket must print nothing, got '$out'"
+  out=$(unset FM_TAILSCALE_SOCKET VESSEL_TAILNET_SOCKET; fm_tailscale_socket) && exit 3
+  [ -z "$out" ] || exit 4
+
+  # The resolution is only worth anything if it reaches the client, so this
+  # drives fm_tailscale against a `tailscale` that records the argv it was
+  # handed. That pass-through IS the repair: without it the client dials its
+  # compiled-in default and reports no tailnet on a vessel that has one.
+  printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" > "$FM_TEST_TS_ARGV"\n' \
+    > "$CLI_SOCK_TMP/tailscale"
+  chmod +x "$CLI_SOCK_TMP/tailscale"
+  export FM_TEST_TS_ARGV="$CLI_SOCK_TMP/argv"
+  export PATH="$CLI_SOCK_TMP:$PATH"
+
+  FM_TAILSCALE_SOCKET=/tmp/explicit.sock fm_tailscale status --json || exit 5
+  [ "$(cat "$FM_TEST_TS_ARGV")" = "--socket=/tmp/explicit.sock status --json" ] || exit 6
+
+  (unset FM_TAILSCALE_SOCKET VESSEL_TAILNET_SOCKET; fm_tailscale status --json) || exit 7
+  [ "$(cat "$FM_TEST_TS_ARGV")" = "status --json" ] || exit 8
+  exit 0
 )
+expect_code 0 "$?" "the client socket is read from where it is declared and passed to the client"
 pass "the tailscale client socket is read from where it is declared, never written here"
 
 FAKEBIN=$(fm_fakebin "$TMP_ROOT")

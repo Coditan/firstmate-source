@@ -41,7 +41,9 @@ Nothing vessel-specific is compiled in, which is what makes this work on every v
 
 That read has to reach the local daemon before it can answer, and on a containerised vessel it does not by default.
 `bin/fm-tailnet-cli-lib.sh` is the one owner of that hop, and every client call in this cluster goes through its `fm_tailscale`.
-It never writes a socket path down; it reads the one the image already declared, taking `$FM_TAILSCALE_SOCKET` first, then `$VESSEL_TAILNET_SOCKET`, then the running daemon's own `--socket=` argument, and passing nothing at all when no source answers so an undeclared host keeps the client's own default.
+It never writes a socket path down; it reads the one the image already declared, taking `$FM_TAILSCALE_SOCKET` first, then `$VESSEL_TAILNET_SOCKET` - which the vessel runtime exports into PID 1's environment, so every process the container starts inherits it - and passing nothing at all when neither answers so an undeclared host keeps the client's own default.
+Recovering the path from a running `tailscaled`'s own command line was considered and rejected: a process-name match matches across every UNIX account on this machine, so an untrusted account could name an executable `tailscaled`, point it at a socket it owns, and thereby choose the address firstmate publishes to the captain.
+The file records that decision so a reader who does meet a stripped environment finds a reason rather than a gap.
 
 ## The four failures this design is built around
 

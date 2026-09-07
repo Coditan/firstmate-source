@@ -1075,6 +1075,12 @@ test_lavish_access_detection() {
   # running this suite happens to be on a tailnet.
   cat > "$fakebin/tailscale" <<'SH'
 #!/usr/bin/env bash
+# Real tailscale takes a global --socket= before the subcommand, and firstmate's
+# client wrapper passes it on every call (bin/fm-tailnet-cli-lib.sh owns why), so
+# this stub has to consume it the same way or every call arrives shifted by one.
+case "${1:-}" in
+  --socket=*) shift ;;
+esac
 [ "${1:-}" = status ] && [ "${2:-}" = --json ] || exit 1
 case "${FM_FAKE_TAILNET:-on}" in
   on) printf '{"BackendState":"Running","MagicDNSSuffix":"","Self":{"HostName":"localhost","DNSName":"localhost.","TailscaleIPs":["127.0.0.1"]}}\n' ;;

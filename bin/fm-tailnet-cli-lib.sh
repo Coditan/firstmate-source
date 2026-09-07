@@ -22,13 +22,29 @@
 #                               PID 1's environment and so inherited by every
 #                               process the container starts, this seat and its
 #                               services included.
-#   3. the running daemon's own `--socket=` argument, recovered from its command
-#      line. This is the same declaration read from the other end, and it covers
-#      a caller whose environment was stripped.
 #
-# When no source answers, no `--socket` is passed at all and the client uses its
+# When neither answers, no `--socket` is passed at all and the client uses its
 # own default. That is deliberate: on a host that never declared a path, the
 # default is correct, and inventing one would break a working vessel.
+#
+# A third source was considered and DELIBERATELY REJECTED, and a later reader
+# who meets the stripped-environment case must find this decision rather than a
+# gap: recovering the path from the running daemon's own `--socket=` argument,
+# by matching a process named `tailscaled`. A process-name match matches across
+# every UNIX account on the machine, and bin/fm-service-port.sh's own header
+# states the target is "a machine that may carry several vessels as separate
+# UNIX accounts". So an account we do not trust could run any executable it
+# named `tailscaled` pointing at a socket it owns, and thereby choose the
+# tailnet address and DNS name firstmate publishes to the captain as a board
+# link - and receive this vessel's `tailscale serve` calls. That is the whole
+# reach this cluster exists to establish, handed to whoever wins a process
+# scan.
+#
+# Dropping it costs nothing here, which is why it is a decision and not a
+# sacrifice: the vessel runtime exports $VESSEL_TAILNET_SOCKET into PID 1's
+# environment, so every process the container starts inherits it and source 2
+# always answers. The stripped-environment case the fallback existed for does
+# not arise on this vessel.
 #
 # Functions (source this file; it defines only fm_tailscale_*):
 #   fm_tailscale_socket        prints the resolved socket path, or nothing; 0
@@ -44,13 +60,6 @@ fm_tailscale_socket() {
     sock=$FM_TAILSCALE_SOCKET
   elif [ -n "${VESSEL_TAILNET_SOCKET:-}" ]; then
     sock=$VESSEL_TAILNET_SOCKET
-  else
-    # The daemon's own command line carries the declaration. `pgrep -a` prints
-    # "<pid> <cmdline>"; take the first --socket= it names. A host with no
-    # running tailscaled simply yields nothing here, which is the right answer.
-    sock=$(pgrep -a tailscaled 2>/dev/null \
-      | sed -n 's/.*--socket=\([^ ]*\).*/\1/p' \
-      | head -n 1)
   fi
   [ -n "$sock" ] || return 1
   printf '%s\n' "$sock"
