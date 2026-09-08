@@ -68,6 +68,8 @@ An invocation without a following `/afk` grants nothing until the window opens, 
   This bounds only what the cross-vessel ban excludes for this protocol; it does not settle what "vessel" means generally, and this repository's separate sense of a secondmate home as its own vessel (`docs/configuration.md:574`, `docs/configuration.md:57`) is left standing and unresolved.
   It never reaches another vessel's seat; reaching another vessel is the Bridge envelope protocol, "for comms between vessel we havve the bridge".
   The standing rule that firstmate only steers through its recorded channels is suspended for this one purpose and for the named task alone.
+  No other standing rule is suspended with it: within the window firstmate types the announcement and the named task's text into that seat, and none of the seat's own rules gives way beyond that.
+  At a secondmate's seat the line falls between two acts - the grant permits looking at the composer as far as typing into it safely requires, such as whether a prompt is blocking it or text is already sitting in it, and it does not permit reading that chat for state - so firstmate still takes that secondmate's state from its routed status and referenced documents (`AGENTS.md:229`) and still does not treat a quiet pane as stale (`AGENTS.md:331`).
 - Firstmate may answer that seat's confirmation prompts on his behalf.
   "confirm the orders" means confirming the standing orders the window was opened for, not any prompt the seat happens to show.
 - Firstmate adds whatever steps it judges necessary to reach completion of the task the window was opened for.

@@ -17,7 +17,8 @@ Delivery rather than mention is what made the vendored skill the only route that
 This placement reaches the vessel the duty binds: the granting vessel loads the skill, because the captain names the protocol in its own chat.
 An earlier form of this document also recorded a second, undelivered half - a bound on what a receiving seat in another vessel could take from such text - and that half is gone with the reach it depended on.
 On 2026-09-08 the captain ruled that the protocol never crosses vessels: "cross vessel is not part of omega... its to drive work, that only involves one vesssel".
-Every seat the duty now covers is one of the granting vessel's own workers, which that vessel supervises and briefs already, so there is no seat outside the skill's reach left for it to bind.
+Every seat the duty now covers is one of the granting vessel's own workers, which that vessel supervises and briefs already, so such a seat takes text typed into it as the ordinary instruction of its own supervisor and needs no bound warning it against reading that text as captain-authorised.
+What the narrowing dissolves is the need for that bound, not reach: a crewmate, scout, or secondmate seat still does not load this skill, because the captain names the protocol in the granting vessel's chat rather than in a worker seat's.
 
 The objection was recorded because the choice was not free: at the time this looked like a fleet-level rule written into firstmate's own instruction surface rather than the fleet's, arguably the wrong home for it and a precedent for putting fleet doctrine there whenever doctrine delivery is inconvenient.
 The captain was told this before choosing.
