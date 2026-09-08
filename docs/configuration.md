@@ -441,12 +441,13 @@ When `config/telegram.env` is absent the feature stays silent except for the ses
 When `config/telegram.env` exists but `config/fm-tg-recv.sh` is missing or not executable, session start reports that direct Telegram receive is not armed.
 The service environment contains only resolved paths, home locations, the wrapper mode, and a source-version digest; it neither sources nor copies the bot credential, which remains owned by the private local receiver.
 The wrapper records the receiver incarnation in `state/.tg-recv.lock` with the same portable lock discipline as watcher state and relays any captured receiver output once before cleaning a dead recorded receiver.
-In service mode, each routed message becomes a durable `signal` wake and every receiver process exit other than service shutdown becomes a rate-limited `check` wake before systemd restarts the wrapper, including a zero exit after a message, diagnostic output, or no output.
+In service mode, each routed message becomes a durable `signal` wake; exit 0 with no output completes a quiet bounded cycle without a wake, and exit 0 after valid events produces only their signal wakes.
+Nonzero exits, unavailable exit status, and exit 0 with diagnostics but no valid event still produce a rate-limited failure `check` wake before systemd restarts the wrapper; intentional service shutdown produces no failure wake.
 Complete valid event frames are appended before any failure wake, lock cleanup, or restart, including recovery of a dead recorded process whose exit status is unavailable.
-Other receiver stdout and stderr stay out of the wake payload and are kept, with mode `0600` and a 4096-byte ceiling, at `state/.tg-recv-last-failure-diagnostic`; the rate-limited wake contains only a pointer to that private file.
+Other receiver stdout and stderr stay out of the wake payload and, when a failure wake is emitted, are kept with mode `0600` and a 4096-byte ceiling at `state/.tg-recv-last-failure-diagnostic`; the wake contains only a pointer to that private file.
 The wrapper also treats a receiver that has not exited within 120 seconds as hung, terminates it, durably relays any complete event it already emitted, records a rate-limited failure wake, and exits so systemd restarts it.
 `FM_TG_RECV_HANG_TIMEOUT` overrides that positive whole-second ceiling for a deployment whose local receiver has a different bounded polling contract.
-The first failing receiver process wakes immediately because a process exit means the receiver's own retry policy was exhausted; restarts in the same 300-second outage stay quiet so one failure cannot flood supervision.
+The first failing receiver process wakes immediately; further failures within the 300-second quiet window are suppressed so one failure cannot flood supervision, and clean cycles neither consume nor reset that window.
 Run `bin/fm-tg-recv-arm.sh` as its own harness-tracked background task only when the digest reports the fallback active; never bundle it with another command, pipe it, redirect it, or use shell `&`.
 
 `config/crew-harness` is a local, gitignored file containing one adapter name for crewmate and scout launches.
