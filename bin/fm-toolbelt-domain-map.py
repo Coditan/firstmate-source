@@ -44,10 +44,10 @@ REFERENCE_EXCLUDE_PATHS = {
 # composing repository adds its own workflows beside ours in a directory we both
 # write to, and a directory entry there would readmit exactly what this scoping
 # exists to keep out.
-# A path this set does not cover is skipped, and `--check` reports what it
-# skipped, because the two readings of an uncovered path - foreign material, or
-# a namespace this repository grew and nobody declared - are indistinguishable
-# from inside the tree, and only the second is a defect.
+# A path this set does not cover is skipped, and every mode that scans reports
+# what it skipped, because the two readings of an uncovered path - foreign
+# material, or a namespace this repository grew and nobody declared - are
+# indistinguishable from inside the tree, and only the second is a defect.
 OWN_PATHS: frozenset[str] = frozenset(
     {
         ".agents",
@@ -523,14 +523,36 @@ def skipped_entry(rel: Path) -> str:
     return rel.as_posix()
 
 
-def undeclared_entries(root: Path) -> list[str]:
-    """Report the tracked entries the declared namespace does not cover."""
-    skipped = set()
+def partition_tracked(root: Path) -> tuple[list[Path], list[str]]:
+    """Split the tracked paths into this repository's own and the entries skipped."""
+    own: list[Path] = []
+    skipped: set[str] = set()
     for path in run_git_ls(root):
         rel = path.relative_to(root)
-        if not in_own_namespace(rel):
+        if in_own_namespace(rel):
+            own.append(path)
+        else:
             skipped.add(skipped_entry(rel))
-    return sorted(skipped)
+    return own, sorted(skipped)
+
+
+def report_skipped(skipped: list[str]) -> None:
+    # A skipped entry is a fact about the tree, not a failure: in a tree that
+    # composes this repository with another one, skipping is the correct
+    # behaviour. It is reported because the alternative reading of the same
+    # observation - that this repository grew a namespace nobody declared, so
+    # its references are being dropped - is indistinguishable from inside, and
+    # silence would hide it. It goes to stderr from every mode that scans, so
+    # the person regenerating the map sees it when the namespace changes rather
+    # than only on a later check, and so --stdout stays pipeable.
+    if not skipped:
+        return
+    entries = "entry" if len(skipped) == 1 else "entries"
+    print(
+        f"fm-toolbelt-domain-map: scan skipped {len(skipped)} {entries} "
+        f"outside this repository's namespace: {', '.join(skipped)}",
+        file=sys.stderr,
+    )
 
 
 def read_text(path: Path) -> str:
@@ -697,7 +719,8 @@ def md_escape(value: str) -> str:
 
 def generate(root: Path) -> tuple[str, dict[str, int]]:
     commands = [p for p in top_level_commands(root) if p.is_file()]
-    tracked = [path for path in run_git_ls(root) if in_own_namespace(path.relative_to(root))]
+    tracked, skipped = partition_tracked(root)
+    report_skipped(skipped)
     tracked_texts = {path: read_text(path) for path in tracked if path.is_file()}
     rows = []
     domains_used: set[str] = set()
@@ -829,20 +852,6 @@ def generate(root: Path) -> tuple[str, dict[str, int]]:
 
 
 def check(root: Path) -> int:
-    # A skipped entry is a fact about the tree, not a failure: in a tree that
-    # composes this repository with another one, skipping is the correct
-    # behaviour. It is reported because the alternative reading of the same
-    # observation - that this repository grew a namespace nobody declared, so
-    # its references are being dropped - is indistinguishable from inside, and
-    # silence would hide it.
-    skipped = undeclared_entries(root)
-    if skipped:
-        entries = "entry" if len(skipped) == 1 else "entries"
-        print(
-            f"fm-toolbelt-domain-map: scan skipped {len(skipped)} {entries} "
-            f"outside this repository's namespace: {', '.join(skipped)}",
-            file=sys.stderr,
-        )
     wanted, stats = generate(root)
     actual_path = root / MAP_PATH
     if not actual_path.exists():
