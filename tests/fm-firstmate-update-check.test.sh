@@ -60,6 +60,40 @@ test_installer_only_update_is_not_relevant() {
   pass "public installer-skill-only changes do not trigger a running-vessel update"
 }
 
+# The partition a fleet-level rule's HOME is chosen on. A rule an agent must
+# read has to land where a running vessel is told to fast-forward to; the same
+# words under docs/ or in the fleet's own doctrine tree reach no running vessel
+# at all. docs/omega-announcement-duty.md records that as the reason the omega
+# announcement duty is stated in .agents/skills/omega-protocol/SKILL.md, and
+# this pins the mechanical half of that reasoning.
+test_agent_skill_reaches_vessels_and_doctrine_prose_does_not() {
+  local repo state current skill_source doctrine_source out
+  repo="$TMP_ROOT/rule-placement"
+  state="$TMP_ROOT/rule-placement-state"
+  fm_git_init_commit "$repo"
+  current=$(commit_file "$repo" AGENTS.md local)
+
+  doctrine_source=$(commit_file "$repo" fleet/doctrine/announcement.md 'the duty, in fleet doctrine')
+  git -C "$repo" reset -q --hard "$current"
+  out=$(run_check "$repo" "$state" "$doctrine_source")
+  [ -z "$out" ] || fail "a rule written to fleet doctrine was announced to vessels: $out"
+  [ ! -f "$state/firstmate-update.available" ] || fail "fleet-doctrine prose persisted an available signal"
+
+  doctrine_source=$(commit_file "$repo" docs/announcement-duty.md 'the duty, in docs')
+  git -C "$repo" reset -q --hard "$current"
+  out=$(run_check "$repo" "$state" "$doctrine_source")
+  [ -z "$out" ] || fail "a rule written to docs/ was announced to vessels: $out"
+
+  skill_source=$(commit_file "$repo" .agents/skills/omega-protocol/SKILL.md 'the duty, in the skill')
+  git -C "$repo" reset -q --hard "$current"
+  out=$(run_check "$repo" "$state" "$skill_source")
+  assert_contains "$out" 'FIRSTMATE_UPDATE_AVAILABLE:' \
+    "an agent-loaded skill change did not reach vessels"
+  assert_grep 'FIRSTMATE_UPDATE_AVAILABLE:' "$state/firstmate-update.available" \
+    "agent-loaded skill change did not persist the available signal"
+  pass "an agent-loaded skill change reaches running vessels and doctrine or docs prose does not"
+}
+
 # Real fetch path (no FM_FIRSTMATE_COMPARE_REPO), so the resolved comparison
 # base is actually the repository git reads from. Both sides are local paths, so
 # these stay network-free.
@@ -295,6 +329,7 @@ test_resolver_refuses_present_but_unusable_file() {
 
 test_relevant_update_found_and_cleared_when_current
 test_installer_only_update_is_not_relevant
+test_agent_skill_reaches_vessels_and_doctrine_prose_does_not
 test_configured_base_is_the_repository_compared
 test_environment_override_beats_the_configured_base
 test_unusable_configured_base_refuses_loudly
