@@ -1,6 +1,6 @@
 # Why the omega announcement duty lives in the skill
 
-The omega protocol's announcement duty binds the vessel that is about to type into another seat.
+The omega protocol's announcement duty binds the vessel that is about to type into one of its own seats.
 It is stated in `.agents/skills/omega-protocol/SKILL.md`, the skill's own owner section, rather than in fleet doctrine.
 
 The captain ruled this on 2026-09-07, choosing the skill over two alternatives he was given: a doctrine document without the duty, or waiting until fleet doctrine delivery is built.
@@ -14,11 +14,11 @@ The captain's decision survives that correction, and it is recorded here re-chec
 Delivery rather than mention is what made the vendored skill the only route that reaches a vessel: a rule written into the fleet's own rulebook binds nobody who never loads it, while a rule written into the skill is read by every vessel that takes the pin.
 `docs/fleet-plugin-skills.md` owns that property of a vendored skill, including the measurement behind it, and it is pointed at here rather than restated.
 
-This placement delivers one half of the duty and not the other, and that is recorded here rather than left to be found later.
-The granting vessel loads the skill, because the captain names the protocol in its own chat, so the duty to announce reaches the vessel it binds.
-The receiving seat does not load it, and the receiving-seat bound in `.agents/skills/omega-protocol/SKILL.md` states that limit in full, where a granting vessel reads it.
-That is the same failure this document argues against, one layer down: the rule is written into the skill because doctrine reaches no session, and the half of it aimed at the receiving seat reaches no seat for the same class of reason.
+This placement reaches the vessel the duty binds: the granting vessel loads the skill, because the captain names the protocol in its own chat.
+An earlier form of this document also recorded a second, undelivered half - a bound on what a receiving seat in another vessel could take from such text - and that half is gone with the reach it depended on.
+On 2026-09-08 the captain ruled that the protocol never crosses vessels: "cross vessel is not part of omega... its to drive work, that only involves one vesssel".
+Every seat the duty now covers is one of the granting vessel's own workers, which that vessel supervises and briefs already, so there is no seat outside the skill's reach left for it to bind.
 
-The objection, recorded because the choice was not free: this writes a fleet-level rule into firstmate's own instruction surface rather than the fleet's, which is arguably the wrong home for it and sets a precedent for putting fleet doctrine there whenever doctrine delivery is inconvenient.
+The objection was recorded because the choice was not free: at the time this looked like a fleet-level rule written into firstmate's own instruction surface rather than the fleet's, arguably the wrong home for it and a precedent for putting fleet doctrine there whenever doctrine delivery is inconvenient.
 The captain was told this before choosing.
-If fleet doctrine delivery is ever built, this duty is a candidate to move, and moving it means the skill keeps a cross-reference rather than a second copy.
+His 2026-09-08 ruling largely dissolves the objection: a duty that binds a vessel typing at its own workers is firstmate's own material, and the skill is its right home rather than a stand-in for doctrine.
