@@ -270,7 +270,7 @@ Every command has at least one tracked caller or reference.
 | `fm-pdf-finish.sh` | Mandatory last step of any PDF generation path: produce the deliverable from one or more rendered parts, then refuse to publish it unless it passes the conformance gate | name:fm-pdf*, text:\bpdf\b, ref:docs/pdf | documentation: docs/configuration.md, docs/pdf-output.md, docs/telegram-outbound.md; scripts: bin/fm-pdf-lib.sh, bin/fm-pdf-verify.sh; skills: .agents/skills/captain-surfaces/SKILL.md; tests: tests/fm-pdf-output.test.sh |
 | `fm-pdf-lib.sh` | single owner of the option surface the PDF scripts share | name:fm-pdf*, text:\bpdf\b, ref:docs/pdf | documentation: docs/pdf-output.md; scripts: bin/fm-pdf-finish.sh, bin/fm-pdf-verify.sh; tests: tests/fm-pdf-output.test.sh |
 | `fm-pdf-verify.sh` | Conformance gate for generated PDFs: refuse a file that a real PDF reader cannot read as a spec-conforming document | name:fm-pdf*, text:\bpdf\b, ref:docs/pdf | documentation: docs/configuration.md, docs/pdf-output.md; scripts: bin/fm-pdf-finish.sh, bin/fm-pdf-lib.sh; tests: tests/fm-pdf-output.test.sh |
-| `fm-toolbelt-domain-map.py` | Generate and check docs/command-domain-map.md | name:fm-toolbelt-domain-map.py, text:\breview quality\b, text:\bpanel\b, text:\bpdf\b, text:\blavish\b | scripts: bin/fm-test-run.sh; tests: tests/fm-toolbelt-domain-map.test.sh |
+| `fm-toolbelt-domain-map.py` | Generate and check docs/command-domain-map.md | name:fm-toolbelt-domain-map.py, text:\breview quality\b, text:\bpanel\b, text:\bpdf\b, text:\blavish\b | documentation: docs/admiralty-fleet-repo.md; scripts: bin/fm-test-run.sh; tests: tests/fm-toolbelt-domain-map.test.sh |
 
 ## Local service access
 

@@ -2,8 +2,9 @@
 """Generate and check docs/command-domain-map.md.
 
 The map is derived from the current top-level bin/ inventory, each command's
-own header, literal references from tracked files, and a small domain vocabulary
-kept here beside the command that applies it.
+own header, literal references from tracked files inside this repository's own
+namespace, and a small domain vocabulary kept here beside the command that
+applies it.
 It records evidence for later bin/ reorganization work, but it never proposes or
 performs any move.
 """
@@ -26,6 +27,55 @@ REFERENCE_EXCLUDE_PATHS = {
     Path("docs/scripts.md"),
     Path("bin/fm-toolbelt-domain-map.py"),
 }
+
+# The paths this repository owns.
+#
+# Another repository can compose this one with material of its own at the same
+# root, so `git ls-files` there answers a wider question than "what is in this
+# toolbelt". The reference scan is scoped to these paths because a reference
+# from a file this repository does not carry is not a fact about this toolbelt:
+# unscoped, the same generator produced a different map depending on which tree
+# it ran in, and the map that ships with this repository could not be correct in
+# both.
+# The set is declared positively, by naming what this repository owns, so no
+# other repository's layout is encoded here.
+# An entry covers itself and everything beneath it, which is why most entries
+# are whole directories and the workflows are named one file at a time: a
+# composing repository adds its own workflows beside ours in a directory we both
+# write to, and a directory entry there would readmit exactly what this scoping
+# exists to keep out.
+# A path this set does not cover is skipped, and every mode that scans reports
+# what it skipped, because the two readings of an uncovered path - foreign
+# material, or a namespace this repository grew and nobody declared - are
+# indistinguishable from inside the tree, and only the second is a defect.
+OWN_PATHS: frozenset[str] = frozenset(
+    {
+        ".agents",
+        ".claude",
+        ".codex",
+        ".github/workflows/ci.yml",
+        ".github/workflows/no-mistakes-required.yml",
+        ".gitignore",
+        ".grok",
+        ".no-mistakes.yaml",
+        ".opencode",
+        ".pi",
+        ".tasks.toml",
+        "AGENTS.md",
+        "CLAUDE.md",
+        "CONTRIBUTING.md",
+        "LICENSE",
+        "README.md",
+        "assets",
+        "bin",
+        "docs",
+        "roles",
+        "skills",
+        "skills-lock.json",
+        "systemd",
+        "tests",
+    }
+)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -455,6 +505,56 @@ def run_git_ls(root: Path) -> list[Path]:
     return [root / line for line in result.stdout.splitlines() if line]
 
 
+def path_prefixes(rel: Path) -> list[str]:
+    parts = rel.parts
+    return ["/".join(parts[:n]) for n in range(1, len(parts) + 1)]
+
+
+def in_own_namespace(rel: Path) -> bool:
+    """Report whether a repository-relative path belongs to this repository."""
+    return any(prefix in OWN_PATHS for prefix in path_prefixes(rel))
+
+
+def skipped_entry(rel: Path) -> str:
+    """Name the shallowest part of an uncovered path that the declaration misses."""
+    for prefix in path_prefixes(rel):
+        if not any(owned == prefix or owned.startswith(f"{prefix}/") for owned in OWN_PATHS):
+            return prefix
+    return rel.as_posix()
+
+
+def partition_tracked(root: Path) -> tuple[list[Path], list[str]]:
+    """Split the tracked paths into this repository's own and the entries skipped."""
+    own: list[Path] = []
+    skipped: set[str] = set()
+    for path in run_git_ls(root):
+        rel = path.relative_to(root)
+        if in_own_namespace(rel):
+            own.append(path)
+        else:
+            skipped.add(skipped_entry(rel))
+    return own, sorted(skipped)
+
+
+def report_skipped(skipped: list[str]) -> None:
+    # A skipped entry is a fact about the tree, not a failure: in a tree that
+    # composes this repository with another one, skipping is the correct
+    # behaviour. It is reported because the alternative reading of the same
+    # observation - that this repository grew a namespace nobody declared, so
+    # its references are being dropped - is indistinguishable from inside, and
+    # silence would hide it. It goes to stderr from every mode that scans, so
+    # the person regenerating the map sees it when the namespace changes rather
+    # than only on a later check, and so --stdout stays pipeable.
+    if not skipped:
+        return
+    entries = "entry" if len(skipped) == 1 else "entries"
+    print(
+        f"fm-toolbelt-domain-map: scan skipped {len(skipped)} {entries} "
+        f"outside this repository's namespace: {', '.join(skipped)}",
+        file=sys.stderr,
+    )
+
+
 def read_text(path: Path) -> str:
     try:
         return path.read_text(encoding="utf-8")
@@ -619,7 +719,8 @@ def md_escape(value: str) -> str:
 
 def generate(root: Path) -> tuple[str, dict[str, int]]:
     commands = [p for p in top_level_commands(root) if p.is_file()]
-    tracked = run_git_ls(root)
+    tracked, skipped = partition_tracked(root)
+    report_skipped(skipped)
     tracked_texts = {path: read_text(path) for path in tracked if path.is_file()}
     rows = []
     domains_used: set[str] = set()
@@ -783,6 +884,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     mode.add_argument("--write", action="store_true", help=f"write {MAP_PATH}")
     mode.add_argument("--check", action="store_true", help=f"fail if {MAP_PATH} is stale or has unplaced commands")
     mode.add_argument("--stdout", action="store_true", help="print the generated map")
+    mode.add_argument(
+        "--namespace",
+        action="store_true",
+        help="print the paths this repository owns, one per line",
+    )
     parser.add_argument("--root", default=os.environ.get("FM_TOOLBELT_MAP_ROOT", "."), help="repository root to inspect")
     return parser.parse_args(argv)
 
@@ -790,6 +896,10 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 def main(argv: list[str]) -> int:
     args = parse_args(argv)
     root = Path(args.root).resolve()
+    if args.namespace:
+        for entry in sorted(OWN_PATHS):
+            print(entry)
+        return 0
     if args.check:
         return check(root)
     text, stats = generate(root)
