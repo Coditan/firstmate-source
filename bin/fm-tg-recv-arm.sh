@@ -218,19 +218,12 @@ PY
     record_failure_wake \
       "check: telegram receiver: FAILED - recorded receiver exited with status unavailable; the service will restart it" \
       "$diagnostic_path" || { [ -z "$diagnostic_path" ] || rm -f "$diagnostic_path"; return 1; }
-  elif [ "$had_event" -eq 1 ]; then
-    record_failure_wake \
-      "check: telegram receiver: FAILED - receiver exited 0 after delivering output; the service will restart it" \
-      "$diagnostic_path" || { [ -z "$diagnostic_path" ] || rm -f "$diagnostic_path"; return 1; }
-  elif [ -n "$diagnostic_path" ]; then
+  elif [ "$had_event" -eq 0 ] && [ -n "$diagnostic_path" ]; then
     record_failure_wake \
       "check: telegram receiver: FAILED - receiver exited 0 with diagnostic output but no valid event; the service will restart it" \
       "$diagnostic_path" || { rm -f "$diagnostic_path"; return 1; }
-  else
-    record_failure_wake \
-      "check: telegram receiver: FAILED - receiver exited 0 without a message or diagnostic; the service will restart it" \
-      "$diagnostic_path" || { [ -z "$diagnostic_path" ] || rm -f "$diagnostic_path"; return 1; }
   fi
+  # Exit 0 completes a bounded cycle; valid events were already queued above.
   [ -z "$diagnostic_path" ] || rm -f "$diagnostic_path"
 }
 

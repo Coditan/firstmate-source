@@ -372,9 +372,8 @@ fi
 # A systemd-owned receiver has no harness background task to carry its output
 # into the primary seat. Its successful message and its sustained failure must
 # therefore take the same durable wake path as the rest of supervision. The
-# failure fixture exits without output on purpose: an empty receiver exit must
-# not be allowed to look like an empty mailbox, and repeated service restarts
-# must not flood the queue with the same outage.
+# receiver completes bounded polling cycles: clean exits are healthy, while
+# repeated genuine failures must not flood the queue with the same outage.
 service_home="$TMP_ROOT/service-home"
 mkdir -p "$service_home/config" "$service_home/state"
 printf 'BOT_TOKEN=x\nCHAT_ID=y\n' > "$service_home/config/telegram.env"
@@ -452,13 +451,36 @@ for line in open(sys.argv[1], encoding="utf-8"):
 PY
 }
 
+# A silent stub cycle falsifies the reported premise if the unfixed wrapper
+# leaves this isolated queue empty. Exercise both clean outcomes before failing
+# so a pre-fix run demonstrates each regression independently.
+clean_cycle_failures=0
+printf '%s\n' empty-exit > "$service_home/state/receiver-mode"
+FM_TG_RECV_MANAGER=systemd FM_HOME="$service_home" FM_STATE_OVERRIDE="$service_home/state" \
+  "$ARM" > "$service_home/state/service-quiet.out" 2>&1 \
+  || fail "quiet cycle did not exit successfully"
+if [ -s "$service_home/state/.wake-queue" ]; then
+  printf 'not ok - quiet cycle appended a wake:\n'
+  cat "$service_home/state/.wake-queue"
+  clean_cycle_failures=$((clean_cycle_failures + 1))
+fi
+: > "$service_home/state/.wake-queue"
+rm -f "$service_home/state/.tg-recv-last-failure-wake"
+
 printf '%s\n' message > "$service_home/state/receiver-mode"
-FM_TG_RECV_MANAGER=systemd FM_HOME="$service_home" "$ARM" > "$service_home/state/service-message.out" 2>&1
+FM_TG_RECV_MANAGER=systemd FM_HOME="$service_home" FM_STATE_OVERRIDE="$service_home/state" "$ARM" > "$service_home/state/service-message.out" 2>&1 \
+  || fail "completed message cycle did not exit successfully"
 assert_contains "$(decoded_queue "$service_home/state/.wake-queue")" 'CAPTAIN-TELEGRAM: service message' \
   "systemd receiver message was left in the service journal instead of the durable wake queue"
-assert_grep 'receiver exited 0 after delivering output' "$service_home/state/.wake-queue" \
-  "receiver exit after a delivered message was not reported as a durable failure"
-FM_TG_RECV_MANAGER=systemd FM_HOME="$service_home" "$ARM" > "$service_home/state/service-message-second.out" 2>&1
+if grep -q 'telegram receiver: FAILED' "$service_home/state/.wake-queue"; then
+  printf 'not ok - completed message cycle appended a failure wake:\n'
+  cat "$service_home/state/.wake-queue"
+  clean_cycle_failures=$((clean_cycle_failures + 1))
+fi
+[ "$clean_cycle_failures" -eq 0 ] || fail "$clean_cycle_failures clean cycle regressions"
+[ ! -e "$service_home/state/.tg-recv-last-failure-wake" ] \
+  || fail "clean cycles consumed the failure quiet window"
+FM_TG_RECV_MANAGER=systemd FM_HOME="$service_home" FM_STATE_OVERRIDE="$service_home/state" "$ARM" > "$service_home/state/service-message-second.out" 2>&1
 message_rows=$(decoded_queue "$service_home/state/.wake-queue" | grep -c 'CAPTAIN-TELEGRAM: service message')
 [ "$message_rows" -eq 2 ] \
   || fail "two messages shared one wake identity and would be deduplicated at drain time: $message_rows rows"
@@ -543,10 +565,10 @@ assert_contains "$preserved_output" 'CAPTAIN-TELEGRAM: service message' \
 rm -f "$service_home/state/.tg-recv-last-failure-wake"
 printf '%s\n' failure > "$service_home/state/receiver-mode"
 service_rc=0
-FM_TG_RECV_MANAGER=systemd FM_HOME="$service_home" "$ARM" > "$service_home/state/service-failure.out" 2>&1 \
+FM_TG_RECV_MANAGER=systemd FM_HOME="$service_home" FM_STATE_OVERRIDE="$service_home/state" "$ARM" > "$service_home/state/service-failure.out" 2>&1 \
   || service_rc=$?
 [ "$service_rc" -eq 7 ] || fail "service receiver failure exited $service_rc instead of preserving receiver exit 7"
-assert_grep 'check: telegram receiver: FAILED' "$service_home/state/.wake-queue" \
+assert_grep 'check: telegram receiver: FAILED - receiver exited 7; the service will restart it' "$service_home/state/.wake-queue" \
   "systemd receiver failure was indistinguishable from healthy silence"
 assert_contains "$(decoded_queue "$service_home/state/.wake-queue")" 'CAPTAIN-TELEGRAM: message delivered before failure' \
   "valid receiver event was discarded when the receiver exited nonzero"
@@ -588,7 +610,7 @@ assert_not_contains "$drained" 'SECRET-TOKEN' \
 
 first_failure_rows=$(grep -c 'check: telegram receiver: FAILED' "$service_home/state/.wake-queue")
 service_rc=0
-FM_TG_RECV_MANAGER=systemd FM_HOME="$service_home" "$ARM" > "$service_home/state/service-failure-repeat.out" 2>&1 \
+FM_TG_RECV_MANAGER=systemd FM_HOME="$service_home" FM_STATE_OVERRIDE="$service_home/state" "$ARM" > "$service_home/state/service-failure-repeat.out" 2>&1 \
   || service_rc=$?
 [ "$service_rc" -eq 7 ] || fail "repeated service receiver failure exited $service_rc instead of preserving receiver exit 7"
 second_failure_rows=$(grep -c 'check: telegram receiver: FAILED' "$service_home/state/.wake-queue")
@@ -598,14 +620,13 @@ second_failure_rows=$(grep -c 'check: telegram receiver: FAILED' "$service_home/
 : > "$service_home/state/.wake-queue"
 rm -f "$service_home/state/.tg-recv-last-failure-wake"
 printf '%s\n' empty-exit > "$service_home/state/receiver-mode"
-FM_TG_RECV_MANAGER=systemd FM_HOME="$service_home" "$ARM" > "$service_home/state/service-empty.out" 2>&1
-assert_grep 'check: telegram receiver: FAILED' "$service_home/state/.wake-queue" \
-  "an empty receiver exit was treated as an empty mailbox"
+FM_TG_RECV_MANAGER=systemd FM_HOME="$service_home" FM_STATE_OVERRIDE="$service_home/state" "$ARM" > "$service_home/state/service-empty.out" 2>&1
+[ ! -s "$service_home/state/.wake-queue" ] || fail "quiet cycle queued a wake"
 
 : > "$service_home/state/.wake-queue"
 rm -f "$service_home/state/.tg-recv-last-failure-wake"
 printf '%s\n' diagnostic-exit > "$service_home/state/receiver-mode"
-FM_TG_RECV_MANAGER=systemd FM_HOME="$service_home" "$ARM" > "$service_home/state/service-diagnostic.out" 2>&1
+FM_TG_RECV_MANAGER=systemd FM_HOME="$service_home" FM_STATE_OVERRIDE="$service_home/state" "$ARM" > "$service_home/state/service-diagnostic.out" 2>&1
 assert_grep 'receiver exited 0 with diagnostic output but no valid event' "$service_home/state/.wake-queue" \
   "diagnostic-only zero exit was mislabeled as empty"
 assert_grep 'private diagnostic: state/.tg-recv-last-failure-diagnostic' "$service_home/state/.wake-queue" \
