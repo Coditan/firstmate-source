@@ -39,9 +39,49 @@ The fix therefore has to be a firstmate-owned mechanism that is hard to bypass b
 Every value is resolved at runtime from `tailscale status --json`.
 Nothing vessel-specific is compiled in, which is what makes this work on every vessel including secondmate homes rather than only on the one it was built on.
 
-## The three failures this design is built around
+That read has to reach the local daemon before it can answer, and on a containerised vessel it does not by default.
+`bin/fm-tailnet-cli-lib.sh` is the one owner of that hop, and every client call in this cluster goes through its `fm_tailscale`.
+It never writes a socket path down; it reads the one the image already declared, taking `$FM_TAILSCALE_SOCKET` first, then `$VESSEL_TAILNET_SOCKET` - which the vessel runtime exports into PID 1's environment, so every process the container starts inherits it - and passing nothing at all when neither answers so an undeclared host keeps the client's own default.
+The override is read for whether it is SET, not for whether it holds anything, so it has a value for every answer: a path redirects the client, `FM_TAILSCALE_SOCKET=` resolves nothing and hands the client back its own default, and leaving it unset falls through to the vessel's declaration.
+That empty value is the recovery for the one case the resolver can get wrong - a declaration that names the wrong path - which a seat cannot otherwise escape, because it cannot unset a variable the runtime exported into PID 1 for an already-running process tree.
+Recovering the path from a running `tailscaled`'s own command line was considered and rejected: a process-name match matches across every UNIX account on this machine, so an untrusted account could name an executable `tailscaled`, point it at a socket it owns, and thereby choose the address firstmate publishes to the captain.
+The file records that decision so a reader who does meet a stripped environment finds a reason rather than a gap.
 
-Each was measured on `crew-hlr` on 2026-07-30, not inferred.
+## The four failures this design is built around
+
+Each was measured, not inferred; the three below this one on `crew-hlr` on 2026-07-30, and the first on `coditan-vessel` on 2026-09-07.
+
+### The client cannot reach its own daemon
+
+Measured on `coditan-vessel` on 2026-09-07.
+This vessel's image starts `tailscaled --socket=/run/vessel/runtime/tailscale/tailscaled.sock`, so a bare `tailscale status` fails on the compiled-in default path while naming the daemon it could not reach:
+
+```
+failed to connect to local tailscaled (which appears to be running as tailscaled, pid 176).
+Got error: ... dial unix /var/run/tailscale/tailscaled.sock: connect: no such file or directory
+```
+
+The allocator read that failure as "could not be read", degraded to `addr=127.0.0.1` with an empty `tailaddr` and `dnsname`, and every board it opened bound loopback - on a vessel holding a perfectly good tailnet name.
+The repair is the resolver above, not a second copy of that path in firstmate: the declaration belongs to the image, and firstmate reads it.
+
+Seeing that through cost a live measurement, because the reason named two causes - a missing `jq`, a daemon not responding - while there were three: firstmate itself chose the socket the client dialled.
+So a read that got as far as running the client now carries the socket that was dialled, or says that none was declared and the client used its own default - with the client's own message verbatim where there was one, and saying the client said nothing about why where there was not.
+Each reason claims only what is true of its own path, so a cause that stopped the read *before* any client ran - no `jq` on this host to parse a status, no temporary file to hold the client's output - names itself alone and claims neither a dial nor a client sentence that never existed.
+A reader meeting the same failure again reads which path was dialled and what the client said about it out of the run's own output, and is never sent to a socket that was in fact never opened.
+
+#### What that repair was and was not proved to do
+
+Measured on `coditan-vessel` on 2026-09-07, and recorded here because a previous attempt at this same repair was reported as proved on evidence that did not reach that far.
+
+Proved: the board binds the tailnet address and answers there.
+`ss -ltnp` showed the listener on `100.73.181.90:4451` and on nothing else, a request to `http://coditan-vessel.tail7b8448.ts.net:4451/session/<key>` returned `200` with the board's own title, and the same port on `127.0.0.1` returned nothing at all - so the answer came over the tailnet address rather than through a loopback shortcut.
+An answer submitted against that same tailnet URL came back to the seat through `bin/fm-lavish.sh poll` as `status: feedback`.
+
+Not proved: that a request from another device reaches it.
+Every request above originated inside this container, which traverses none of the hops between the captain's laptop and this vessel.
+It could not be tested from here: no tailnet node advertises Tailscale SSH (`sshHostKeys` empty on all eight), and plain SSH to `coditan`, `aurora`, `crew-hlr`, `crew-allesknut` and `tugboat-cloud` is refused by key or by a closed port.
+That hop is untested, which is neither a claim that it works nor a claim that it is broken.
+Testing it needs one request made from a device that is not this container, and until someone makes that request this section says so.
 
 ### A fixed default port is contended across UNIX accounts
 
@@ -108,7 +148,7 @@ The rule is that no URL is emitted implying reach the vessel has not established
 - **Nothing established either way** - `reachability=untested`, which several different runs produce, and the wrapper says a different sentence for each because those runs met different things and each sentence names what its own run met.
   On a vessel whose first port-claiming run neither published a route nor found one, and whose tailscale can serve, it prints `nothing has established whether this vessel is reachable off this machine (<reason>) - this board certainly opens here, and no tailscale serve route onto <tailaddr> has been established yet.`
   It stops at what this run met and says nothing about what the next one will do: a `--serving` run does attempt the publish - including on a live board whose port comes back through `--mine`, where the carried loopback address is itself the statement that a route is the one way off this machine, so the publish is retried rather than the recorded answer restated - but that attempt can be refused durably, by a serve policy or a `tailscale` too old for the flags, while `tailscale status` keeps reporting Running.
-  On a host whose `tailscale status` could not be READ at all, because `jq` is absent or tailscaled is not answering, it prints `nothing here could read whether this vessel has any reach off this machine (<reason>) - this board certainly opens here, and nothing more can be settled until that can be read.`
+  On a host whose `tailscale status` could not be READ at all - `jq` absent, no temporary file to hold the client's output, or a client call that failed against the socket it dialled - it prints `nothing here could read whether this vessel has any reach off this machine (<reason>) - this board certainly opens here, and nothing more can be settled until that can be read.`
   Every later run on that host returns the same non-answer, which is a fact about the read rather than a prediction; `bin/fm-service-port.sh`'s header owns which run resolves which value.
   On a host whose address IS known but whose tailscale cannot serve - tailscaled stopped between the identity read and the walk, say - it prints `... and no route could be published onto <tailaddr> because tailscale could not serve here just now.`
   That one names what blocked the route and stops there: the state is not durable, and what a later run meets on that host is not something this run established, in either direction.

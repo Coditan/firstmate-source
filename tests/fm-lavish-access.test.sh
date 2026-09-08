@@ -22,6 +22,13 @@
 # docs/lavish-access.md.
 set -u
 
+# The client-socket resolver reads the environment it is run in, and a real
+# vessel exports its own declaration into every process, so this suite would
+# otherwise report a different socket on a containerised host than on a bare
+# one. Cleared here so every case starts from a host that declared nothing; the
+# cases that need a declaration set one themselves.
+unset FM_TAILSCALE_SOCKET VESSEL_TAILNET_SOCKET
+
 # shellcheck source=tests/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
@@ -69,6 +76,13 @@ make_fake_tailscale() {
   local bin=$1
   cat > "$bin/tailscale" <<'SH'
 #!/usr/bin/env bash
+# Real tailscale takes a global --socket= before the subcommand, and firstmate's
+# client wrapper passes it on every call (bin/fm-tailnet-cli-lib.sh owns why), so
+# this stub has to consume it the same way or every call arrives shifted by one.
+TS_SOCK=""
+case "${1:-}" in
+  --socket=*) TS_SOCK=${1#--socket=}; shift ;;
+esac
 if [ "${1:-}" = serve ]; then
   printf '%s\n' "$*" >> "${FM_TEST_TS_SERVE_LOG:-/dev/null}"
   state=${FM_TEST_TS_SERVE_STATE:-/dev/null}
@@ -140,6 +154,11 @@ case "${FM_TEST_TS_MODE:-running}" in
     ;;
   kernel)
     printf '{"BackendState":"Running","MagicDNSSuffix":"","Self":{"HostName":"kernel","DNSName":"kernel.","TailscaleIPs":["127.0.0.2"]}}\n'
+    ;;
+  socketfail)
+    printf 'failed to connect to local tailscaled (which appears to be running as tailscaled, pid 176). Got error: dial unix %s: connect: no such file or directory\n' \
+      "${TS_SOCK:-/var/run/tailscale/tailscaled.sock}" >&2
+    exit 1
     ;;
   *) exit 1 ;;
 esac
@@ -226,8 +245,75 @@ field() {
   printf '%s\n' "$2" | sed -n "s/^$1=\(.*\)$/\1/p" | head -1
 }
 
+# --- client socket resolution ------------------------------------------------
+#
+# bin/fm-tailnet-cli-lib.sh is the one owner of HOW the client reaches its own
+# daemon. A vessel whose image declares a non-default socket made every bare
+# `tailscale` call fail with a daemon that was running, which the allocator then
+# recorded as no tailnet at all - so these assert that the path is READ from
+# where it is declared, never written down here, and actually reaches the client
+# as the argument the real one takes.
+#
+# The assertions exit rather than fail: a `fail` inside a subshell ends only the
+# subshell, so the status has to be carried out to expect_code below or every
+# one of them is inert.
+(
+  CLI_SOCK_TMP="$TMP_ROOT/cli-sock"
+  mkdir -p "$CLI_SOCK_TMP"
+  # shellcheck source=bin/fm-tailnet-cli-lib.sh
+  . "$ROOT/bin/fm-tailnet-cli-lib.sh"
+
+  out=$(FM_TAILSCALE_SOCKET=/tmp/explicit.sock VESSEL_TAILNET_SOCKET=/tmp/vessel.sock \
+    fm_tailscale_socket)
+  [ "$out" = /tmp/explicit.sock ] || exit 1
+
+  out=$(unset FM_TAILSCALE_SOCKET; VESSEL_TAILNET_SOCKET=/tmp/vessel.sock fm_tailscale_socket)
+  [ "$out" = /tmp/vessel.sock ] || exit 2
+
+  # A host that declared no socket anywhere gets the client's own default, not
+  # an invented path: writing one down here would break a working vessel.
+  out=$(unset FM_TAILSCALE_SOCKET VESSEL_TAILNET_SOCKET; fm_tailscale_socket) && exit 3
+  [ -z "$out" ] || exit 4
+
+  # UNSET and SET-TO-EMPTY are different answers, not the same absence. A vessel
+  # whose own declaration is WRONG is the case the override exists for, and a
+  # seat cannot unset what the runtime exported into PID 1, so the empty value
+  # has to mean "resolve nothing" rather than falling through to that
+  # declaration - otherwise the override can redirect but never stand down.
+  out=$(FM_TAILSCALE_SOCKET='' VESSEL_TAILNET_SOCKET=/tmp/vessel.sock fm_tailscale_socket) && exit 9
+  [ -z "$out" ] || exit 10
+
+  # The resolution is only worth anything if it reaches the client, so this
+  # drives fm_tailscale against a `tailscale` that records the argv it was
+  # handed. That pass-through IS the repair: without it the client dials its
+  # compiled-in default and reports no tailnet on a vessel that has one.
+  printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" > "$FM_TEST_TS_ARGV"\n' \
+    > "$CLI_SOCK_TMP/tailscale"
+  chmod +x "$CLI_SOCK_TMP/tailscale"
+  export FM_TEST_TS_ARGV="$CLI_SOCK_TMP/argv"
+  # shellcheck disable=SC2030 # The PATH change is deliberately confined to this
+  # subshell so the stub tailscale cannot leak into later assertions.
+  export PATH="$CLI_SOCK_TMP:$PATH"
+
+  FM_TAILSCALE_SOCKET=/tmp/explicit.sock fm_tailscale status --json || exit 5
+  [ "$(cat "$FM_TEST_TS_ARGV")" = "--socket=/tmp/explicit.sock status --json" ] || exit 6
+
+  (unset FM_TAILSCALE_SOCKET VESSEL_TAILNET_SOCKET; fm_tailscale status --json) || exit 7
+  [ "$(cat "$FM_TEST_TS_ARGV")" = "status --json" ] || exit 8
+
+  # The standing-down override has to reach the client as no --socket at all,
+  # which is the only thing that hands the client back its own default.
+  FM_TAILSCALE_SOCKET='' VESSEL_TAILNET_SOCKET=/tmp/vessel.sock fm_tailscale status --json || exit 11
+  [ "$(cat "$FM_TEST_TS_ARGV")" = "status --json" ] || exit 12
+  exit 0
+)
+expect_code 0 "$?" "the client socket is read from where it is declared and passed to the client"
+pass "the tailscale client socket is read from where it is declared, never written here"
+
 FAKEBIN=$(fm_fakebin "$TMP_ROOT")
 make_fake_tailscale "$FAKEBIN"
+# shellcheck disable=SC2031 # The earlier PATH change was scoped to its subshell
+# on purpose; this is the suite's own PATH, not a lost modification.
 PATH="$FAKEBIN:$PATH"
 export PATH
 export FM_TEST_TS_MODE=running
@@ -959,6 +1045,70 @@ assert_contains "$unread" "tailscale status could not be read as JSON" \
   || fail "the board still binds somewhere, got '$(field addr "$unread")'"
 assert_grep "reachability=untested" "$HOME_UR/state/service-port.lavish" \
   "and the record does not claim a tested no-reach"
+# The failure this cluster exists for is a daemon that IS running while
+# listening somewhere other than the path firstmate resolved. Under a reason
+# that names only jq and an unresponsive daemon that failure is invisible - the
+# reader eliminates both named causes and concludes the fault is elsewhere,
+# which is what once cost a live measurement to see through. So the reason
+# carries the socket that was dialled, because firstmate chose it, and what the
+# client itself said about it.
+dialled=$(FM_TEST_TS_MODE=socketfail FM_TAILSCALE_SOCKET=/tmp/declared-elsewhere.sock \
+  FM_HOME="$HOME_UR" FM_SERVICE_PORT_RANGE=4890-4891 "$ROOT/bin/fm-service-port.sh" lavish)
+expect_code 0 "$?" "a client that cannot reach its own daemon still gets a local board"
+[ "$(field reachability "$dialled")" = untested ] \
+  || fail "a client that could not be read establishes nothing either way, got '$(field reachability "$dialled")'"
+assert_contains "$dialled" "/tmp/declared-elsewhere.sock" \
+  "the reason names the socket firstmate dialled rather than leaving its own choice unsaid"
+assert_contains "$dialled" "no such file or directory" \
+  "and carries what the client said instead of discarding it"
+# A vessel that declared no socket at all is a DIFFERENT diagnosis from one whose
+# declaration points at the wrong path, so the two do not share one message.
+undeclared=$(FM_TEST_TS_MODE=socketfail FM_HOME="$HOME_UR" FM_SERVICE_PORT_RANGE=4892-4893 \
+  env -u FM_TAILSCALE_SOCKET -u VESSEL_TAILNET_SOCKET "$ROOT/bin/fm-service-port.sh" lavish)
+assert_contains "$undeclared" "no socket is declared" \
+  "a vessel that declared none says so rather than naming a path it never dialled"
+: > "$FM_TEST_TS_SERVE_STATE"
+: > "$FM_TEST_TS_SERVE_LOG"
+pass "an unreadable status names the socket that was dialled and what the client said"
+
+# The other half of that: a cause that stopped the read BEFORE any client ran
+# may claim neither a dial nor a client sentence. A PATH holding everything the
+# allocator needs except jq is the real shape of that case, and the run has to
+# survive it - the point is the sentence it emits, not a crash.
+NOJQ_BIN="$TMP_ROOT/nojq-bin"
+mkdir -p "$NOJQ_BIN"
+# Mirrored from this host's own PATH rather than from a list of tools the
+# allocator is believed to use, because a list would make this case fail as a
+# missing symlink the day the script reaches for one more utility - which says
+# nothing about the sentence under test.
+for path_dir in $(printf '%s\n' "$PATH" | tr ':' '\n'); do
+  [ -d "$path_dir" ] || continue
+  for tool_path in "$path_dir"/*; do
+    tool=${tool_path##*/}
+    [ "$tool" = jq ] && continue
+    [ -x "$tool_path" ] || continue
+    [ -e "$NOJQ_BIN/$tool" ] && continue
+    ln -s "$tool_path" "$NOJQ_BIN/$tool"
+  done
+done
+cp "$FAKEBIN/tailscale" "$NOJQ_BIN/tailscale"
+PATH="$NOJQ_BIN" command -v jq >/dev/null 2>&1 \
+  && fail "this case only means anything while jq is genuinely absent from that PATH"
+nojq=$(PATH="$NOJQ_BIN" FM_TEST_TS_MODE=running FM_TAILSCALE_SOCKET=/tmp/never-dialled.sock \
+  FM_HOME="$HOME_UR" FM_SERVICE_PORT_RANGE=4894-4895 "$ROOT/bin/fm-service-port.sh" lavish)
+expect_code 0 "$?" "a host that cannot parse a status still gets a local board"
+[ "$(field reachability "$nojq")" = untested ] \
+  || fail "nothing was read, so nothing was established, got '$(field reachability "$nojq")'"
+assert_contains "$nojq" "jq is not installed here" \
+  "the cause that actually stopped the read is the one named"
+assert_not_contains "$nojq" "/tmp/never-dialled.sock" \
+  "a socket that was never opened is not claimed as dialled"
+assert_not_contains "$nojq" "the client said" \
+  "and a client that was never started is not quoted"
+: > "$FM_TEST_TS_SERVE_STATE"
+: > "$FM_TEST_TS_SERVE_LOG"
+pass "a read that stopped before the client ran claims neither a dial nor a client sentence"
+
 # A vessel that really has no tailnet is a different fact, and still says so.
 none_at_all=$(FM_TEST_TS_MODE=stopped FM_HOME="$HOME_UR" \
   FM_SERVICE_PORT_RANGE=4888-4889 "$ROOT/bin/fm-service-port.sh" lavish)
@@ -1171,8 +1321,8 @@ u2=$(FM_TEST_TS_MODE=unreadable FM_HOME="$HOME_U2" FM_SERVICE_PORT_RANGE=4891-48
   "$ROOT/bin/fm-lavish.sh" end "$HOME_U2/.lavish/board.html" 2>&1)
 assert_contains "$u2" "nothing here could read whether" \
   "an unreadable tailscale is reported as unread, not as a tested answer"
-assert_contains "$u2" "jq missing or tailscale not responding" \
-  "and the concrete cause is named"
+assert_contains "$u2" "no socket is declared for this vessel" \
+  "and the concrete cause is named rather than a list of causes to guess between"
 assert_not_contains "$u2" "the next open settles the rest" \
   "without promising a further open resolves what no further open can"
 assert_not_contains "$u2" "not reachable off this machine" \
@@ -1946,11 +2096,17 @@ grep -qx "$y_port" "$FM_TEST_TS_SERVE_STATE" || fail "the open should have publi
 # port stays published, which is the one answer that means the withdrawal failed
 # rather than that there was nothing to withdraw.
 y_stop=$(FM_TEST_TS_MODE=userspace FM_TEST_TS_SERVE=broken FM_HOME="$HOME_Y" \
+  FM_TAILSCALE_SOCKET=/tmp/stop-note.sock \
   FM_SERVICE_PORT_RANGE=4826-4827 "$ROOT/bin/fm-lavish.sh" stop 2>&1)
 expect_code 0 "$?" "a failed withdrawal must be reported, never turned into a refusal to stop"
 assert_contains "$y_stop" "could not be withdrawn" \
   "a tailnet endpoint left standing must be said out loud, not left for the captain to find"
 assert_contains "$y_stop" "$y_port" "the report names the port still answering"
+# The command handed over has to be the one that works on THIS vessel: a bare
+# `tailscale` reaches nothing where the image declares its own socket, so advice
+# that dropped the socket would fail on the vessel it names.
+assert_contains "$y_stop" "tailscale --socket=/tmp/stop-note.sock serve --http=$y_port off" \
+  "the withdrawal the captain is asked to finish names the socket this vessel's client needs"
 assert_contains "$y_stop" "stopped" "the board really did stop, and the run says so"
 grep -qx "$y_port" "$FM_TEST_TS_SERVE_STATE" \
   || fail "this case only means anything while the withdrawal genuinely did not take"

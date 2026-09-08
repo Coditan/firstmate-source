@@ -134,6 +134,8 @@ TOKEN_FILE="$LAV_STATE/claim-token"
 
 # shellcheck source=bin/fm-axi-path-lib.sh
 . "$SCRIPT_DIR/fm-axi-path-lib.sh"
+# shellcheck source=bin/fm-tailnet-cli-lib.sh
+. "$SCRIPT_DIR/fm-tailnet-cli-lib.sh"
 # shellcheck source=bin/fm-tailnet-serve-lib.sh
 . "$SCRIPT_DIR/fm-tailnet-serve-lib.sh"
 
@@ -723,8 +725,20 @@ fi
 # captain told his board was stopped while his own tailnet name keeps answering
 # on that port.
 if [ "$SUBCOMMAND" = stop ]; then
-  withdraw_proxy "$PORT" \
-    || note "this board is stopping, but its published tailnet endpoint on port $PORT could not be withdrawn, so this vessel's tailnet name keeps answering there until \`tailscale serve --http=$PORT off\` succeeds"
+  if ! withdraw_proxy "$PORT"; then
+    # The command handed over has to be the one that works HERE. On a vessel
+    # whose image declares its own tailscaled socket, a bare `tailscale` reaches
+    # nothing (bin/fm-tailnet-cli-lib.sh owns that), so telling the captain to
+    # run the bare form would hand him a command that fails on the vessel it
+    # names. Resolved here rather than above so the withdrawal that took - the
+    # ordinary stop - pays nothing for a note it never emits.
+    if TS_SOCK=$(fm_tailscale_socket); then
+      TS_CMD="tailscale --socket=$TS_SOCK"
+    else
+      TS_CMD="tailscale"
+    fi
+    note "this board is stopping, but its published tailnet endpoint on port $PORT could not be withdrawn, so this vessel's tailnet name keeps answering there until \`$TS_CMD serve --http=$PORT off\` succeeds"
+  fi
 fi
 
 if [ "$SUBCOMMAND" != open ]; then

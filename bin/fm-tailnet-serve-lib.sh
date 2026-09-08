@@ -40,10 +40,16 @@
 #
 # Every function is quiet and reports through its exit status alone, so a caller
 # owns what its user is told. Publish and withdraw are both idempotent.
+#
+# Every client call goes through fm_tailscale, so this file never learns where
+# this vessel's tailscaled socket is; bin/fm-tailnet-cli-lib.sh owns that.
+
+# shellcheck source=bin/fm-tailnet-cli-lib.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fm-tailnet-cli-lib.sh"
 
 fm_tailnet_serve_available() {
   command -v tailscale >/dev/null 2>&1 || return 1
-  tailscale status --json 2>/dev/null | grep -q '"BackendState": *"Running"' || return 1
+  fm_tailscale status --json 2>/dev/null | grep -q '"BackendState": *"Running"' || return 1
   return 0
 }
 
@@ -55,7 +61,7 @@ fm_tailnet_serve_publish() {
   fm_tailnet_serve_available || return 1
   # --yes because this runs non-interactively; serve otherwise prompts before
   # changing a node's published configuration.
-  tailscale serve --bg --yes --http="$port" "http://127.0.0.1:$port" >/dev/null 2>&1 || return 1
+  fm_tailscale serve --bg --yes --http="$port" "http://127.0.0.1:$port" >/dev/null 2>&1 || return 1
   fm_tailnet_serve_published "$port"
 }
 
@@ -69,7 +75,7 @@ fm_tailnet_serve_published() {
   # `serve status --json` keys its TCP map by published port, which is an exact
   # answer; the human-readable form has to be pattern-matched and has already
   # changed shape between releases.
-  [ "$(tailscale serve status --json 2>/dev/null \
+  [ "$(fm_tailscale serve status --json 2>/dev/null \
     | jq -r --arg p "$port" '(.TCP // {}) | has($p)' 2>/dev/null)" = true ] || return 1
   return 0
 }
@@ -80,7 +86,7 @@ fm_tailnet_serve_withdraw() {
     ''|*[!0-9]*) return 2 ;;
   esac
   command -v tailscale >/dev/null 2>&1 || return 1
-  tailscale serve --yes --http="$port" off >/dev/null 2>&1 || true
+  fm_tailscale serve --yes --http="$port" off >/dev/null 2>&1 || true
   fm_tailnet_serve_published "$port" && return 1
   return 0
 }

@@ -220,6 +220,8 @@ CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 PROBE="$SCRIPT_DIR/fm-service-port-probe.mjs"
 
+# shellcheck source=bin/fm-tailnet-cli-lib.sh
+. "$SCRIPT_DIR/fm-tailnet-cli-lib.sh"
 # shellcheck source=bin/fm-tailnet-serve-lib.sh
 . "$SCRIPT_DIR/fm-tailnet-serve-lib.sh"
 # shellcheck source=bin/fm-reachability-lib.sh
@@ -353,28 +355,90 @@ add_reason() {
   fi
 }
 
-tailscale_json() {
-  command -v jq >/dev/null 2>&1 || return 1
-  tailscale status --json 2>/dev/null
+# The status read reports through globals rather than through stdout, because
+# what a FAILED read has to say is the whole point of it: a caller taking the
+# JSON through a command substitution would lose the client's own message with
+# the subshell that captured it.
+TAILSCALE_STATUS_JSON=""
+TAILSCALE_STATUS_ERR=""
+TAILSCALE_PREFLIGHT_ERR=""
+TAILSCALE_CLIENT_RAN=0
+
+read_tailscale_status() {
+  local err rc
+  TAILSCALE_STATUS_JSON=""
+  TAILSCALE_STATUS_ERR=""
+  TAILSCALE_PREFLIGHT_ERR=""
+  TAILSCALE_CLIENT_RAN=0
+  command -v jq >/dev/null 2>&1 || {
+    TAILSCALE_PREFLIGHT_ERR="jq is not installed here, so nothing on this host could parse a status"
+    return 1
+  }
+  err=$(mktemp "${TMPDIR:-/tmp}/fm-service-port-tailscale.XXXXXX") || {
+    TAILSCALE_PREFLIGHT_ERR="no temporary file could be made here to hold the client's output, so the status was never read"
+    return 1
+  }
+  TAILSCALE_CLIENT_RAN=1
+  TAILSCALE_STATUS_JSON=$(fm_tailscale status --json 2>"$err")
+  rc=$?
+  # The client's text is carried verbatim apart from being folded onto one line
+  # and bounded, because a reason is one field of a single-line record and a
+  # multi-line or unbounded message would break that record's shape.
+  TAILSCALE_STATUS_ERR=$(tr '\n\t' '  ' < "$err" | sed 's/  */ /g; s/^ //; s/ *$//' | cut -c1-300)
+  rm -f "$err"
+  return "$rc"
+}
+
+# THREE things can leave a status unreadable, and the third is firstmate's own
+# choice of socket, so a reason that named only the other two sent the last
+# reader past the actual cause. Each path may therefore claim only what is true
+# OF ITSELF, which is why the attribution is gated on whether the client was
+# actually invoked rather than attached to every failure:
+#
+#   - stopped before the client ran: neither a dial nor a client sentence. The
+#     socket was never opened and no client was ever started.
+#   - dialled and the client errored: both. This is the case the whole cluster
+#     exists to make legible - a vessel whose image starts tailscaled on a
+#     socket that is not the one we resolved.
+#   - dialled and answered something unusable: the socket, and no invented
+#     client message where there was none.
+#
+# Vague costs an afternoon, false costs trust in every reason line this script
+# emits. A reason line that is known to fabricate its attribution poisons the
+# ones that are telling the truth.
+tailscale_read_detail() {
+  local dialled
+  if [ "$TAILSCALE_CLIENT_RAN" -eq 0 ]; then
+    printf '%s' "$TAILSCALE_PREFLIGHT_ERR"
+    return 0
+  fi
+  dialled=$(fm_tailscale_dialled)
+  if [ -n "$TAILSCALE_STATUS_ERR" ]; then
+    printf '%s; the client said: %s' "$dialled" "$TAILSCALE_STATUS_ERR"
+  else
+    printf '%s, and said nothing about why' "$dialled"
+  fi
 }
 
 # Returns 0 with the node's identity resolved, 1 when this host was READ and
 # genuinely has no usable tailnet, and 2 when the status could not be read at
-# all. The last is not a negative answer: a missing jq or a tailscaled that did
-# not respond tests nothing about reach, and calling it one would record a
-# tested no-reach on a vessel that may be perfectly reachable.
+# all. The last is not a negative answer: a missing jq, a tailscaled that did not
+# respond, or a client dialling a socket the daemon does not listen on all test
+# nothing about reach, and calling any of them one would record a tested
+# no-reach on a vessel that may be perfectly reachable.
 resolve_tailnet() {
   local json state addr host suffix dnsname
   command -v tailscale >/dev/null 2>&1 || {
     add_reason "tailscale is not installed on this host"
     return 1
   }
-  json=$(tailscale_json) || {
-    add_reason "tailscale status could not be read as JSON (jq missing or tailscale not responding)"
+  read_tailscale_status || {
+    add_reason "tailscale status could not be read as JSON ($(tailscale_read_detail))"
     return 2
   }
+  json=$TAILSCALE_STATUS_JSON
   [ -n "$json" ] || {
-    add_reason "tailscale status returned nothing"
+    add_reason "tailscale status returned nothing ($(tailscale_read_detail))"
     return 2
   }
   state=$(printf '%s' "$json" | jq -r '.BackendState // empty' 2>/dev/null)
