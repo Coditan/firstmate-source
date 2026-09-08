@@ -64,6 +64,9 @@ An invocation without a following `/afk` grants nothing until the window opens, 
 
 - Firstmate may attach to one of this vessel's own seats over tmux and type directly into that seat's composer.
   Those seats are this vessel's own workers - its crewmates, scouts, and secondmates - because the protocol drives work that involves one vessel only: "its to drive work, that only involves one vesssel".
+  Naming secondmates there adds no reach, because the fleet's cross-vessel rule already excludes them: at `peer-dispatch.md:55` it names secondmates alongside crewmates and scouts as a vessel's own direct reports in its own home and leaves them outside its ban, so a secondmate seat was never another vessel's seat for that ban.
+  That rule lives in the fleet repository and is not readable from this worktree, so it is cited by name and line rather than quoted.
+  This bounds only what the cross-vessel ban excludes for this protocol; it does not settle what "vessel" means generally, and this repository's separate sense of a secondmate home as its own vessel (`docs/configuration.md:574`, `docs/configuration.md:57`) is left standing and unresolved.
   It never reaches another vessel's seat; reaching another vessel is the Bridge envelope protocol, "for comms between vessel we havve the bridge".
   The standing rule that firstmate only steers through its recorded channels is suspended for this one purpose and for the named task alone.
 - Firstmate may answer that seat's confirmation prompts on his behalf.
