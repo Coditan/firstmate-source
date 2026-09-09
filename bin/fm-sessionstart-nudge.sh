@@ -269,15 +269,32 @@ discard_pending_record() {  # <pid>
   rm -f "$pending" 2>/dev/null || : > "$pending" 2>/dev/null || true
 }
 
-# Remove every stash written before this container started: its pid names a
-# process in a pid table that no longer exists, and the same small numbers are
-# handed out again in this one. A reading that cannot be taken never proves a
-# stash current, so such a stash is removed rather than kept.
+# Remove the stashes that can never be promoted again, on two readings.
+# A stash written before this container started names a process in a pid table
+# that no longer exists, and the same small numbers are handed out again here.
+# A stash whose named pid is no longer live cannot be promoted by anybody either,
+# because promotion needs that pid's process incarnation to be readable NOW and
+# to match what the stash recorded, and a process that is gone can satisfy
+# neither. Removing it is therefore lossless, and it is what bounds the one file
+# per refused session that would otherwise accumulate for the life of the
+# container: a helper session the harness starts in the primary's own cwd is
+# refused the record, stashes, and exits without ever taking the lock.
+# The whole sweep stands down when this host cannot read its own container start.
+# Nothing there can be PROVEN stale, and deleting on an unprovable reading would
+# throw away the very stashes the rebind promotes on exactly the hosts that need
+# them most.
 sweep_stale_pending_records() {
-  local pending
+  local pending pid
+  container_start_epoch_once || return 0
   for pending in "$PENDING_PREFIX"*; do
     [ -e "$pending" ] || continue
-    file_postdates_this_container "$pending" && continue
+    if file_postdates_this_container "$pending"; then
+      pid=$(kv_field "$pending" harness_pid) || pid=
+      case "$pid" in
+        ''|*[!0-9]*) ;;
+        *) kill -0 "$pid" 2>/dev/null && continue ;;
+      esac
+    fi
     rm -f "$pending" 2>/dev/null || : > "$pending" 2>/dev/null || true
   done
 }
@@ -325,15 +342,42 @@ publish_transcript_record() {
 # can name the very pid this container's harness got, and leaving it would
 # measure the previous container's transcript for the life of this session. The
 # record's age is its mtime, the same kernel-set reading the lock predicate
-# uses, and an age or container start that cannot be read never proves the
-# record current. Prints one line saying what it did, and nothing at all when
-# the record already names the holder and is current, so an ordinary healthy
-# session start carries no extra line.
+# uses, weighed against this container's start. A reading that CAN be taken and
+# shows the record predates this container replaces it; a container start that
+# cannot be read on this host at all proves nothing either way, and there a
+# record naming a live holder is left alone rather than destroyed. Prints one
+# line saying what it did, and nothing at all when the record already names the
+# holder and is kept, so an ordinary healthy session start carries no extra line.
+
+# The epoch second this container started, read at most once per run and kept,
+# because every question below asks it of the same host. Empty means this host
+# cannot answer it AT ALL, which is not the same as an old file and must never
+# be collapsed into one: fm_container_start_epoch reads /proc/stat and
+# /proc/1/stat, so it answers nothing on Darwin, and nothing in a Linux
+# container whose hidepid hides /proc/1. Returns 1 in that case.
+CONTAINER_START=
+CONTAINER_START_TAKEN=0
+container_start_epoch_once() {
+  if [ "$CONTAINER_START_TAKEN" = 0 ]; then
+    CONTAINER_START_TAKEN=1
+    CONTAINER_START=$(fm_container_start_epoch) || CONTAINER_START=
+  fi
+  [ -n "$CONTAINER_START" ]
+}
+
+# Three answers rather than two, because "this file was written before this
+# container started" and "this host cannot say when this container started" are
+# different facts and only the first one condemns a file:
+#   0  proven written after this container started
+#   1  proven older, or its own mtime cannot be read while the container start can
+#   2  the container start cannot be read here, so neither is proven
+# The readability of the container start is tested directly rather than inferred
+# from a comparison that failed, so answer 1 always means a reading was taken.
 file_postdates_this_container() {  # <path>
-  local mtime started
+  local mtime
+  container_start_epoch_once || return 2
   mtime=$(fm_file_mtime_epoch "$1") || return 1
-  started=$(fm_container_start_epoch) || return 1
-  [ "$mtime" -ge "$started" ]
+  [ "$mtime" -ge "$CONTAINER_START" ]
 }
 
 record_postdates_this_container() {
@@ -359,17 +403,26 @@ record_postdates_this_container() {
 # later rebind against a pid it no longer describes. Every other session's stash
 # is left alone.
 promote_pending_record() {  # <holder-pid>
-  local holder=$1 pending pid sid path stashed_incarnation live_incarnation
+  local holder=$1 pending pid sid path stashed_incarnation live_incarnation age
   pending=$(pending_path "$holder")
   pid=$(kv_field "$pending" harness_pid) || return 1
   sid=$(kv_field "$pending" session_id) || { discard_pending_record "$holder"; return 1; }
   path=$(kv_field "$pending" transcript_path) || { discard_pending_record "$holder"; return 1; }
   stashed_incarnation=$(kv_field "$pending" harness_incarnation) || stashed_incarnation=
   live_incarnation=$(fm_pid_incarnation "$holder" 2>/dev/null) || live_incarnation=
+  file_postdates_this_container "$pending"
+  age=$?
+  # 2 is "this host cannot say when the container started", and it does not
+  # condemn the stash: the incarnation match above is the stronger proof anyway,
+  # since the process that wrote this stash is alive and is still the same one,
+  # so the stash cannot have come from a container that has already gone.
+  case "$age" in
+    0|2) ;;
+    *) discard_pending_record "$holder"; return 1 ;;
+  esac
   if [ "$pid" != "$holder" ] || [ -z "$sid" ] || [ -z "$path" ] \
      || [ -z "$stashed_incarnation" ] || [ -z "$live_incarnation" ] \
-     || [ "$stashed_incarnation" != "$live_incarnation" ] \
-     || ! file_postdates_this_container "$pending"; then
+     || [ "$stashed_incarnation" != "$live_incarnation" ]; then
     discard_pending_record "$holder"
     return 1
   fi
@@ -379,7 +432,7 @@ promote_pending_record() {  # <holder-pid>
 }
 
 rebind_record_to_lock() {
-  local lock_pid mine_ns
+  local lock_pid mine_ns record_age
   sweep_stale_pending_records
   if ! fm_session_lock_record_read "$LOCK"; then
     invalidate_transcript_record
@@ -403,8 +456,22 @@ rebind_record_to_lock() {
       "$FM_LOCK_RECORD_PIDNS"
     return 0
   fi
-  if [ "$(record_field harness_pid)" = "$lock_pid" ] && record_postdates_this_container; then
-    return 0
+  if [ "$(record_field harness_pid)" = "$lock_pid" ]; then
+    record_postdates_this_container
+    record_age=$?
+    # Proven current, so there is nothing to rebind. Or this host cannot say when
+    # its container started, in which case a record naming a holder that is alive
+    # right now is left exactly as it is: it is almost always the one this
+    # session's own SessionStart hook wrote seconds ago, and replacing it with an
+    # error record would report the ceiling unenforced for the life of EVERY
+    # session on that host - the failure this rebind exists to remove, made
+    # unconditional. The cost is stated rather than hidden: on such a host a
+    # record left by a previous container whose harness pid is live again here is
+    # kept, because nothing on this host can tell the two apart.
+    case "$record_age" in
+      0) return 0 ;;
+      2) kill -0 "$lock_pid" 2>/dev/null && return 0 ;;
+    esac
   fi
   if promote_pending_record "$lock_pid"; then
     printf 'context-ceiling record: rebound to harness pid %s from the transcript this session recorded at its own start, which the lock standing then forbade publishing\n' \
