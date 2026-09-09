@@ -42,6 +42,12 @@
 #                 "GITHUB_INBOX: the GitHub notification watch ... has stopped (...)",
 #                 "FORGE_STATUS: the forge status watch could not be armed on this home (...)",
 #                 "SLOT_GUARD: the worktree-ownership watch could not be armed on this home (...)",
+#                 "FINDINGS_SURFACE: <the surface ... does not exist|... is not a
+#                 directory|... cannot be read by this process|... cannot be
+#                 appended to by this process> (...)", printed
+#                 only where the first-mate watch has taken a reading or the seat
+#                 keeper is running on this home, because those are the watchers
+#                 whose give-up record is a finding,
 #                 "CURATION_NUDGE|CODEBASE_SWEEP_NUDGE: <not armed|could not be armed|scheduler refusal|state persistence failure|state health indeterminate|supervision outage> (...)",
 #                 "FMX: X mode on ..." or "FMX: X mode off ...",
 #                 "WATCHER_UNIT: <consent, convergence, or fallback detail>",
@@ -169,6 +175,10 @@ fm_axi_prepend_path "$FM_HOME"
 . "$SCRIPT_DIR/fm-nm-path-lib.sh"
 # shellcheck source=bin/fm-service-path-lib.sh disable=SC1091
 . "$SCRIPT_DIR/fm-service-path-lib.sh"
+# Sourced for the findings-surface resolution alone, so this digest asks the
+# surface's own owner where it is rather than assuming data/findings.
+# shellcheck source=bin/fm-finding-lib.sh disable=SC1091
+. "$SCRIPT_DIR/fm-finding-lib.sh"
 # Sourced for fm_pr_configured_forgejo_host alone: the Forgejo client is
 # required only where this home names an instance, and that resolution has one
 # owner rather than a second copy of it here.
@@ -1746,6 +1756,33 @@ fi
 # until the cleanup that destroys someone's work, so a watch that stopped is a
 # fact this home needs stated rather than inferred from an absence of findings.
 "$SCRIPT_DIR/fm-slot-guard.sh" --armed || true
+# And whether this home's give-up records have anywhere to land. The seat alarm
+# and the terminal-hosted seat keeper are the two watchers whose one high-severity
+# record is a finding, and a finding emitted onto a surface that does not exist is
+# lost: on 2026-09-06 a keeper spent its restore bound and then failed to file the
+# same give-up 157 times in five minutes because data/findings had never been
+# created. This says so BEFORE the first give-up, and creates nothing:
+# bin/fm-finding.sh init stays the only creator, deliberately, so a mistyped
+# pointer cannot become a fresh empty surface nobody reads.
+findings_surface_diagnostic() {
+  local dir reason
+  # Only where something here actually files findings, and only on evidence that
+  # a watcher HAS RUN rather than that one was armed a moment ago by this very
+  # digest: the alarm's own record of its last reading, and the keeper's own pid
+  # record. Both are each watcher's published evidence, read rather than
+  # re-derived.
+  [ -f "$DATA/seat-alarm.state" ] || [ -f "$STATE/.seat-keeper.pid" ] || return 0
+  dir=$(fm_finding_surface_dir 2>/dev/null) || {
+    echo "FINDINGS_SURFACE: this home's findings surface could not be resolved, so the seat watchers' give-up records have nowhere to land; run $SCRIPT_DIR/fm-finding.sh check to see why"
+    return 0
+  }
+  reason=$(SURFACE=$dir fm_finding_require_surface append 2>&1 >/dev/null) && return 0
+  # The reason is the surface owner's own sentence, which already names the one
+  # creator where that is the fix; nothing is restated here.
+  printf 'FINDINGS_SURFACE: %s, so a give-up record from the first-mate watch or the seat keeper would be lost\n' \
+    "$(printf '%s' "$reason" | tr -d '\n')"
+}
+findings_surface_diagnostic
 [ -f "$STATE/firstmate-update.available" ] && cat "$STATE/firstmate-update.available"
 [ -f "$STATE/firstmate-update.stuck" ] && cat "$STATE/firstmate-update.stuck"
 exit 0

@@ -9,6 +9,21 @@ STAY_DOWN="$ROOT/bin/fm-seat-stay-down.sh"
 
 fm_test_tmproot TMP_ROOT fm-seat-keeper
 
+PIDNS=$(. "$ROOT/bin/fm-harness-pid-lib.sh"; fm_pid_namespace_token)
+
+# A process whose name and command line look exactly like a harness, so a lock
+# naming it reads as a first mate that holds this home.
+start_harness_shaped_process() {  # <dir>
+  printf '#!/usr/bin/env bash\nsleep 60\n' > "$1/claude"
+  chmod +x "$1/claude"
+  "$1/claude" >/dev/null 2>&1 </dev/null &
+  printf '%s\n' "$!"
+}
+
+record_seat() {  # <case-dir> <pid>
+  printf '%s\npidns=%s\n' "$2" "$PIDNS" > "$1/home/state/.lock"
+}
+
 # The fake tmux records every invocation and answers the readings the keeper
 # makes: list-sessions proves the target server survived, has-session answers
 # session presence, and list-windows answers topology. The case dir's
@@ -329,9 +344,9 @@ test_a_hand_start_lifts_an_exhausted_bound() {
   pass "a hand-start lifts an exhausted bound and names the condition it lifted"
 }
 
-# The give-up marker is written only after the finding is filed, so a keeper that
-# reached its bound against an unreachable findings surface leaves an episode
-# that is exhausted and unfiled. A hand-start must lift that one too, and say so.
+# A keeper that reached its bound against an unreachable findings surface records
+# the give-up as `finding=unfiled`, so the episode is exhausted with its claim
+# never filed. A hand-start must lift that one too, and say so.
 test_a_hand_start_lifts_an_exhausted_but_unfiled_bound() {
   local dir key
   dir=$(make_case restart-clears-unfiled-giveup)
@@ -342,8 +357,10 @@ test_a_hand_start_lifts_an_exhausted_but_unfiled_bound() {
   [ "$(session_creations "$dir")" = 1 ] || fail "the first run did not restore exactly once"
   assert_grep "give-up finding failed" "$dir/home/state/.seat-keeper.log" \
     "the unreachable findings surface did not fail the give-up finding"
-  [ ! -f "$dir/home/state/.seat-keeper-giveup" ] \
-    || fail "a give-up marker was recorded although the finding was never filed"
+  [ -f "$dir/home/state/.seat-keeper-giveup" ] \
+    || fail "no give-up marker was recorded when the finding could not be filed"
+  [ "$(sed -n 's/^finding=//p' "$dir/home/state/.seat-keeper-giveup")" = unfiled ] \
+    || fail "the give-up marker did not record that the finding was never filed"
   key=$(sed -n 's/^key=//p' "$dir/home/state/.seat-keeper-attempts")
   [ -n "$key" ] || fail "the exhausted attempts record named no condition"
 
@@ -591,7 +608,67 @@ test_composer_unknown_over_an_unreadable_pane_is_refused() {
   pass "a composer-unknown verdict over an unreadable pane leaves the seat alone"
 }
 
+# THE ENDPOINT IS NOT THE SEAT. A container rebuild leaves the published endpoint
+# naming a pane on a server that is gone while the seat that came up after it is
+# perfectly alive, and every endpoint-shaped verdict then reads as seat death. On
+# 2026-09-06 that spent this vessel's whole restore bound against a live seat.
+test_a_live_lock_makes_a_stale_endpoint_not_seat_death() {
+  local dir pid
+  dir=$(make_case live-lock-stale-endpoint)
+  pid=$(start_harness_shaped_process "$dir")
+  record_seat "$dir" "$pid"
+  run_keeper "$dir" "$DEAD_PANE" 3 || fail "keeper exited non-zero with a live lock"
+  kill "$pid" 2>/dev/null || true
+  wait "$pid" 2>/dev/null || true
+  [ "$(launch_calls "$dir")" = 0 ] \
+    || fail "keeper restored a seat that still holds this home's lock"
+  [ ! -e "$dir/home/state/.seat-keeper-attempts" ] \
+    || fail "keeper opened a retry episode against a live seat"
+  pass "a lock naming a live first mate makes a stale endpoint verdict not seat death"
+}
+
+# And the guard is a presence reading, not a blanket amnesty: a lock whose holder
+# is gone leaves the endpoint verdict exactly where it was, so a genuinely dead
+# seat is still restored.
+test_a_dead_lock_holder_does_not_block_the_restore() {
+  local dir
+  dir=$(make_case dead-lock-holder-stale-endpoint)
+  printf '999999\npidns=%s\n' "$PIDNS" > "$dir/home/state/.lock"
+  run_keeper "$dir" "$DEAD_PANE" 2 || fail "keeper exited non-zero with a dead lock holder"
+  [ "$(launch_calls "$dir")" -gt 0 ] \
+    || fail "a lock naming a dead holder blocked the restore of a dead seat"
+  pass "a lock whose holder is gone leaves the endpoint verdict as seat death"
+}
+
+# The give-up is one per episode whether or not it could be filed. Before this,
+# an exhausted keeper re-emitted the same claim on every poll against a findings
+# surface that did not exist: 157 failures in five minutes, four log lines a
+# minute, for as long as the episode stood.
+test_an_unfilable_giveup_is_emitted_once_per_episode() {
+  local dir failures
+  dir=$(make_case giveup-without-a-surface)
+  rm -rf "$dir/home/data/findings"
+  FM_FINDINGS_DIR="$dir/home/data/findings" \
+  FM_SEAT_KEEPER_MAX_ATTEMPTS=1 \
+    run_keeper "$dir" "$DEAD_PANE" 8 \
+    || fail "keeper exited non-zero with no findings surface"
+  failures=$(grep -c 'give-up finding failed' "$dir/home/state/.seat-keeper.log")
+  [ "$failures" = 1 ] \
+    || fail "the unfilable give-up was logged $failures times rather than once per episode"
+  [ -f "$dir/home/state/.seat-keeper-giveup" ] \
+    || fail "the unfilable give-up left no episode marker, so the next poll would repeat it"
+  [ "$(sed -n 's/^finding=//p' "$dir/home/state/.seat-keeper-giveup")" = unfiled ] \
+    || fail "the marker did not record that the claim never reached a surface"
+  [ "$(session_creations "$dir")" = 1 ] \
+    || fail "keeper kept relaunching past its bound; got $(session_creations "$dir") restores"
+  pass "an unfilable give-up is emitted once per episode and the keeper then stays quiet"
+}
+
+
 test_dead_seat_verdict_restores_the_seat
+test_a_live_lock_makes_a_stale_endpoint_not_seat_death
+test_a_dead_lock_holder_does_not_block_the_restore
+test_an_unfilable_giveup_is_emitted_once_per_episode
 test_one_reading_is_not_enough
 test_a_changing_wake_count_is_still_one_condition
 test_healthy_verdict_never_touches_the_seat

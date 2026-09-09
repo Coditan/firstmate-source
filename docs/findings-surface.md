@@ -49,6 +49,7 @@ The home-local default is correct for a machine carrying one vessel and is the o
 Nothing creates the surface implicitly.
 `fm-finding.sh init` creates it and says so; every other command refuses an absent surface.
 A command that made its own surface on demand would turn a mistyped location into a fresh empty surface nobody collects from, and report success while doing it.
+`bin/fm-bootstrap.sh` prints a `FINDINGS_SURFACE:` line at session start when a seat watcher has run on this home and the surface it would file its give-up on cannot be reached; it creates nothing, and the `bootstrap-diagnostics` skill owns the response to that line.
 
 ## Empty is not the same reading as unreachable
 

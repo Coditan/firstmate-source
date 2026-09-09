@@ -13,7 +13,10 @@
 #
 # This is a container stopgap for a home whose systemd user manager is absent.
 # It consumes bin/fm-delivery-service.sh's named status verdict and never uses a
-# socket pathname or a process-name match as its seat-death detector. The keeper
+# socket pathname or a process-name match as its seat-death detector. The
+# endpoint-shaped verdicts are asked of this home's session lock first, through
+# bin/fm-seat-presence-lib.sh: a home whose lock names a live harness is not
+# missing a seat, whatever a stale endpoint record says. The keeper
 # itself must run on a separate tmux socket from <target-socket>, and refuses to
 # start when $TMUX says it was started on that socket's own server.
 #
@@ -103,6 +106,12 @@ FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 # through it rather than trusting tmux to pick a pane for a session:window name.
 # shellcheck source=bin/fm-tmux-lib.sh
 . "$SCRIPT_DIR/fm-tmux-lib.sh"
+# The one reading of "does a first mate hold this home", shared with the alarm
+# and the respawner so all three halves of seat absence answer it identically.
+# shellcheck source=bin/fm-harness-pid-lib.sh
+. "$SCRIPT_DIR/fm-harness-pid-lib.sh"
+# shellcheck source=bin/fm-seat-presence-lib.sh
+. "$SCRIPT_DIR/fm-seat-presence-lib.sh"
 
 # The arguments own this keeper's home and state directory. Both libraries above
 # define FM_HOME, and derive a STATE, from the environment for their own use, so
@@ -278,13 +287,34 @@ delivery_status() {
 # the known not-death verdicts (including other undeliverable reasons such as a
 # busy or pending composer), and 2 for an unrecognised verdict so the loop must
 # handle it deliberately instead of silently resetting its evidence counter.
+#
+# THE ENDPOINT-SHAPED VERDICTS ARE ASKED OF THE LOCK BEFORE THEY COUNT AS DEATH.
+# Each of them is a reading of the published ENDPOINT, and an endpoint record
+# left behind by a previous container is stale the moment the container is
+# rebuilt while the seat that came up after it is perfectly alive. On 2026-09-06
+# that cost this vessel its whole restore bound on a seat that had been running
+# since 10:25Z. A home whose lock names a live harness is not missing a seat,
+# whatever the endpoint says - the same rule bin/fm-seat-respawner.sh applies
+# before it opens a launch, through the same helper.
+#
+# Only `present` settles it. An `unmeasured` reading is not a presence and is
+# deliberately left to fall through to the delivery verdict: this keeper only
+# ever restores a topology whose windows are missing, so an unreadable lock next
+# to a genuinely dead seat must not become a seat nobody restores.
+seat_holds_this_home() {
+  fm_seat_presence "$KEEPER_STATE/.lock"
+  [ "$FM_SEAT_PRESENCE" = present ]
+}
+
 seat_death_verdict() {  # <delivery-status-line>
   case "$1" in
-    undeliverable:*"the published pane "*" no longer exists"*) return 0 ;;
-    undeliverable:*"the endpoint was published by a session that no longer holds the fleet lock"*) return 0 ;;
-    undeliverable:*"the published tmux server identity does not match the server at its recorded socket"*) return 0 ;;
-    undeliverable:*"the published tmux server could not be verified"*) return 0 ;;
-    undeliverable:*"the session composer could not be confirmed empty (state=unknown: dead shell prompt or unreadable pane)"*) return 0 ;;
+    undeliverable:*"the published pane "*" no longer exists"* \
+      |undeliverable:*"the endpoint was published by a session that no longer holds the fleet lock"* \
+      |undeliverable:*"the published tmux server identity does not match the server at its recorded socket"* \
+      |undeliverable:*"the published tmux server could not be verified"* \
+      |undeliverable:*"the session composer could not be confirmed empty (state=unknown: dead shell prompt or unreadable pane)"*)
+      seat_holds_this_home && return 1
+      return 0 ;;
     down:*)
       "$TMUX_CMD" -S "$TARGET_SOCKET" has-session -t "$TARGET_SESSION" 2>/dev/null && return 1
       return 0
@@ -448,6 +478,10 @@ attempt_restore() {  # <condition-key> <delivery-status-line>
   next=$FM_RETRY_ATTEMPT_NEXT
   now=$(date +%s)
   if [ "$count" -ge "$MAX_ATTEMPTS" ]; then
+    # ONCE PER EPISODE, NOT ONCE PER POLL. fm_retry_giveup_emit writes its marker
+    # on the failure path too, so a surface it could not reach ends the give-up
+    # here exactly as a filed one does, and the failure is logged once instead of
+    # every 15 seconds for as long as the episode stands.
     emit_giveup_finding "$key" "$status" || true
     return 0
   fi
