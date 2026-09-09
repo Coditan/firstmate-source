@@ -274,6 +274,38 @@ wait_for_owner_stop() {
   return 1
 }
 
+# The keeper is not the only thing that can be holding a live owner, so stopping
+# the keeper is not enough to guarantee exactly one.  A keeper killed outright -
+# SIGKILL, a lost container, a torn-down pane - leaves its owner child alive and
+# reparented to init, and stop_keeper returns 0 the moment `has-session` is
+# false without ever looking at it.  A convergence that then starts a second
+# owner gets two processes writing $RECORD, $BEAT and $READING every poll: the
+# record flaps between them, every locked bootstrap sees an unconverged owner
+# and restarts the keeper again, and on a genuinely down runtime both race to
+# start a server.  So convergence stops the owner it is about to REPLACE, judged
+# by the record's own identity so a recycled pid is never signalled.
+#
+# This stops the WATCHING only.  The owner leaves the runtime running by
+# construction (bin/fm-herdr-runtime.sh's cleanup), so nothing here reaches a
+# worker - the asymmetry this whole service is built around holds.
+stop_recorded_owner() {
+  local pid identity recorded_identity
+  pid=$(recorded_owner_field pid)
+  case "$pid" in ''|*[!0-9]*) return 0 ;; esac
+  [ "$(recorded_owner_field fm-home)" = "$FM_HOME" ] || return 0
+  kill -0 "$pid" 2>/dev/null || return 0
+  recorded_identity=$(recorded_owner_field pid-identity)
+  if [ -n "$recorded_identity" ]; then
+    identity=$(fm_pid_identity "$pid" 2>/dev/null) || return 0
+    fm_pid_incarnation_matches_record "$identity" "$recorded_identity" || return 0
+  fi
+  kill -TERM "$pid" 2>/dev/null || true
+  wait_for_owner_stop || {
+    echo "HERDR_RUNTIME: the recorded runtime owner (pid $pid) did not exit when it was replaced" >&2
+    return 1
+  }
+}
+
 ensure_keeper() {
   local name
   name=$(keeper_name) || return 1
@@ -282,12 +314,14 @@ ensure_keeper() {
     return 0
   fi
   stop_keeper || return 1
+  stop_recorded_owner || return 1
   start_keeper || return 1
   wait_for_healthy
 }
 
 restart_keeper() {
   stop_keeper || return 1
+  stop_recorded_owner || return 1
   start_keeper || return 1
   wait_for_healthy
 }
@@ -388,6 +422,13 @@ ensure_systemd() {
   fi
   write_service_env || return 1
   [ "${FM_HERDR_ENV_CHANGED:-0}" -eq 0 ] || changed=1
+  # An owner recorded under the other tier is not this unit's to restart, and
+  # restarting the unit would leave it running alongside the new one; the unit's
+  # own KillMode=process makes that worse, not better.
+  if healthy_owner && ! owner_record_matches systemd; then
+    stop_recorded_owner || return 1
+    changed=1
+  fi
   # Restarting the unit replaces the OWNER only; the runtime it watches keeps
   # running across it, which is what makes this convergence safe with a full
   # fleet of workers on the home.
@@ -412,6 +453,41 @@ install_systemd() {
   }
 }
 
+# The PATH the keeper tier's owner was actually launched with, read from the
+# owner's own record - the keeper receives it as a launch argument, so the record
+# is the only evidence of what it got.
+recorded_keeper_path() {
+  recorded_owner_field service-path
+}
+
+# Report what the environment the OWNER actually runs with cannot reach, asked of
+# the recorded value rather than recomputed, exactly as bin/fm-watcher-service.sh
+# does: the question "can the running owner reach its own tools" must not be
+# answered from the asking session's reach.
+#
+# Two sentences, because the two conditions have different owners and different
+# repairs: a tool this session CAN reach is fixed by converging the service from
+# here, while one this session cannot reach means the recorded value was composed
+# blind and no convergence from this session can improve it.  Emitted for both
+# tiers - the keeper tier is the one this vessel actually runs, and the
+# unresolvable half is the one a thin container entrypoint creates.
+#
+# Scoped to the two tools this owner needs: without herdr or jq it reads the
+# runtime as `unreadable` forever and never starts it, which is correct and
+# useless, and is exactly the silence this line exists to break.
+report_recorded_path() {  # <recorded-path>
+  local recorded=$1 unreachable unresolvable
+  local FM_SERVICE_REQUIRED_TOOLS=${FM_SERVICE_REQUIRED_TOOLS:-'herdr jq'}
+  unreachable=$(fm_service_path_unreachable "$recorded")
+  if [ -n "$unreachable" ]; then
+    echo "HERDR_RUNTIME: the runtime owner's recorded PATH cannot reach $(printf '%s' "$unreachable" | tr '\n' ' ' | sed 's/ $//') - it reads the runtime as unreadable until it can"
+  fi
+  unresolvable=$(fm_service_path_unresolvable "$recorded")
+  if [ -n "$unresolvable" ]; then
+    echo "HERDR_RUNTIME: the runtime owner's recorded PATH cannot reach $(printf '%s' "$unresolvable" | tr '\n' ' ' | sed 's/ $//'), and this session cannot resolve it either, so the recorded environment was composed without it - it reads the runtime as unreadable until a session that can reach it converges the service"
+  fi
+}
+
 recorded_service_path() {
   local line
   line=$(grep -E '^PATH=' "$SERVICE_ENV" 2>/dev/null | tail -1) || return 1
@@ -427,9 +503,21 @@ recorded_service_path() {
 # than left in a file: an owner that is up but reading `unreadable` looks exactly
 # like a healthy home from the outside, and that is the state this whole area
 # exists to stop reporting as fine.
+#
+# Gated on has_current_reading, because the runtime's cleanup deliberately leaves
+# $READING behind when an owner dies: without the gate an hours-old sentence is
+# stated in the present tense and attributed to an owner that no longer exists -
+# and it may be false by now, since a lazy fm_backend_herdr_server_ensure can
+# have started the server since. A reading nothing current stands behind does not
+# get to assert the runtime's state at all.
 report_reading() {
   local reading note
   reading=$(recorded_reading_field reading)
+  [ -n "$reading" ] || return 0
+  if ! has_current_reading; then
+    echo "HERDR_RUNTIME: no owner watching now has established whether the worker runtime is running - the last reading is older than the ${GRACE}s grace"
+    return 0
+  fi
   note=$(recorded_reading_field note)
   case "$reading" in
     running|'') return 0 ;;
@@ -456,6 +544,12 @@ bootstrap_check() {
       elif ! ensure_keeper; then
         echo "HERDR_RUNTIME: systemd --user unavailable and the tmux keeper tier failed, so nothing supervises the runtime every worker on this home runs in"
       fi
+      # Same question, same wording, asked of the keeper's own record.  Skipped
+      # when there is no record at all, because "nothing is watching" is the
+      # branch above's sentence to say, not this one's.
+      if [ -n "$(recorded_keeper_path)" ]; then
+        report_recorded_path "$(recorded_keeper_path)"
+      fi
       report_reading
       return 0
       ;;
@@ -477,11 +571,10 @@ bootstrap_check() {
   elif ! ensure_systemd >/dev/null; then
     echo "HERDR_RUNTIME: $unit convergence failed - inspect systemctl --user status $unit"
   fi
+  # Asked after any convergence above, so it reports what the running owner can
+  # actually reach.
   if systemd_installed; then
-    local recorded unreachable
-    recorded=$(recorded_service_path 2>/dev/null || true)
-    unreachable=$(fm_service_path_unreachable "$recorded")
-    [ -z "$unreachable" ] || echo "HERDR_RUNTIME: the runtime owner's recorded PATH cannot reach $(printf '%s' "$unreachable" | tr '\n' ' ' | sed 's/ $//')"
+    report_recorded_path "$(recorded_service_path 2>/dev/null || true)"
   fi
   report_reading
 }
@@ -530,6 +623,12 @@ restart_selected() {
         return 2
       fi
       write_service_env || return 1
+      # A keeper left over from a boot without a usable user manager is another
+      # live owner of the same record; restarting the unit next to it would
+      # leave two of them watching one runtime.
+      if "$TMUX_CMD" has-session -t "$(keeper_name)" 2>/dev/null; then
+        stop_keeper 2>/dev/null || true
+      fi
       "$SYSTEMCTL" --user restart "$(unit_instance)" || return 1
       wait_for_healthy
       ;;

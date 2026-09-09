@@ -84,7 +84,9 @@ Three properties are what make this safe to land on a vessel with a full fleet a
 - **The owner adopts rather than replaces.** Ownership here means "something is watching and will start it again", not "I am its parent", so an owner starting for the first time on a home whose server is already up changes nothing about that server. That is what lets a live fleet gain an owner with no disruption.
 
 A reading the owner could not take is never rendered as `down`.
-A missing `herdr`, a missing `jq`, or JSON that does not parse are recorded as `unreadable` and reported as themselves, because starting a server on a `down` the owner invented could bind a second server against a live socket.
+A missing `herdr`, a missing `jq`, a client that does not answer, or JSON that does not parse are recorded as `unreadable` and reported as themselves, because starting a server on a `down` the owner invented could bind a second server against a live socket.
+Every reading is taken under a deadline, `FM_HERDR_RUNTIME_STATUS_TIMEOUT` (default 10s, held below the 30s poll), because a client blocked on a wedged socket is the degradation this owner exists to notice and an unbounded read would stop the loop inside it - no beat, no reading, and no signal serviced until the call returned.
+A reading that times out says so in its own words, so a wedged client stays distinguishable from a missing tool in the digest.
 
 The owner and the server write to two separate files under `state/`, and only one of them is bounded:
 

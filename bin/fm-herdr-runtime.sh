@@ -5,6 +5,7 @@
 #   fm-herdr-runtime.sh                        # supervise until stopped
 #   FM_HERDR_RUNTIME_ONCE=1 fm-herdr-runtime.sh  # one reading, one start at most
 #   fm-herdr-runtime.sh __serve <session>      # internal: the detached server
+#   fm-herdr-runtime.sh __status <session>     # internal: the bounded reading
 #
 # bin/fm-herdr-service.sh owns which tier runs this (a systemd user unit or a
 # tmux keeper) and how it is converged; this file owns the loop itself.
@@ -41,10 +42,18 @@
 # workers gain an owner with no disruption at all.
 #
 # A READING IT COULD NOT TAKE IS NOT A READING OF `down`.  A missing herdr, a
-# missing jq, or unparseable JSON all mean this loop does not know, and a start
-# on a "down" it invented could bind a second server against a live socket.  So
-# `unreadable` is its own state, it is recorded and reported as itself, and it
-# never triggers a start.
+# missing jq, a client that never answers, or unparseable JSON all mean this loop
+# does not know, and a start on a "down" it invented could bind a second server
+# against a live socket.  So `unreadable` is its own state, it is recorded and
+# reported as itself, and it never triggers a start.
+#
+# AND THE READING IS TAKEN UNDER A DEADLINE.  A client blocked on a wedged socket
+# is the exact degradation this owner exists to notice, and an unbounded read of
+# it would stop the loop inside the very failure it is watching for: no beat, no
+# reading, no trap serviced until the call returns, so the home would report a
+# stalled owner with a frozen reading.  bin/fm-bounded-lib.sh owns the portable
+# deadline; its 124 lands on `unreadable`, because a reading that timed out is a
+# reading that could not be taken.
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -64,6 +73,11 @@ SERVER_LOG="$STATE/.herdr-server.log"
 # 30s is two CLI invocations a minute and still notices a dead runtime long
 # before a supervisor could act on it.
 POLL=${FM_HERDR_RUNTIME_POLL:-30}
+# The deadline on one reading.  It is held comfortably below POLL so that a
+# client which never answers still costs less than one interval: the loop
+# publishes its `unreadable` reading and beats on roughly its normal schedule
+# instead of freezing inside the blocked call.
+STATUS_TIMEOUT=${FM_HERDR_RUNTIME_STATUS_TIMEOUT:-10}
 START_TIMEOUT=${FM_HERDR_RUNTIME_START_TIMEOUT:-20}
 BASE_BACKOFF=${FM_HERDR_RUNTIME_BACKOFF:-30}
 MAX_BACKOFF=${FM_HERDR_RUNTIME_MAX_BACKOFF:-300}
@@ -78,6 +92,7 @@ CONFIRM_SLEEP=${FM_HERDR_RUNTIME_CONFIRM_SLEEP:-1}
 # keep writing to a renamed file - so a crashed runtime's last words survive.
 SERVER_LOG_MAX_BYTES=${FM_HERDR_SERVER_LOG_MAX_BYTES:-4194304}
 case "$POLL" in ''|*[!0-9]*|0) POLL=30 ;; esac
+case "$STATUS_TIMEOUT" in ''|*[!0-9]*|0) STATUS_TIMEOUT=10 ;; esac
 case "$START_TIMEOUT" in ''|*[!0-9]*|0) START_TIMEOUT=20 ;; esac
 case "$BASE_BACKOFF" in ''|*[!0-9]*|0) BASE_BACKOFF=30 ;; esac
 case "$MAX_BACKOFF" in ''|*[!0-9]*|0) MAX_BACKOFF=300 ;; esac
@@ -86,6 +101,8 @@ case "$SERVER_LOG_MAX_BYTES" in ''|*[!0-9]*|0) SERVER_LOG_MAX_BYTES=4194304 ;; e
 
 # shellcheck source=bin/fm-wake-lib.sh
 . "$SCRIPT_DIR/fm-wake-lib.sh"
+# shellcheck source=bin/fm-bounded-lib.sh
+. "$SCRIPT_DIR/fm-bounded-lib.sh"
 # shellcheck source=bin/fm-backend.sh
 . "$SCRIPT_DIR/fm-backend.sh"
 
@@ -154,24 +171,57 @@ beat() {
   : > "$BEAT"
 }
 
-# running | down | unreadable, never a substituted value: an absent tool or an
-# answer that does not parse is reported as itself, because the caller's response
-# to "I could not look" must not be the response to "it is not running".
-server_state() {
-  local out running
-  command -v herdr >/dev/null 2>&1 || { printf 'unreadable'; return 0; }
-  command -v jq >/dev/null 2>&1 || { printf 'unreadable'; return 0; }
-  out=$(fm_backend_herdr_cli "$SESSION" status --json 2>/dev/null) || { printf 'unreadable'; return 0; }
-  [ -n "$out" ] || { printf 'unreadable'; return 0; }
-  running=$(printf '%s' "$out" | jq -r 'if (.server.running | type) == "boolean" then .server.running else "unreadable" end' 2>/dev/null) || {
-    printf 'unreadable'
+# Take one reading and leave it in STATE_READING (running | down | unreadable),
+# with the reason an unreadable one could not be taken in STATE_CAUSE.  Never a
+# substituted value: an absent tool, a client that did not answer, or JSON that
+# does not parse is reported as itself, because the caller's response to "I could
+# not look" must not be the response to "it is not running".
+#
+# It sets variables rather than printing them because the two answers travel
+# together: a caller that read the state through a command substitution would
+# lose the cause to the subshell, and the cause is the only thing that tells a
+# wedged client apart from a missing tool in the digest.
+read_server_state() {
+  local out running rc
+  STATE_CAUSE=
+  if ! command -v herdr >/dev/null 2>&1 || ! command -v jq >/dev/null 2>&1; then
+    STATE_READING=unreadable
+    STATE_CAUSE=$(unreadable_cause)
     return 0
-  }
+  fi
+  # The reading goes through this script's own __status arm rather than through
+  # fm_backend_herdr_cli directly, because fm_run_bounded needs an executable and
+  # the adapter's function is the single owner of how a call is scoped to a
+  # session.  Re-entering keeps that owner and still gets the deadline.
+  out=$(fm_run_bounded "$STATUS_TIMEOUT" "$RUNTIME_PATH" __status "$SESSION" 2>/dev/null)
+  rc=$?
+  if [ "$rc" -eq 124 ]; then
+    STATE_READING=unreadable
+    STATE_CAUSE="the herdr client did not answer status --json for session $SESSION within ${STATUS_TIMEOUT}s"
+    return 0
+  fi
+  if [ "$rc" -ne 0 ] || [ -z "$out" ]; then
+    STATE_READING=unreadable
+    STATE_CAUSE=$(unreadable_cause)
+    return 0
+  fi
+  running=$(printf '%s' "$out" | jq -r 'if (.server.running | type) == "boolean" then .server.running else "unreadable" end' 2>/dev/null) || running=unreadable
   case "$running" in
-    true) printf 'running' ;;
-    false) printf 'down' ;;
-    *) printf 'unreadable' ;;
+    true) STATE_READING=running ;;
+    false) STATE_READING=down ;;
+    *)
+      STATE_READING=unreadable
+      STATE_CAUSE=$(unreadable_cause)
+      ;;
   esac
+  return 0
+}
+
+# The same reading for callers that only need the word, and can therefore afford
+# a subshell.
+server_state() {
+  read_server_state
+  printf '%s' "$STATE_READING"
 }
 
 unreadable_cause() {
@@ -227,7 +277,9 @@ wait_for_running() {
 supervise_once() {
   local state confirm now cause
   cap_server_log
-  state=$(server_state)
+  read_server_state
+  state=$STATE_READING
+  cause=$STATE_CAUSE
   case "$state" in
     running)
       [ "${LAST_STATE:-}" = running ] || log "runtime for session $SESSION is running (adopted, not restarted)"
@@ -237,7 +289,7 @@ supervise_once() {
       return 0
       ;;
     unreadable)
-      cause=$(unreadable_cause)
+      [ -n "$cause" ] || cause=$(unreadable_cause)
       [ "${LAST_STATE:-}" = unreadable ] || log "runtime state for session $SESSION is unreadable: $cause"
       LAST_STATE=unreadable
       write_reading unreadable "$cause"
@@ -292,7 +344,25 @@ if [ "${1:-}" = __serve ]; then
   exit $?
 fi
 
-[ "$#" -eq 0 ] || { echo "usage: $(basename "$0") [__serve <session>]" >&2; exit 2; }
+# The bounded reading, for the same reason the arm above exists: fm_run_bounded
+# needs an executable to put under a deadline, and the herdr call itself must
+# keep its single owner in the adapter rather than being re-spelled at a call
+# site.  It prints herdr's own JSON and nothing else, so the deadline's 124
+# stays distinguishable from the client's own exit status.
+if [ "${1:-}" = __status ]; then
+  [ "$#" -eq 2 ] || { echo "usage: $(basename "$0") __status <session>" >&2; exit 2; }
+  # The deadline lands on THIS process, and the client it is protecting against
+  # is one blocked on a socket, so the signal has to be carried on: `timeout`
+  # signals only the process it started, and a client left behind here would leak
+  # one blocked process per poll for as long as the socket stays wedged.
+  fm_backend_herdr_cli "$2" status --json &
+  status_pid=$!
+  trap 'kill -TERM "$status_pid" 2>/dev/null || true; exit 124' HUP INT TERM
+  wait "$status_pid"
+  exit $?
+fi
+
+[ "$#" -eq 0 ] || { echo "usage: $(basename "$0") [__serve <session>|__status <session>]" >&2; exit 2; }
 
 cleanup() {
   trap - HUP INT TERM

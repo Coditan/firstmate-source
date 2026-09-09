@@ -183,6 +183,19 @@ reading_field() {  # <home> <key>
   sed -n "s/^$2=//p" "$1/state/.herdr-runtime.lock/reading" 2>/dev/null | head -1
 }
 
+# A reading published after the one taken at <previous-at>, which is how a caller
+# tells a loop that is still going round from one frozen mid-poll.
+wait_for_new_reading() {  # <home> <previous-at> [tries]
+  local home=$1 prev=$2 tries=${3:-100} now
+  while [ "$tries" -gt 0 ]; do
+    now=$(reading_field "$home" at)
+    [ -n "$now" ] && [ "$now" != "$prev" ] && return 0
+    sleep 0.1
+    tries=$((tries - 1))
+  done
+  return 1
+}
+
 test_a_home_that_does_not_run_herdr_is_left_alone() {
   local home out
   home=$(make_home "$TMP_ROOT/tmux-home" tmux)
@@ -386,7 +399,7 @@ SH
 }
 
 test_the_keeper_tier_starts_stops_and_readopts_one_runtime() {
-  local fakebin state home log server_pid keeper_pid out
+  local fakebin state home log server_pid keeper_pid out recorded_path
   fakebin="$TMP_ROOT/keeper-bin"
   state="$TMP_ROOT/herdr-state"
   home=$(make_home "$TMP_ROOT/keeper-home")
@@ -395,8 +408,16 @@ test_the_keeper_tier_starts_stops_and_readopts_one_runtime() {
   make_fake_tmux_keeper "$fakebin"
   : > "$log"
 
+  # The owner runs with a PATH the SERVICE composes, not with this shell's, and
+  # the default tool list walks tools that resolve from the seat's own
+  # directories.  On a seat where an earlier tool lives beside a real `herdr`,
+  # that directory would sort ahead of the fixture bin and the owner would drive
+  # a real herdr server.  This suite must never do that under any host layout, so
+  # the list is pinned to what this case actually needs and the result asserted
+  # below rather than left to the seat.
   PATH="$fakebin:$PATH" FM_HOME="$home" FM_HERDR_SERVICE_FORCE_BACKEND=keeper \
     FM_HERDR_TMUX="$fakebin/tmux" FM_HERDR_RUNTIME_SESSION=keeper \
+    FM_SERVICE_TOOLS='herdr jq tmux' \
     FM_TEST_TMUX_LOG="$log" FM_TEST_KEEPER_PID_FILE="$TMP_ROOT/keeper.pid" \
     FM_HERDR_CONFIRM_TIMEOUT=15 "$SERVICE" ensure \
     || fail "the keeper tier did not establish a runtime owner"
@@ -404,6 +425,11 @@ test_the_keeper_tier_starts_stops_and_readopts_one_runtime() {
     "the keeper tier did not start a detached home-scoped keeper"
   [ "$(sed -n 's/^manager=//p' "$home/state/.herdr-runtime.lock/record" | head -1)" = keeper ] \
     || fail "the owner did not record the keeper as its manager"
+  # What the owner would actually run, resolved through the PATH it was handed.
+  recorded_path=$(sed -n 's/^service-path=//p' "$home/state/.herdr-runtime.lock/record" | head -1)
+  [ -n "$recorded_path" ] || fail "the owner did not record the PATH it was launched with"
+  [ "$(PATH="$recorded_path" command -v herdr 2>/dev/null)" = "$fakebin/herdr" ] \
+    || fail "the owner's recorded PATH resolves herdr to $(PATH="$recorded_path" command -v herdr 2>/dev/null || echo nothing), not to this suite's stub"
   wait_for_file "$state/running-keeper" || fail "the keeper-owned runtime never came up"
   server_pid=$(stub_server_pid "$state" keeper)
   keeper_pid=$(cat "$TMP_ROOT/keeper.pid")
@@ -418,6 +444,7 @@ test_the_keeper_tier_starts_stops_and_readopts_one_runtime() {
   # a full fleet of workers on the home; it must not disturb the runtime.
   PATH="$fakebin:$PATH" FM_HOME="$home" FM_HERDR_SERVICE_FORCE_BACKEND=keeper \
     FM_HERDR_TMUX="$fakebin/tmux" FM_HERDR_RUNTIME_SESSION=keeper \
+    FM_SERVICE_TOOLS='herdr jq tmux' \
     FM_TEST_TMUX_LOG="$log" FM_TEST_KEEPER_PID_FILE="$TMP_ROOT/keeper.pid" \
     FM_HERDR_CONFIRM_TIMEOUT=15 "$SERVICE" restart \
     || fail "restarting the runtime owner failed"
@@ -427,6 +454,128 @@ test_the_keeper_tier_starts_stops_and_readopts_one_runtime() {
     || fail "the restarted owner replaced the runtime instead of readopting it"
   [ "$(reading_field "$home" starts)" = 0 ] || fail "the restarted owner started a second server"
   pass "the keeper tier starts, restarts, and readopts exactly one runtime"
+}
+
+# A client that never answers is the degradation this owner exists to notice, so
+# the reading it takes has to survive one: an unbounded read would stop the loop
+# inside the failure it is watching for.
+test_a_client_that_never_answers_leaves_the_owner_beating() {
+  local fakebin state home owner first hung pid
+  fakebin="$TMP_ROOT/hang-bin"
+  state="$TMP_ROOT/herdr-state"
+  home=$(make_home "$TMP_ROOT/hang-home")
+  mkdir -p "$fakebin"
+  cat > "$fakebin/herdr" <<SH
+#!/usr/bin/env bash
+set -u
+HERDR_STUB_STATE='$state'
+SH
+  cat >> "$fakebin/herdr" <<'SH'
+sub=
+for arg in "$@"; do
+  case "$arg" in --*) ;; *) [ -n "$sub" ] || sub=$arg ;; esac
+done
+case "$sub" in
+  status)
+    # Wedged on its socket: it answers nothing, ever.
+    printf '%s\n' "$$" >> "$HERDR_STUB_STATE/hang-status-pids"
+    while :; do sleep 0.2; done
+    ;;
+  server)
+    printf '%s\n' "$$" >> "$HERDR_STUB_STATE/server-pids"
+    printf '%s\n' "$$" > "$HERDR_STUB_STATE/running-hang"
+    while :; do sleep 0.2; done
+    ;;
+esac
+exit 1
+SH
+  chmod +x "$fakebin/herdr"
+  rm -f "$state/hang-status-pids"
+
+  PATH="$fakebin:$PATH" FM_HOME="$home" FM_HERDR_RUNTIME_SESSION=hang \
+    FM_HERDR_RUNTIME_POLL=1 FM_HERDR_RUNTIME_STATUS_TIMEOUT=1 "$RUNTIME" >/dev/null 2>&1 &
+  owner=$!
+  TRACKED_PIDS+=("$owner")
+
+  wait_for_file "$home/state/.herdr-runtime.lock/reading" 200 \
+    || fail "the owner never published a reading against a client that does not answer"
+  [ "$(reading_field "$home" reading)" = unreadable ] \
+    || fail "a client that did not answer was recorded as '$(reading_field "$home" reading)'"
+  case "$(reading_field "$home" note)" in
+    *"did not answer"*) ;;
+    *) fail "the wedged client is not distinguishable from a missing tool: $(reading_field "$home" note)" ;;
+  esac
+
+  # Still beating: a second reading, later than the first, proves the loop did not
+  # freeze inside the blocked call.
+  first=$(reading_field "$home" at)
+  wait_for_new_reading "$home" "$first" 200 \
+    || fail "the owner stopped publishing readings while the client hung"
+  kill -0 "$owner" 2>/dev/null || fail "the owner exited instead of continuing to watch"
+  [ "$(reading_field "$home" starts)" = 0 ] \
+    || fail "the owner started a server on a reading it could not take"
+  [ ! -e "$state/running-hang" ] || fail "the owner bound a server for a session it could not read"
+
+  # Every timed-out client but the one in flight is gone: the deadline reaches the
+  # blocked process rather than leaving one behind per poll.
+  hung=$(sed '$d' "$state/hang-status-pids" 2>/dev/null || true)
+  [ -n "$hung" ] || fail "the fixture never recorded a blocked client"
+  for pid in $hung; do
+    wait_for_dead "$pid" 50 || fail "a timed-out herdr client was left running (pid $pid)"
+  done
+  pass "a client that never answers leaves the owner beating on an unreadable reading"
+}
+
+# A keeper that dies without running its trap leaves its owner child alive, and
+# the next convergence must replace THAT owner rather than start a second one
+# beside it.
+test_a_killed_keeper_leaves_no_second_owner_behind() {
+  local fakebin state home log pidfile keeper_pid first_owner second_owner server_pid
+  fakebin="$TMP_ROOT/orphan-bin"
+  state="$TMP_ROOT/herdr-state"
+  home=$(make_home "$TMP_ROOT/orphan-home")
+  log="$TMP_ROOT/orphan-tmux.log"
+  pidfile="$TMP_ROOT/orphan-keeper.pid"
+  make_fake_herdr "$fakebin" "$state"
+  make_fake_tmux_keeper "$fakebin"
+  : > "$log"
+
+  PATH="$fakebin:$PATH" FM_HOME="$home" FM_HERDR_SERVICE_FORCE_BACKEND=keeper \
+    FM_HERDR_TMUX="$fakebin/tmux" FM_HERDR_RUNTIME_SESSION=orphan \
+    FM_SERVICE_TOOLS='herdr jq tmux' \
+    FM_TEST_TMUX_LOG="$log" FM_TEST_KEEPER_PID_FILE="$pidfile" \
+    FM_HERDR_CONFIRM_TIMEOUT=15 "$SERVICE" ensure \
+    || fail "the keeper tier did not establish a runtime owner"
+  keeper_pid=$(cat "$pidfile")
+  first_owner=$(sed -n 's/^pid=//p' "$home/state/.herdr-runtime.lock/record" | head -1)
+  TRACKED_PIDS+=("$keeper_pid" "$first_owner")
+  wait_for_file "$state/running-orphan" || fail "the keeper-owned runtime never came up"
+  server_pid=$(stub_server_pid "$state" orphan)
+
+  # SIGKILL: the keeper's cleanup never runs, so its owner child survives it,
+  # reparented and still writing the record, the beacon and the reading.
+  kill -KILL "$keeper_pid" 2>/dev/null || fail "could not kill the keeper"
+  wait_for_dead "$keeper_pid" || fail "the keeper did not die"
+  kill -0 "$first_owner" 2>/dev/null || fail "the fixture left no orphaned owner to converge over"
+
+  PATH="$fakebin:$PATH" FM_HOME="$home" FM_HERDR_SERVICE_FORCE_BACKEND=keeper \
+    FM_HERDR_TMUX="$fakebin/tmux" FM_HERDR_RUNTIME_SESSION=orphan \
+    FM_SERVICE_TOOLS='herdr jq tmux' \
+    FM_TEST_TMUX_LOG="$log" FM_TEST_KEEPER_PID_FILE="$pidfile" \
+    FM_HERDR_CONFIRM_TIMEOUT=15 "$SERVICE" ensure \
+    || fail "convergence over an orphaned owner failed"
+  TRACKED_PIDS+=("$(cat "$pidfile")")
+  second_owner=$(sed -n 's/^pid=//p' "$home/state/.herdr-runtime.lock/record" | head -1)
+  [ "$second_owner" != "$first_owner" ] || fail "convergence did not replace the orphaned owner"
+  wait_for_dead "$first_owner" 50 \
+    || fail "convergence started a second owner beside the orphaned one (pid $first_owner still writes the record)"
+  kill -0 "$second_owner" 2>/dev/null || fail "the replacement owner is not running"
+
+  # And the runtime is untouched by any of it.
+  kill -0 "$server_pid" 2>/dev/null || fail "replacing the owner ended the runtime it was watching"
+  [ "$(stub_server_pid "$state" orphan)" = "$server_pid" ] \
+    || fail "the replacement owner started a second runtime instead of readopting one"
+  pass "a keeper killed outright leaves exactly one owner after convergence"
 }
 
 test_the_entrypoint_command_is_printed_verbatim() {
@@ -447,4 +596,6 @@ test_server_output_has_its_own_capped_file
 test_a_reading_that_could_not_be_taken_is_not_a_reading_of_down
 test_a_keeper_teardown_does_not_take_the_runtime_with_it
 test_the_keeper_tier_starts_stops_and_readopts_one_runtime
+test_a_client_that_never_answers_leaves_the_owner_beating
+test_a_killed_keeper_leaves_no_second_owner_behind
 test_the_entrypoint_command_is_printed_verbatim
