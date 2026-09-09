@@ -95,6 +95,7 @@ Nothing now exits on a single stale reading, because nothing is a one-shot wait:
 `tests/fm-watcher-lock.test.sh` covers verified-successor attach, the typed self-eviction failure, bounded and successor-linked lifecycle rows, a SIGSTOP counterfactual that distinguishes a live PID from a stale beacon before classifying termination, and the guard's three states with work in flight.
 `tests/fm-continuity-pretool-check.test.sh` proves the Claude gate rejects only non-recovery fleet execution in the precise unhealthy state and preserves the existing Stop registration.
 It also pairs the two addressees: a worker running the gate from a task worktree is still refused but is handed none of the commands reserved to firstmate, while the session operating the home still gets its full recovery instruction.
+It pins the gate against the delivery predicate as well: a worker's own status line is still allowed with the launching home's watcher down AND no live listener for it, so the reporting channel the refusal names cannot later be gated on delivery health.
 `tests/fm-turnend-guard.test.sh` pairs them the same way for the turn-end banner, for the grok adapter's prepended instruction, and for the OpenCode plugin's prepended headline.
 `tests/fm-guard-stale-banner.test.sh` pairs them for the advisory daemon banner and the delivery warning, and its operator cases now run the guard out of the fixture home's own `bin/` so that shape is real rather than implied.
 Both worker tests were run against the pre-fix code first and reproduced the defect verbatim.

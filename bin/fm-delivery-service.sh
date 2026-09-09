@@ -39,13 +39,25 @@
 # publish-endpoint is the one subcommand that must run INSIDE the primary
 # session: the listener has no session context of its own, so the session
 # records where its own model turn lives.  Everything else is safe to run from
-# anywhere that can reach this home.
+# anywhere that can reach this home, as long as it runs out of that home's own
+# checkout - see DELIVERY below for what a foreign checkout costs.
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
+# DELIVERY stays on SCRIPT_DIR while bin/fm-guard.sh and bin/fm-turnend-guard.sh
+# resolve the delivery path they COMPARE from FM_ROOT.  This script launches the
+# listener rather than judging someone else's: the path names the file it execs,
+# the FM_DELIVERY_EXEC it writes into the unit environment, and one entry in the
+# source-version digest below whose other entries are all SCRIPT_DIR siblings
+# named relative to SCRIPT_DIR, so repointing it would spell that one entry as an
+# absolute path from another checkout and move the digest without a byte of the
+# listener changing.  docs/watcher-continuity.md "Which file each lock is
+# compared against" owns that split and the residual it accepts: the subcommands
+# that do compare this path read a healthy listener as down from a foreign
+# checkout, an invocation AGENTS.md reserves to firstmate in the first place.
 DELIVERY="$SCRIPT_DIR/fm-delivery.sh"
 UNIT_SOURCE="$FM_ROOT/systemd/fm-delivery@.service"
 SYSTEMCTL=${FM_DELIVERY_SYSTEMCTL:-systemctl}
