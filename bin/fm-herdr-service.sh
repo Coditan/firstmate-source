@@ -60,9 +60,30 @@ RECORD="$LOCKDIR/record"
 READING="$LOCKDIR/reading"
 BEAT="$STATE/.last-herdr-runtime-beat"
 GRACE=${FM_HERDR_GRACE:-120}
-CONFIRM_TIMEOUT=${FM_HERDR_CONFIRM_TIMEOUT:-10}
+# The deadline the OWNER puts on one status read, read here from the same
+# variable bin/fm-herdr-runtime.sh reads and defaulted to the same value, for one
+# reason: the convergence wait below has to outlast it.
+STATUS_TIMEOUT=${FM_HERDR_RUNTIME_STATUS_TIMEOUT:-10}
+case "$STATUS_TIMEOUT" in ''|*[!0-9]*|0) STATUS_TIMEOUT=10 ;; esac
+# IF YOU ARE TUNING EITHER OF THESE TWO NUMBERS, THIS IS THE RELATIONSHIP THEY
+# HAVE.  A converging session waits CONFIRM_TIMEOUT for the owner it just started
+# to publish its first reading, and the first thing that owner does is one
+# bounded status read.  So the convergence wait must OUTLAST one such read, with
+# margin for the tier's own startup - if the two are equal, convergence times out
+# INSIDE the owner's first read and then reports the wrong fault: it says the
+# tier failed and nothing supervises the runtime, while the keeper and its owner
+# are both running and about to publish a perfectly good `unreadable` reading
+# about the wedged client that caused the slow read in the first place.  The
+# margin is what the default carries; an override that loses the relationship is
+# said out loud below rather than silently obeyed.
+CONVERGE_MARGIN=15
+CONFIRM_TIMEOUT=${FM_HERDR_CONFIRM_TIMEOUT:-$(( STATUS_TIMEOUT + CONVERGE_MARGIN ))}
 case "$GRACE" in ''|*[!0-9]*|0) GRACE=120 ;; esac
-case "$CONFIRM_TIMEOUT" in ''|*[!0-9]*|0) CONFIRM_TIMEOUT=10 ;; esac
+case "$CONFIRM_TIMEOUT" in ''|*[!0-9]*|0) CONFIRM_TIMEOUT=$(( STATUS_TIMEOUT + CONVERGE_MARGIN )) ;; esac
+if [ "$CONFIRM_TIMEOUT" -le "$STATUS_TIMEOUT" ]; then
+  echo "HERDR_RUNTIME: FM_HERDR_CONFIRM_TIMEOUT (${CONFIRM_TIMEOUT}s) is not longer than the owner's status read deadline FM_HERDR_RUNTIME_STATUS_TIMEOUT (${STATUS_TIMEOUT}s), so convergence would time out inside the owner's first read and report a failed tier instead of what the owner saw; using $(( STATUS_TIMEOUT + CONVERGE_MARGIN ))s" >&2
+  CONFIRM_TIMEOUT=$(( STATUS_TIMEOUT + CONVERGE_MARGIN ))
+fi
 
 # shellcheck source=bin/fm-wake-lib.sh
 . "$SCRIPT_DIR/fm-wake-lib.sh"
@@ -448,6 +469,16 @@ install_systemd() {
   install_unit_bytes || return 1
   write_service_env || return 1
   "$SYSTEMCTL" --user daemon-reload || return 1
+  # This is the promotion path a keeper-tier home actually takes: it reaches
+  # systemd through the captain approving `bin/fm-bootstrap.sh install
+  # herdr-unit`, not through ensure.  So the keeper and the owner it is hosting
+  # have to go here too, exactly as they do in the two sibling paths - a guard
+  # that holds on two of its three call sites is worse than none, because the
+  # next reader trusts the property it claims.
+  stop_leftover_keeper
+  if healthy_owner && ! owner_record_matches systemd; then
+    stop_recorded_owner || return 1
+  fi
   "$SYSTEMCTL" --user enable --now "$unit" || return 1
   wait_for_healthy || {
     echo "error: $unit did not establish a healthy herdr runtime owner" >&2
@@ -553,7 +584,19 @@ bootstrap_check() {
         healthy_owner \
           || echo "HERDR_RUNTIME: systemd --user unavailable; the lock-holding session will start the tmux keeper tier for the worker runtime"
       elif ! ensure_keeper; then
-        echo "HERDR_RUNTIME: systemd --user unavailable and the tmux keeper tier failed, so nothing supervises the runtime every worker on this home runs in"
+        # A convergence that did not complete is not the same fact as an
+        # unsupervised runtime, and only the second one deserves that sentence.
+        # A live owner that has published a reading is supervising the runtime
+        # whatever went wrong here, and report_reading below already owns what to
+        # say about what it saw - saying the tier failed on top of it would
+        # contradict it, most sharply in the one case this owner exists to
+        # notice: a wedged client, where the owner is up and reporting
+        # `unreadable` and the digest would have claimed nothing was watching.
+        if ! healthy_owner; then
+          echo "HERDR_RUNTIME: systemd --user unavailable and the tmux keeper tier failed, so nothing supervises the runtime every worker on this home runs in"
+        elif ! has_current_reading; then
+          echo "HERDR_RUNTIME: the runtime owner is running but has not published a reading yet, so the worker runtime's state is not established"
+        fi
       fi
       # Same question, same wording, asked of the keeper's own record.  Skipped
       # when there is no record at all, because "nothing is watching" is the

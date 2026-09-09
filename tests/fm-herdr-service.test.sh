@@ -139,6 +139,9 @@ case "${1:-}" in
     printf '%s\n' "$!" > "$FM_TEST_KEEPER_PID_FILE"
     ;;
   kill-session)
+    # A kill-session that does not reach the keeper, so a case can put the
+    # service in front of a stop that did not take.
+    [ "${FM_TEST_TMUX_KILL_NOOP:-0}" = 1 ] && exit 0
     pid=$(cat "${FM_TEST_KEEPER_PID_FILE:?}" 2>/dev/null || true)
     kill -TERM "$pid" 2>/dev/null || true
     ;;
@@ -146,6 +149,81 @@ case "${1:-}" in
 esac
 SH
   chmod +x "$fakebin/tmux"
+}
+
+# A client wedged on its socket: `status` answers nothing, ever.  Its `server`
+# arm records itself so a case can prove no server was started on a reading the
+# owner could not take.
+make_wedged_herdr() {  # <fakebin> <state-dir> <session>
+  local fakebin=$1 state=$2 session=$3
+  mkdir -p "$fakebin" "$state"
+  cat > "$fakebin/herdr" <<SH
+#!/usr/bin/env bash
+set -u
+HERDR_STUB_STATE='$state'
+HERDR_STUB_RUN='$state/running-$session'
+SH
+  cat >> "$fakebin/herdr" <<'SH'
+sub=
+for arg in "$@"; do
+  case "$arg" in --*) ;; *) [ -n "$sub" ] || sub=$arg ;; esac
+done
+case "$sub" in
+  status) while :; do sleep 0.2; done ;;
+  server)
+    printf '%s\n' "$$" >> "$HERDR_STUB_STATE/server-pids"
+    printf '%s\n' "$$" > "$HERDR_STUB_RUN"
+    while :; do sleep 0.2; done
+    ;;
+esac
+exit 1
+SH
+  chmod +x "$fakebin/herdr"
+}
+
+# A stand-in user manager.  `enable --now` and `restart` start the owner from the
+# environment file the service just wrote, exactly as the unit's EnvironmentFile
+# would; `disable --now` stops it.
+make_fake_systemd() {  # <fakebin>
+  local fakebin=$1
+  mkdir -p "$fakebin"
+  printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$(printf "%%s" "$2" | tr / -)"\n' > "$fakebin/systemd-escape"
+  cat > "$fakebin/systemctl" <<'SH'
+#!/usr/bin/env bash
+set -u
+stop_unit() {
+  local pid
+  pid=$(cat "${FM_TEST_UNIT_PID_FILE:?}" 2>/dev/null || true)
+  [ -z "$pid" ] || kill -TERM "$pid" 2>/dev/null || true
+}
+case "${2:-}" in
+  show-environment|daemon-reload) exit 0 ;;
+  is-enabled) exit 0 ;;
+  is-active)
+    pid=$(cat "${FM_TEST_UNIT_PID_FILE:?}" 2>/dev/null || true)
+    [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null
+    ;;
+  disable) stop_unit ;;
+  enable|restart)
+    stop_unit
+    while IFS= read -r line; do
+      case "$line" in
+        FM_*=*|PATH=*)
+          key=${line%%=*}
+          val=${line#*=}
+          val=${val#\"}
+          val=${val%\"}
+          export "$key=$val"
+          ;;
+      esac
+    done < "${FM_TEST_SERVICE_ENV:?}"
+    FM_HERDR_RUNTIME_MANAGER=systemd bash "${FM_HERDR_RUNTIME_EXEC:?}" >/dev/null 2>&1 &
+    printf '%s\n' "$!" > "$FM_TEST_UNIT_PID_FILE"
+    ;;
+  *) exit 1 ;;
+esac
+SH
+  chmod +x "$fakebin/systemctl" "$fakebin/systemd-escape"
 }
 
 make_home() {  # <dir> [backend]
@@ -787,40 +865,7 @@ test_the_systemd_tier_clears_a_leftover_keeper() {
   install -m 0644 "$ROOT/systemd/fm-herdr@.service" "$unitdir/fm-herdr@.service"
   : > "$log"
 
-  printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$(printf "%%s" "$2" | tr / -)"\n' > "$fakebin/systemd-escape"
-  # A stand-in user manager: `restart` starts the owner from the environment file
-  # the service just wrote, exactly as the unit's EnvironmentFile would.
-  cat > "$fakebin/systemctl" <<'SH'
-#!/usr/bin/env bash
-set -u
-case "${2:-}" in
-  show-environment|daemon-reload|enable|disable) exit 0 ;;
-  is-enabled) exit 0 ;;
-  is-active)
-    pid=$(cat "${FM_TEST_UNIT_PID_FILE:?}" 2>/dev/null || true)
-    [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null
-    ;;
-  restart)
-    pid=$(cat "${FM_TEST_UNIT_PID_FILE:?}" 2>/dev/null || true)
-    [ -z "$pid" ] || kill -TERM "$pid" 2>/dev/null || true
-    while IFS= read -r line; do
-      case "$line" in
-        FM_*=*|PATH=*)
-          key=${line%%=*}
-          val=${line#*=}
-          val=${val#\"}
-          val=${val%\"}
-          export "$key=$val"
-          ;;
-      esac
-    done < "${FM_TEST_SERVICE_ENV:?}"
-    FM_HERDR_RUNTIME_MANAGER=systemd bash "${FM_HERDR_RUNTIME_EXEC:?}" >/dev/null 2>&1 &
-    printf '%s\n' "$!" > "$FM_TEST_UNIT_PID_FILE"
-    ;;
-  *) exit 1 ;;
-esac
-SH
-  chmod +x "$fakebin/systemctl" "$fakebin/systemd-escape"
+  make_fake_systemd "$fakebin"
 
   PATH="$fakebin:$PATH" FM_HOME="$home" FM_HERDR_SERVICE_FORCE_BACKEND=keeper \
     FM_HERDR_TMUX="$fakebin/tmux" FM_HERDR_RUNTIME_SESSION=cross \
@@ -861,6 +906,145 @@ SH
   pass "a systemd convergence clears a leftover keeper and leaves one owner"
 }
 
+# The owner's first act is one bounded status read, so a convergence deadline no
+# longer than that read expires inside it and never sees the reading it is
+# waiting for.  A wedged client is where the two meet.
+test_the_convergence_wait_outlasts_one_status_read() {
+  local fakebin state home log pidfile err digest
+  fakebin="$TMP_ROOT/deadline-bin"
+  state="$TMP_ROOT/herdr-state"
+  home=$(make_home "$TMP_ROOT/deadline-home")
+  log="$TMP_ROOT/deadline-tmux.log"
+  pidfile="$TMP_ROOT/deadline-keeper.pid"
+  make_wedged_herdr "$fakebin" "$state" deadline
+  make_fake_tmux_keeper "$fakebin"
+  : > "$log"
+
+  # Deliberately equal, which is the relationship that breaks: the convergence
+  # wait must outlast one read, and the service says so and refuses the override
+  # rather than timing out inside the owner's first look.
+  err=$(PATH="$fakebin:$PATH" FM_HOME="$home" FM_HERDR_SERVICE_FORCE_BACKEND=keeper \
+    FM_HERDR_TMUX="$fakebin/tmux" FM_HERDR_RUNTIME_SESSION=deadline \
+    FM_SERVICE_TOOLS='herdr jq tmux' \
+    FM_TEST_TMUX_LOG="$log" FM_TEST_KEEPER_PID_FILE="$pidfile" \
+    FM_HERDR_RUNTIME_STATUS_TIMEOUT=3 FM_HERDR_CONFIRM_TIMEOUT=3 \
+    "$SERVICE" ensure 2>&1 >/dev/null) \
+    || fail "convergence expired inside the owner's own status read: $err"
+  TRACKED_PIDS+=("$(cat "$pidfile" 2>/dev/null || true)")
+  TRACKED_PIDS+=("$(sed -n 's/^pid=//p' "$home/state/.herdr-runtime.lock/record" 2>/dev/null | head -1)")
+  assert_contains "$err" "is not longer than the owner's status read deadline" \
+    "the service obeyed a convergence deadline that cannot outlast one read without saying so: $err"
+
+  digest=$(PATH="$fakebin:$PATH" FM_HOME="$home" FM_HERDR_SERVICE_FORCE_BACKEND=keeper \
+    FM_HERDR_TMUX="$fakebin/tmux" FM_HERDR_RUNTIME_SESSION=deadline \
+    FM_TEST_TMUX_LOG="$log" FM_TEST_KEEPER_PID_FILE="$pidfile" \
+    FM_BOOTSTRAP_DETECT_ONLY=1 "$SERVICE" bootstrap 2>/dev/null)
+  assert_contains "$digest" "cannot read whether the worker runtime is running" \
+    "the digest did not name the wedged client: $digest"
+  assert_contains "$digest" "did not answer" \
+    "the digest did not distinguish a wedged client from a missing tool: $digest"
+  [ ! -e "$state/running-deadline" ] || fail "a server was started on a reading that could not be taken"
+  pass "the convergence wait outlasts one bounded status read"
+}
+
+# The one degradation this owner exists to notice must never be reported as the
+# owner's own absence.
+test_a_wedged_client_is_not_reported_as_an_unsupervised_runtime() {
+  local fakebin state home log pidfile digest owner
+  fakebin="$TMP_ROOT/wedged-bin"
+  state="$TMP_ROOT/herdr-state"
+  home=$(make_home "$TMP_ROOT/wedged-home")
+  log="$TMP_ROOT/wedged-tmux.log"
+  pidfile="$TMP_ROOT/wedged-keeper.pid"
+  make_wedged_herdr "$fakebin" "$state" wedged
+  make_fake_tmux_keeper "$fakebin"
+  : > "$log"
+
+  PATH="$fakebin:$PATH" FM_HOME="$home" FM_HERDR_SERVICE_FORCE_BACKEND=keeper \
+    FM_HERDR_TMUX="$fakebin/tmux" FM_HERDR_RUNTIME_SESSION=wedged \
+    FM_SERVICE_TOOLS='herdr jq tmux' \
+    FM_TEST_TMUX_LOG="$log" FM_TEST_KEEPER_PID_FILE="$pidfile" \
+    FM_HERDR_RUNTIME_STATUS_TIMEOUT=1 FM_HERDR_CONFIRM_TIMEOUT=3 \
+    "$SERVICE" ensure || fail "the keeper tier did not establish an owner against a wedged client"
+  owner=$(sed -n 's/^pid=//p' "$home/state/.herdr-runtime.lock/record" | head -1)
+  TRACKED_PIDS+=("$(cat "$pidfile")" "$owner")
+  [ "$(reading_field "$home" reading)" = unreadable ] \
+    || fail "the owner did not publish an unreadable reading about the wedged client"
+
+  # A convergence that must replace the owner (its recorded PATH no longer
+  # matches) and cannot, because the stop does not reach the keeper.  The owner
+  # is still up and still reporting, so the digest must report what it saw.
+  digest=$(PATH="$fakebin:$PATH" FM_HOME="$home" FM_HERDR_SERVICE_FORCE_BACKEND=keeper \
+    FM_HERDR_TMUX="$fakebin/tmux" FM_HERDR_RUNTIME_SESSION=wedged \
+    FM_SERVICE_TOOLS='herdr jq tmux' FM_SERVICE_PATH_BASE='/usr/bin:/bin' \
+    FM_TEST_TMUX_LOG="$log" FM_TEST_KEEPER_PID_FILE="$pidfile" \
+    FM_TEST_TMUX_KILL_NOOP=1 \
+    FM_HERDR_RUNTIME_STATUS_TIMEOUT=1 FM_HERDR_CONFIRM_TIMEOUT=3 \
+    "$SERVICE" bootstrap 2>/dev/null)
+  kill -0 "$owner" 2>/dev/null || fail "the fixture lost the owner the digest was supposed to describe"
+  case "$digest" in
+    *"nothing supervises the runtime"*)
+      fail "the digest called a wedged client an unsupervised runtime: $digest" ;;
+  esac
+  assert_contains "$digest" "cannot read whether the worker runtime is running" \
+    "the digest did not report what the live owner actually saw: $digest"
+  pass "a wedged client is reported as an unreadable runtime, not as a failed tier"
+}
+
+# install-unit is the promotion path a keeper-tier home actually takes, so it is
+# the one that most needs the leftover keeper gone before the unit starts.
+test_installing_the_unit_clears_a_leftover_keeper() {
+  local fakebin state home log pidfile unitdir unitpid keeper_pid keeper_owner server_pid unit_owner
+  fakebin="$TMP_ROOT/install-bin"
+  state="$TMP_ROOT/herdr-state"
+  home=$(make_home "$TMP_ROOT/install-home")
+  log="$TMP_ROOT/install-tmux.log"
+  pidfile="$TMP_ROOT/install-keeper.pid"
+  unitdir="$TMP_ROOT/install-units"
+  unitpid="$TMP_ROOT/install-unit.pid"
+  make_fake_herdr "$fakebin" "$state"
+  make_fake_tmux_keeper "$fakebin"
+  make_fake_systemd "$fakebin"
+  mkdir -p "$unitdir"
+  : > "$log"
+
+  PATH="$fakebin:$PATH" FM_HOME="$home" FM_HERDR_SERVICE_FORCE_BACKEND=keeper \
+    FM_HERDR_TMUX="$fakebin/tmux" FM_HERDR_RUNTIME_SESSION=install \
+    FM_SERVICE_TOOLS='herdr jq tmux' \
+    FM_TEST_TMUX_LOG="$log" FM_TEST_KEEPER_PID_FILE="$pidfile" \
+    "$SERVICE" ensure || fail "the keeper tier did not establish a runtime owner"
+  keeper_pid=$(cat "$pidfile")
+  keeper_owner=$(sed -n 's/^pid=//p' "$home/state/.herdr-runtime.lock/record" | head -1)
+  TRACKED_PIDS+=("$keeper_pid" "$keeper_owner")
+  wait_for_file "$state/running-install" || fail "the keeper-owned runtime never came up"
+  server_pid=$(stub_server_pid "$state" install)
+
+  # The captain approves the unit on a home the keeper tier is already watching.
+  PATH="$fakebin:$PATH" FM_HOME="$home" FM_HERDR_SERVICE_FORCE_BACKEND=systemd \
+    FM_HERDR_SYSTEMCTL="$fakebin/systemctl" FM_HERDR_SYSTEMD_ESCAPE="$fakebin/systemd-escape" \
+    FM_HERDR_SYSTEMD_UNIT_DIR="$unitdir" FM_HERDR_TMUX="$fakebin/tmux" \
+    FM_HERDR_RUNTIME_SESSION=install FM_SERVICE_TOOLS='herdr jq tmux' \
+    FM_TEST_TMUX_LOG="$log" FM_TEST_KEEPER_PID_FILE="$pidfile" \
+    FM_TEST_UNIT_PID_FILE="$unitpid" FM_TEST_SERVICE_ENV="$home/state/.herdr-service.env" \
+    "$SERVICE" install-unit || fail "install-unit did not establish the unit's owner"
+  TRACKED_PIDS+=("$(cat "$unitpid" 2>/dev/null || true)")
+
+  wait_for_dead "$keeper_pid" 50 \
+    || fail "the approved install left the keeper running to respawn its own owner"
+  wait_for_dead "$keeper_owner" 50 \
+    || fail "the approved install left the keeper-tier owner running beside the unit's"
+  unit_owner=$(sed -n 's/^pid=//p' "$home/state/.herdr-runtime.lock/record" | head -1)
+  [ "$unit_owner" != "$keeper_owner" ] || fail "the unit did not take over the record"
+  kill -0 "$unit_owner" 2>/dev/null || fail "the unit's owner is not running"
+  [ "$(sed -n 's/^manager=//p' "$home/state/.herdr-runtime.lock/record" | head -1)" = systemd ] \
+    || fail "the surviving owner is not the unit's"
+
+  kill -0 "$server_pid" 2>/dev/null || fail "installing the unit ended the runtime"
+  [ "$(stub_server_pid "$state" install)" = "$server_pid" ] \
+    || fail "installing the unit replaced the runtime instead of readopting it"
+  pass "an approved install clears a leftover keeper and leaves one owner"
+}
+
 test_the_entrypoint_command_is_printed_verbatim() {
   local home out
   home=$(make_home "$TMP_ROOT/entrypoint-home")
@@ -885,4 +1069,7 @@ test_a_down_runtime_is_reported_before_the_start_attempt_finishes
 test_a_failed_start_says_so_without_claiming_more
 test_stop_owner_ends_an_orphaned_owner
 test_the_systemd_tier_clears_a_leftover_keeper
+test_the_convergence_wait_outlasts_one_status_read
+test_a_wedged_client_is_not_reported_as_an_unsupervised_runtime
+test_installing_the_unit_clears_a_leftover_keeper
 test_the_entrypoint_command_is_printed_verbatim

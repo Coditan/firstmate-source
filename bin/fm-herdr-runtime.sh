@@ -77,6 +77,15 @@ POLL=${FM_HERDR_RUNTIME_POLL:-30}
 # client which never answers still costs less than one interval: the loop
 # publishes its `unreadable` reading and beats on roughly its normal schedule
 # instead of freezing inside the blocked call.
+#
+# IF YOU ARE RAISING THIS, RAISE THE CONVERGENCE WAIT WITH IT.  A converging
+# session waits FM_HERDR_CONFIRM_TIMEOUT (bin/fm-herdr-service.sh) for this
+# owner's FIRST reading, and this deadline is how long the read before that
+# reading can take.  The wait must OUTLAST one read, with margin: when the two
+# are equal, convergence times out inside this very read and the digest reports a
+# failed tier and an unsupervised runtime instead of the `unreadable` reading
+# this loop is about to publish.  That file states the relationship and refuses
+# an override that loses it.
 STATUS_TIMEOUT=${FM_HERDR_RUNTIME_STATUS_TIMEOUT:-10}
 START_TIMEOUT=${FM_HERDR_RUNTIME_START_TIMEOUT:-20}
 BASE_BACKOFF=${FM_HERDR_RUNTIME_BACKOFF:-30}
