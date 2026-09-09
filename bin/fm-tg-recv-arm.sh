@@ -223,7 +223,7 @@ PY
       "check: telegram receiver: FAILED - receiver exited 0 with diagnostic output but no valid event; the service will restart it" \
       "$diagnostic_path" || { rm -f "$diagnostic_path"; return 1; }
   fi
-  # Exit 0 completes a bounded cycle; valid events were already queued above.
+  # Exit 0 completes a bounded cycle; valid message events were already queued above.
   [ -z "$diagnostic_path" ] || rm -f "$diagnostic_path"
 }
 
