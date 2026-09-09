@@ -36,6 +36,7 @@ That daemon predicate is unchanged: it requires an identity-matched live watcher
 A stale beacon blocks even if the watcher pid is still live, and a fresh leftover beacon blocks if the watcher lock is missing, dead, or identity-mismatched.
 The second half requires `fm_delivery_healthy <state-dir> <delivery-path> [grace-seconds] [home]` from `bin/fm-delivery-lib.sh`.
 That delivery predicate is shaped exactly like the watcher's: a live pid whose recorded executable identity and home match `state/.delivery.lock`, plus a beacon inside the grace.
+Both `<watch-path>` and `<delivery-path>` are resolved from `FM_ROOT`, never from the guard's own `SCRIPT_DIR`, because the locks record the launching home's copies and a worker runs this tracked hook out of its own task worktree; `docs/watcher-continuity.md` "Which file each lock is compared against" owns that rule for both locks.
 It needs the beacon because the listener is a loop rather than a blocking wait, so a live pid alone would not prove it is still turning.
 Watcher failure and delivery failure produce separate repair lines.
 Each names the scoped systemd instance restart or tmux keeper repair for its own service, and both are real supervision incidents now: neither is a cheap re-arm any more, because neither is a session object.

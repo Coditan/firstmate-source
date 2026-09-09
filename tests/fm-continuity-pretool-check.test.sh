@@ -314,6 +314,40 @@ test_status_writer_is_classified_recovery() {
   pass "the command policy classifies the status writer as a recovery command"
 }
 
+# The status writer must stay reachable for a worker whatever the launching
+# home's DELIVERY listener is doing, and the delivery predicate must stay out of
+# this gate entirely. On 2026-09-06 task
+# fleet-process-inventory-review-seat-keeper-presence-giveup finished green and
+# could not write its completion line, because this gate was refusing the very
+# channel its own refusal told the worker to report through; firstmate read the
+# finished work off the pane three days later. This case pins the outcome rather
+# than the line: with the launching home's supervision down AND no live listener
+# for it, a worker's own status line is still allowed while an ordinary fleet
+# command is still refused.
+test_worker_status_line_survives_a_dead_home_listener() {
+  local rc=0 dead
+  rm -rf "$STATE/.watch.lock"
+  printf 'project=fixture\n' > "$STATE/task.meta"
+  ( exit 0 ) & dead=$!
+  wait "$dead" 2>/dev/null || true
+  mkdir -p "$STATE/.delivery.lock"
+  printf '%s\n' "$dead" > "$STATE/.delivery.lock/pid"
+  printf '%s\n' "$PRIMARY" > "$STATE/.delivery.lock/fm-home"
+  printf '%s\n' "$PRIMARY/bin/fm-delivery.sh" > "$STATE/.delivery.lock/delivery-path"
+  printf '%s\n' "dead listener identity" > "$STATE/.delivery.lock/pid-identity"
+  rm -f "$STATE/.last-delivery-beat"
+
+  run_command_as_worker "bin/fm-status.sh state/task.status done 'PR green'" || rc=$?
+  [ "$rc" -eq 0 ] || fail "a worker's own status line must survive a dead listener in the launching home, got exit $rc: $(cat "$ERR")"
+  [ ! -s "$ERR" ] || fail "the status writer was gated on supervision health: $(cat "$ERR")"
+
+  rc=0
+  run_command_as_worker 'bin/fm-crew-state.sh task' || rc=$?
+  [ "$rc" -eq 2 ] || fail "the contrast command must still be refused, so the allow above is the recovery classification and not a fail-open"
+  rm -rf "$STATE/.delivery.lock"
+  pass "continuity gate lets a worker report while the launching home has neither a watcher nor a listener"
+}
+
 test_claude_hook_registration_preserves_stop_backstop() {
   jq -e '
     [.hooks.PreToolUse[] | select(.matcher == "Bash") | .hooks[].command]
@@ -334,4 +368,5 @@ test_operator_refusal_still_names_the_recovery_commands
 test_worker_sees_the_homes_live_watcher_through_its_own_copy_of_the_gate
 test_dead_pid_holding_the_home_lock_still_refuses_a_worker
 test_status_writer_is_classified_recovery
+test_worker_status_line_survives_a_dead_home_listener
 test_claude_hook_registration_preserves_stop_backstop

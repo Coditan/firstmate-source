@@ -97,6 +97,21 @@ run_guard_case_as_worker() {
     "$worker/bin/fm-guard.sh" 2>&1
 }
 
+# The delivery lock, recorded the way bin/fm-delivery.sh records it: naming the
+# checkout the listener was launched from, which is what FM_ROOT_OVERRIDE names
+# here and never the worker's own worktree copy.
+record_live_delivery() {
+  local home=$1 pid=$2 delivery_path=${3:-"$1/bin/fm-delivery.sh"} identity state
+  state="$home/state"
+  identity=$(FM_HOME="$home" FM_STATE_OVERRIDE="$state" bash -c '. "$1"; fm_pid_identity "$2"' _ "$ROOT/bin/fm-wake-lib.sh" "$pid")
+  mkdir -p "$state/.delivery.lock"
+  printf '%s\n' "$pid" > "$state/.delivery.lock/pid"
+  printf '%s\n' "$home" > "$state/.delivery.lock/fm-home"
+  printf '%s\n' "$delivery_path" > "$state/.delivery.lock/delivery-path"
+  printf '%s\n' "$identity" > "$state/.delivery.lock/pid-identity"
+  touch "$state/.last-delivery-beat"
+}
+
 record_live_daemon() {
   local home=$1 pid=$2 watch_path=${3:-"$1/bin/fm-watch.sh"} identity state
   state="$home/state"
@@ -388,6 +403,50 @@ test_operator_delivery_warning_still_carries_the_repair() {
   pass "fm-guard: the session operating this home still gets its delivery repair instruction"
 }
 
+# The delivery half of the FM_ROOT path move. This banner is the pull-based
+# sibling of the turn-end guard, and it carried the identical defect: the
+# compared delivery path came from the guard's own SCRIPT_DIR, so a worker in a
+# task worktree named a byte-identical copy the home's listener never ran and
+# every reading came back `down`. tests/fm-turnend-guard.test.sh holds the
+# blocking half; these two hold the advisory one, in a pair so that removing the
+# false warning cannot also remove the true one.
+test_worker_delivery_warning_absent_when_the_home_listener_is_healthy() {
+  local dir home out live
+  dir=$(make_guard_case worker-delivery-healthy)
+  home=$(case_home "$dir")
+  make_worker_checkout "$dir" > /dev/null
+  sleep 60 & live=$!
+  record_live_daemon "$home" "$live"
+  record_live_delivery "$home" "$live"
+  out=$(run_guard_case_as_worker "$dir")
+  kill "$live" 2>/dev/null || true
+  wait "$live" 2>/dev/null || true
+  assert_not_contains "$out" "WARNING: wake delivery listener " \
+    "a worker was warned about a listener the launching home is in fact running"
+  [ -z "$out" ] || fail "healthy home supervision still produced worker guard output: $out"
+  pass "fm-guard: a healthy home listener produces no delivery warning in a task worktree"
+}
+
+test_worker_delivery_warning_still_fires_when_the_home_listener_is_dead() {
+  local dir home out live dead
+  dir=$(make_guard_case worker-delivery-dead)
+  home=$(case_home "$dir")
+  make_worker_checkout "$dir" > /dev/null
+  sleep 60 & live=$!
+  record_live_daemon "$home" "$live"
+  ( exit 0 ) & dead=$!
+  wait "$dead" 2>/dev/null || true
+  record_live_delivery "$home" "$dead"
+  out=$(run_guard_case_as_worker "$dir")
+  kill "$live" 2>/dev/null || true
+  wait "$live" 2>/dev/null || true
+  assert_contains "$out" "WARNING: wake delivery listener " \
+    "a worker was told nothing while the launching home's listener was gone"
+  assert_contains "$out" "$WORKER_REPORT_REASON" \
+    "worker delivery warning must still name reporting as the worker's action"
+  pass "fm-guard: a dead home listener still warns a task worker"
+}
+
 test_first_stale_call_prints_full_banner
 test_repeated_same_episode_prints_reminder_only
 test_healthy_recovery_rearms_next_stale_episode
@@ -400,4 +459,6 @@ test_healthy_read_only_does_not_clear_marker
 test_read_only_never_mutates_stale_banner_state_files
 test_worker_daemon_banner_names_no_command_reserved_to_firstmate
 test_worker_delivery_warning_keeps_relay_prefix_without_a_repair
+test_worker_delivery_warning_absent_when_the_home_listener_is_healthy
+test_worker_delivery_warning_still_fires_when_the_home_listener_is_dead
 test_operator_delivery_warning_still_carries_the_repair

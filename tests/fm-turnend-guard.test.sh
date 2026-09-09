@@ -846,6 +846,100 @@ test_hook_operator_still_gets_the_repair_command() {
   pass "fm-turnend-guard: the session operating this home still gets the daemon and delivery repair commands"
 }
 
+# --- which delivery file the lock is compared against ------------------------
+# The delivery lock records the ABSOLUTE PATH of the listener that took it, and
+# fm_delivery_lock_matches_pid compares that recorded path as a string. Resolving
+# the compared path from the guard's own SCRIPT_DIR made that comparison
+# unsatisfiable for every worker: a task worktree carries a byte-identical
+# bin/fm-delivery.sh the home's listener never ran, so the path half could never
+# match and the home was read as `dead` no matter how healthy its listener was.
+# Measured 2026-09-09 against a live listener that bin/fm-delivery-service.sh
+# status called `idle` in the same minute; three workers hit it inside one hour,
+# each spending a forced continuation on a warning that carried no information.
+# This is the delivery half of the watcher path fixed on 2026-09-06; the two
+# lines sat next to each other and only one was moved to FM_ROOT.
+# The three cases below are one triple on purpose. Silencing the false alarm
+# alone would trade a permanent false positive for a permanent blind spot, so the
+# dead and beacon-stale listeners must still stop a worker's turn from the very
+# same worktree.
+test_hook_worker_worktree_silent_when_the_home_listener_is_healthy() {
+  local primary wt pid identity out status
+  primary=$(make_primary_dir "$TMP_ROOT/hook-worker-delivery-healthy")
+  wt="$TMP_ROOT/hook-worker-delivery-healthy-wt"
+  make_crewmate_worktree_dir "$primary" "$wt" fm/turnend-guard-worker-delivery-healthy >/dev/null
+  : > "$primary/state/task1.meta"
+  sleep 60 &
+  pid=$!
+  identity=$(watcher_identity "$primary" "$pid") || {
+    kill "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
+    fail "could not identify live supervision holder"
+  }
+  record_watcher_lock "$primary" "$pid" "$identity"
+  record_delivery_lock "$primary" "$pid" "$identity"
+  touch "$primary/state/.last-watcher-beat"
+  out=$(run_hook_as_worker "$wt" "$primary" false); status=$?
+  kill "$pid" 2>/dev/null || true
+  wait "$pid" 2>/dev/null || true
+  expect_code 0 "$status" "a worker must end its turn freely while the launching home's listener is healthy"
+  [ -z "$out" ] || fail "healthy home supervision still alarmed a worker in its task worktree: $out"
+  pass "fm-turnend-guard: a worker reads the launching home's own listener, not its worktree copy"
+}
+
+test_hook_worker_worktree_blocks_when_the_home_listener_is_dead() {
+  local primary wt pid identity dead out status
+  primary=$(make_primary_dir "$TMP_ROOT/hook-worker-delivery-dead")
+  wt="$TMP_ROOT/hook-worker-delivery-dead-wt"
+  make_crewmate_worktree_dir "$primary" "$wt" fm/turnend-guard-worker-delivery-dead >/dev/null
+  : > "$primary/state/task1.meta"
+  sleep 60 &
+  pid=$!
+  identity=$(watcher_identity "$primary" "$pid") || {
+    kill "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
+    fail "could not identify live supervision holder"
+  }
+  record_watcher_lock "$primary" "$pid" "$identity"
+  touch "$primary/state/.last-watcher-beat"
+  ( exit 0 ) & dead=$!
+  wait "$dead" 2>/dev/null || true
+  record_delivery_lock "$primary" "$dead" "$identity"
+  out=$(run_hook_as_worker "$wt" "$primary" false); status=$?
+  kill "$pid" 2>/dev/null || true
+  wait "$pid" 2>/dev/null || true
+  expect_code 2 "$status" "a stopped listener in the launching home must still stop a worker ending its turn blind"
+  assert_contains "$out" "Wake delivery missing"     "the worker was allowed to end its turn while the launching home's listener was gone"
+  assert_not_contains "$out" "Watcher daemon down" "the healthy watcher half was falsely reported down"
+  pass "fm-turnend-guard: a worker is still blocked when the launching home's listener is dead"
+}
+
+test_hook_worker_worktree_blocks_when_the_home_listener_beacon_is_stale() {
+  local primary wt pid identity out status
+  primary=$(make_primary_dir "$TMP_ROOT/hook-worker-delivery-stale")
+  wt="$TMP_ROOT/hook-worker-delivery-stale-wt"
+  make_crewmate_worktree_dir "$primary" "$wt" fm/turnend-guard-worker-delivery-stale >/dev/null
+  : > "$primary/state/task1.meta"
+  sleep 60 &
+  pid=$!
+  identity=$(watcher_identity "$primary" "$pid") || {
+    kill "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
+    fail "could not identify live supervision holder"
+  }
+  record_watcher_lock "$primary" "$pid" "$identity"
+  record_delivery_lock "$primary" "$pid" "$identity"
+  touch "$primary/state/.last-watcher-beat"
+  touch -t 202001010000 "$primary/state/.last-delivery-beat"
+  out=$(run_hook_as_worker "$wt" "$primary" false); status=$?
+  kill "$pid" 2>/dev/null || true
+  wait "$pid" 2>/dev/null || true
+  expect_code 2 "$status" "a live listener whose beacon aged out must still stop a worker ending its turn blind"
+  assert_contains "$out" "Wake delivery missing" \
+    "a listener whose loop stopped turning was accepted as delivery for a worker"
+  assert_not_contains "$out" "Watcher daemon down" "the healthy watcher half was falsely reported down"
+  pass "fm-turnend-guard: a worker is still blocked when the launching home's listener beacon is stale"
+}
+
 # fm-spawn.sh hands a crewmate its worktree, and it is the worktree the guard
 # runs from that decides the addressee - not the state the worker happens to have
 # in its own tree. Without FM_ROOT_OVERRIDE the guard exits at the linked-worktree
@@ -1450,6 +1544,9 @@ test_hook_exempts_linked_worktree_with_non_ascii_marker
 test_hook_silent_in_crewmate_worktree
 test_hook_worker_worktree_is_told_to_report_not_to_repair
 test_hook_operator_still_gets_the_repair_command
+test_hook_worker_worktree_silent_when_the_home_listener_is_healthy
+test_hook_worker_worktree_blocks_when_the_home_listener_is_dead
+test_hook_worker_worktree_blocks_when_the_home_listener_beacon_is_stale
 test_hook_worker_worktree_without_override_stays_exempt
 test_grok_adapter_tells_a_worker_to_report_not_to_repair
 test_hook_silent_without_jq

@@ -387,13 +387,13 @@ fm_write_secondmate_meta() {
 # fm-guard.sh; tests of watcher or delivery health itself should construct each
 # state explicitly.
 #
-# The watcher lock names the watcher of the checkout it was launched from, and
-# fm-guard.sh compares it against $FM_ROOT/bin/fm-watch.sh (docs/watcher-
-# continuity.md), so the recorded path must follow the root the guarded run
-# resolves: the exported FM_ROOT_OVERRIDE when a harness sets one, else this
-# checkout. A caller that passes FM_ROOT_OVERRIDE per invocation names that
-# root here as the third argument. The delivery lock keeps $ROOT: the guard
-# compares that one against its own SCRIPT_DIR copy.
+# Each lock names the process of the checkout it was launched from, and
+# fm-guard.sh compares them against $FM_ROOT/bin/fm-watch.sh and
+# $FM_ROOT/bin/fm-delivery.sh (docs/watcher-continuity.md), so both recorded
+# paths must follow the root the guarded run resolves: the exported
+# FM_ROOT_OVERRIDE when a harness sets one, else this checkout. A caller that
+# passes FM_ROOT_OVERRIDE per invocation names that root here as the third
+# argument.
 # shellcheck disable=SC2031 # false positive: fm-wake-lib.sh's *sourced-in-a-
 # subshell* locals of the same names (state/pid/home) never touch this scope.
 fm_test_record_supervision_healthy() {
@@ -415,7 +415,7 @@ fm_test_record_supervision_healthy() {
   printf '%s\n' "$record_identity" > "$record_state/.watch.lock/pid-identity"
   printf '%s\n' "$record_pid" > "$record_state/.delivery.lock/pid"
   printf '%s\n' "$record_home" > "$record_state/.delivery.lock/fm-home"
-  printf '%s\n' "$ROOT/bin/fm-delivery.sh" > "$record_state/.delivery.lock/delivery-path"
+  printf '%s\n' "$record_root/bin/fm-delivery.sh" > "$record_state/.delivery.lock/delivery-path"
   printf '%s\n' "$record_identity" > "$record_state/.delivery.lock/pid-identity"
   touch "$record_state/.last-watcher-beat" "$record_state/.last-delivery-beat"
 }

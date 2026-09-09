@@ -27,8 +27,17 @@ FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 GRACE=${FM_GUARD_GRACE:-300}
+# The watcher and delivery locks each record the ABSOLUTE PATH of the process
+# that took them, and both predicates compare that recorded path as a string.
+# Both are therefore resolved from FM_ROOT - the checkout-derived root the
+# launching home's services actually run from - and never from this file's
+# SCRIPT_DIR: this guard ships in tracked hook files, so a worker runs a
+# byte-identical copy out of its own task worktree, a path the home's lock can
+# never record, and the comparison could not succeed there for any listener at
+# all. docs/watcher-continuity.md "Which file each lock is compared against"
+# owns the rationale, including why FM_HOME is the wrong term here.
 WATCH="$FM_ROOT/bin/fm-watch.sh"
-DELIVERY="$SCRIPT_DIR/fm-delivery.sh"
+DELIVERY="$FM_ROOT/bin/fm-delivery.sh"
 queue_pending=false
 READ_ONLY=${FM_GUARD_READ_ONLY:-0}
 case "$READ_ONLY" in 1|true|TRUE|yes|YES) READ_ONLY=1 ;; *) READ_ONLY=0 ;; esac
