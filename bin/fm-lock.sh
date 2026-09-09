@@ -33,6 +33,10 @@
 # is acting, and that gap was chosen over the alternative, because an
 # unsupervised minute is recoverable and two seats both dispatching and merging
 # is not.
+# Redeeming a ticket is also the only acquisition that does not run through
+# bin/fm-session-start.sh, so it asks bin/fm-sessionstart-nudge.sh to rebind this
+# home's context-ceiling record to the new holder itself, and prints what that
+# did with the acquisition line.
 #
 # A container rebuild is the one case where a foreign record can be shown to
 # name nobody without probing a process this session cannot see: the record's
@@ -72,7 +76,7 @@ case "${1:-}" in
   ''|acquire) [ -n "${1:-}" ] && shift ;;
   status) MODE=status; shift ;;
   handover) MODE=handover; shift ;;
-  -h|--help) sed -n '2,56p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+  -h|--help) sed -n '2,60p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
   *) echo "error: unknown command ${1}; run $0 --help" >&2; exit 2 ;;
 esac
 while [ $# -gt 0 ]; do
@@ -391,6 +395,18 @@ if [ -n "$TICKET" ]; then
   publish_record "$me" "$my_ns" ""
   release_claim_lock
   echo "lock acquired by handover: harness pid $me (from pid $from_pid)"
+  # This is the one acquisition that does not run through bin/fm-session-start.sh,
+  # so it is the one that would otherwise leave this home's context-ceiling record
+  # naming the seat that just stood down. The successor's SessionStart hook fired
+  # while the offering seat still held the lock, was correctly refused the record,
+  # and fires only once per harness session: without this the ceiling is reported
+  # unenforced as a session mismatch for the whole life of the redeeming session.
+  # The rebind owner is the hook's own --rebind-to-lock, the same one session
+  # start invokes, and what it did is printed with the acquisition line exactly as
+  # session start prints it. There is one rebind implementation for all three
+  # acquisition paths, and it stays where it is.
+  REBIND=$("$SCRIPT_DIR/fm-sessionstart-nudge.sh" --rebind-to-lock </dev/null 2>&1) || true
+  [ -z "$REBIND" ] || printf '%s\n' "$REBIND"
   exit 0
 fi
 

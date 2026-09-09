@@ -92,16 +92,21 @@ The outcome is a reported unenforced ceiling, not a wrong number: `fm_context_ce
 Moving publication to a boundary owned by lock acquisition would break replacement on a fresh start, because only the SessionStart hook payload carries `session_id` and `transcript_path`, while `bin/fm-lock.sh` runs later in a different process with neither.
 
 A lock the hook refuses can be taken later by the same session, and then nothing else would ever rewrite the record: the hook fires once per harness session, so a session refused at its own start gets no second run.
-Two ways in reach that state.
+Three ways in reach that state.
 One is a dead container's record, which `bin/fm-session-start.sh` supersedes on the two readings [session-lock-across-boundaries.md](session-lock-across-boundaries.md) describes.
-The other needs no supersede at all: the holder is cleared by hand or exits, and session start is re-run inside the same harness process.
+The second needs no supersede at all: the holder is cleared by hand or exits, and session start is re-run inside the same harness process.
 Measured on this seat on 2026-09-06, the second one left a record naming the previous session's pid 147 and the ceiling unenforced from 11:32Z to the end of the day.
-So after every successful acquisition, by either path, `bin/fm-session-start.sh` invokes `bin/fm-sessionstart-nudge.sh --rebind-to-lock`, which rebinds the record to the holder the new lock names in this session's own pid table, the value the consumer compares against.
+The third is a redeemed handover ticket: the successor started while the offering seat still held the lock, was refused the record then, and takes the home through `bin/fm-lock.sh acquire --handover`, which never runs through session start at all.
+So after every successful acquisition `bin/fm-sessionstart-nudge.sh --rebind-to-lock` runs, which rebinds the record to the holder the new lock names in this session's own pid table, the value the consumer compares against.
+There is one rebind implementation and two call sites, one per acquiring process: `bin/fm-session-start.sh` invokes it after every lock it takes, ordinary or superseding, and `bin/fm-lock.sh` invokes it itself after a handover redemption, printing what it did with the acquisition line.
 A record that already names that holder and whose mtime is not older than pid 1's start is left alone.
 Otherwise the rebind promotes what the refused hook kept.
 A hook run that is refused the record still reads its payload and stashes it as `state/.primary-transcript.pending.<harness pid>`, one file per session named by the harness pid that wrote it, so two refused sessions in one home never write the same file and neither can destroy the other's only copy.
-A refused run that yielded no usable payload removes only its own stash, never another session's.
-The rebind reads only the stash named by the holder the lock now publishes, and promotes it as the record when its own `harness_pid` names that holder and its mtime postdates this container.
+The stash also records that process's INCARNATION, its start time read the way `fm_pid_incarnation` in `bin/fm-harness-pid-lib.sh` reads it, in the same spirit as `state/.delivery.lock/pid-identity`.
+A refused run that yielded no usable payload, or whose own incarnation cannot be read, removes only its own stash, never another session's, and leaves nothing behind that a later rebind could read as this session's.
+The rebind reads only the stash named by the holder the lock now publishes, and promotes it as the record when its `harness_pid` names that holder, its `harness_incarnation` matches that pid's incarnation as it reads now, and its mtime postdates this container.
+Pid and incarnation are one proof in two halves, and the second half is what closes pid reuse INSIDE one container: a session refused the record can exit without ever taking the lock, its stash is not swept because it postdates this container, and the number it names is handed to the next harness session in that same container.
+An incarnation that cannot be read on either side is not proven rather than proven, so it refuses the promotion; this is the one failure here that would otherwise be silent, because an error record says the ceiling is unmeasured while a wrongly promoted stash measures it against another session's transcript and says nothing.
 That one stash is discarded on use either way, so a stash is never promoted twice and a session that never took the lock can never hand its transcript to the one that did.
 Every stash older than pid 1's start is removed at each rebind, because it belongs to a pid table that no longer exists, and an age or container start that cannot be read never proves a stash current, so such a stash is removed rather than kept.
 With no promotable stash the payload is never invented: the record is replaced by `status=error` with the cause `rebound-without-hook-payload` and the new holder's `harness_pid`, so the reader reports an unmeasured ceiling with its cause rather than a mismatch against a dead harness.

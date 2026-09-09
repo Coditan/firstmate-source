@@ -178,8 +178,10 @@ fm_delivery_endpoint_read() {  # <state>
 #   malformed       a record exists but carries no usable backend/target pair
 #   stale-session   the session that published it does not hold the lock now -
 #                   the lock names a different holder, a holder in a pid table
-#                   this session cannot see into, or a holder that is no longer
-#                   alive - so its pane is somebody else's or nobody's
+#                   this session cannot see into, a holder that is no longer
+#                   alive, or, on a lock record from before this fork named pid
+#                   tables, a holder whose number is now some other program's -
+#                   so its pane is somebody else's or nobody's
 #   unproven-server a tmux endpoint carries no valid server identity, so its
 #                   pane id is ambiguous across servers on the same machine
 FM_DELIVERY_ENDPOINT_STATUS=
@@ -207,18 +209,34 @@ fm_delivery_endpoint_status() {  # <state>
   # numbers match. Recorded on this seat 2026-09-03: with the pane's server
   # unchanged, the listener kept typing the same drain nudge into a read-only
   # seat, ten times in half an hour, because nothing in this test could see that
-  # the holder it matched was dead. So the holder must name this session's own pid table - which is what
-  # fm_session_lock_held_by_other's `mine` verdict tests, handed the endpoint's
-  # own session pid rather than this process's - and it must still be alive,
-  # which that verdict deliberately does not test for a holder equal to the pid
-  # it was handed. Liveness is `kill -0` rather than the harness-shaped test,
-  # because the question here is only whether that process still exists in this
-  # table, and the `mine` verdict has already established the table. Both, or
-  # stale-session.
+  # the holder it matched was dead. So the lock must name the endpoint's own
+  # session pid, which is what fm_session_lock_held_by_other's `mine` verdict
+  # tests when handed that pid rather than this process's, and that process must
+  # still be there.
   if [ -z "$FM_DELIVERY_ENDPOINT_SESSION" ] \
      || fm_session_lock_held_by_other "$state/.lock" "$FM_DELIVERY_ENDPOINT_SESSION" \
-     || [ "$FM_SESSION_LOCK_VERDICT" != mine ] \
-     || ! kill -0 "$FM_DELIVERY_ENDPOINT_SESSION" 2>/dev/null; then
+     || [ "$FM_SESSION_LOCK_VERDICT" != mine ]; then
+    FM_DELIVERY_ENDPOINT_STATUS=stale-session
+    return 1
+  fi
+  # What "still there" has to mean differs by which branch produced that verdict,
+  # because the two establish different things.
+  # A record naming a pid table gave `mine` only after comparing it with this
+  # session's own, so the number is known to be issued from this table and the
+  # only open question is whether the process exists: `kill -0`, deliberately not
+  # the harness-shaped test, because a live seat is a holder whatever its image.
+  # A record from before this fork names no table, and that branch returns `mine`
+  # on the bare number with nothing compared at all. There, `kill -0` answers for
+  # whatever program happens to hold that number in this container - the same
+  # pre-rebuild pair reads deliverable again through the older record. So a legacy
+  # record must additionally look like a live harness, which a recycled pid
+  # belonging to some other program does not.
+  if [ "$FM_SESSION_LOCK_LEGACY" -eq 1 ]; then
+    if ! fm_harness_alive "$FM_DELIVERY_ENDPOINT_SESSION"; then
+      FM_DELIVERY_ENDPOINT_STATUS=stale-session
+      return 1
+    fi
+  elif ! kill -0 "$FM_DELIVERY_ENDPOINT_SESSION" 2>/dev/null; then
     FM_DELIVERY_ENDPOINT_STATUS=stale-session
     return 1
   fi

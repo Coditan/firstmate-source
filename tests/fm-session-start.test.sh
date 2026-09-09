@@ -634,6 +634,7 @@ EOF
 # rebind restores a record the ceiling can actually be measured from.
 test_an_ordinary_acquisition_rebinds_a_record_naming_a_dead_pid() {
   local rec root home fakebin out status=0 record pending holder_pid transcript class
+  local incarnation
   rec=$(new_world lock-ordinary-rebind)
   IFS='|' read -r root home fakebin <<EOF
 $rec
@@ -654,8 +655,13 @@ EOF
   } > "$transcript"
   printf 'status=ok\nharness_pid=4242\nsession_id=aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee\ntranscript_path=/previous/container/transcript.jsonl\nrecorded_at=978307200\n' > "$record"
   touch -d 2001-01-01 "$record"
-  printf 'status=ok\nharness_pid=%s\nsession_id=99999999-8888-7777-6666-555555555555\ntranscript_path=%s\nrecorded_at=%s\n' \
-    "$holder_pid" "$transcript" "$(date +%s)" > "$pending"
+  # The stash names the holder's process, not merely its number: promotion
+  # compares the recorded incarnation with the live one, so a stash left by an
+  # earlier owner of the same pid is refused rather than promoted.
+  incarnation=$(bash -c '. "$1/bin/fm-harness-pid-lib.sh"; fm_pid_incarnation "$2"' _ "$ROOT" "$holder_pid") \
+    || fail "this host cannot read the harness process's incarnation"
+  printf 'status=ok\nharness_pid=%s\nharness_incarnation=%s\nsession_id=99999999-8888-7777-6666-555555555555\ntranscript_path=%s\nrecorded_at=%s\n' \
+    "$holder_pid" "$incarnation" "$transcript" "$(date +%s)" > "$pending"
 
   out=$(FM_GATE_REFUSE_BYPASS=1 run_session_start "$home" "$root" "$fakebin:$BASE_PATH") || status=$?
   expect_code 0 "$status" "fm-session-start.sh must exit 0 on an ordinary acquisition"

@@ -4,10 +4,13 @@
 # instruction unless that session already acquired the home lock.
 # With --rebind-to-lock it instead rebinds the standing record to the holder
 # named in this home's session lock, which bin/fm-session-start.sh invokes after
-# every acquisition because this hook may have run against a lock it correctly
-# refused to write over - a dead container's record it read as foreign, or a
-# stale holder cleared only after the hook had already run in this same harness
-# process, where no further SessionStart hook ever fires.
+# every acquisition, and bin/fm-lock.sh invokes after a handover redemption -
+# the one acquisition that does not pass through session start - because this
+# hook may have run against a lock it correctly refused to write over: a dead
+# container's record it read as foreign, a stale holder cleared only after the
+# hook had already run in this same harness process, or the standing offer of a
+# seat that had not yet handed over. No further SessionStart hook ever fires in
+# any of those sessions.
 # Every silence and error path exits 0 because Claude SessionStart exit 2 blocks
 # session initialization.
 set -u
@@ -42,8 +45,10 @@ RECORD="$STATE/.primary-transcript"
 # harness pid that wrote it, so two refused sessions in one home - a primary and
 # a helper the harness started in the same cwd - never write the same file and
 # neither can destroy the other's only copy. Promotion reads only the file named
-# by the pid the lock publishes, so a second, never-locking session's pending
-# file can never become this home's record.
+# by the pid the lock publishes, and only when that file names the pid's CURRENT
+# incarnation, so a second, never-locking session's pending file can never become
+# this home's record - not even when the pid it was written under is later handed
+# to the session that does take the lock.
 PENDING_PREFIX="$RECORD.pending."
 LOCK="$STATE/.lock"
 
@@ -234,12 +239,22 @@ pending_path() {  # <pid>
 # forbids publishing it. Written atomically like the record itself, and a stash
 # that cannot be written leaves nothing behind rather than a partial file a
 # later rebind would read as this session's.
+# The writer's process INCARNATION is recorded beside its pid, the way
+# state/.delivery.lock/pid-identity records a listener's, because a pid alone
+# does not name a process: a session refused here can exit without ever taking
+# the lock, and its stash outlives it inside this same container, where the same
+# pid is handed to the next harness session. Promotion compares both. A writer
+# whose own incarnation cannot be read stashes nothing at all rather than a file
+# that could never be proven at promotion.
 publish_pending_record() {  # <pid> <session-id> <transcript-path>
-  local pending tmp
+  local pending tmp incarnation
+  incarnation=$(fm_pid_incarnation "$1" 2>/dev/null) \
+    || { discard_pending_record "$1"; return 0; }
+  [ -n "$incarnation" ] || { discard_pending_record "$1"; return 0; }
   pending=$(pending_path "$1")
   tmp="$pending.$$"
-  printf 'status=ok\nharness_pid=%s\nsession_id=%s\ntranscript_path=%s\nrecorded_at=%s\n' \
-    "$1" "$2" "$3" "$(date +%s)" > "$tmp" 2>/dev/null \
+  printf 'status=ok\nharness_pid=%s\nharness_incarnation=%s\nsession_id=%s\ntranscript_path=%s\nrecorded_at=%s\n' \
+    "$1" "$incarnation" "$2" "$3" "$(date +%s)" > "$tmp" 2>/dev/null \
     || { rm -f "$tmp" 2>/dev/null; discard_pending_record "$1"; return 0; }
   mv -f "$tmp" "$pending" 2>/dev/null \
     || { rm -f "$tmp" 2>/dev/null; discard_pending_record "$1"; }
@@ -327,22 +342,33 @@ record_postdates_this_container() {
 
 # Promote the stash this session left at its own SessionStart into the record.
 # Only the file named by <holder> - the pid the lock now publishes - is read,
-# and it is promoted when its own harness_pid names that holder and it was
-# written after this container started. Both tests are the record's own: a
-# stash naming another pid belongs to another session, and a stash predating
-# this container was written in a pid table that no longer exists, where the
-# same small pid numbers are handed out again. Returns 1 when there is nothing
-# promotable, leaving the record untouched for the caller's error path. The
-# holder's stash is discarded either way: it has served its one purpose, and a
-# stash left behind would be promoted again by a later rebind against a pid it
-# no longer describes. Every other session's stash is left alone.
+# and it is promoted when it proves it was written by that very process and was
+# written after this container started. Three tests, each the record's own:
+# a stash naming another pid belongs to another session; a stash naming that pid
+# in another INCARNATION belongs to the process that held the number before this
+# harness session did, inside this same container, which the container-age test
+# alone cannot see; and a stash predating this container was written in a pid
+# table that no longer exists, where the same small pid numbers are handed out
+# again. An incarnation that cannot be read on either side is NOT PROVEN and
+# refuses the promotion, because this is the one failure here that would be
+# silent: an error record says the ceiling is unmeasured, while a wrong record
+# measures it against another session's transcript and says nothing.
+# Returns 1 when there is nothing promotable, leaving the record untouched for
+# the caller's error path. The holder's stash is discarded either way: it has
+# served its one purpose, and a stash left behind would be promoted again by a
+# later rebind against a pid it no longer describes. Every other session's stash
+# is left alone.
 promote_pending_record() {  # <holder-pid>
-  local holder=$1 pending pid sid path
+  local holder=$1 pending pid sid path stashed_incarnation live_incarnation
   pending=$(pending_path "$holder")
   pid=$(kv_field "$pending" harness_pid) || return 1
   sid=$(kv_field "$pending" session_id) || { discard_pending_record "$holder"; return 1; }
   path=$(kv_field "$pending" transcript_path) || { discard_pending_record "$holder"; return 1; }
+  stashed_incarnation=$(kv_field "$pending" harness_incarnation) || stashed_incarnation=
+  live_incarnation=$(fm_pid_incarnation "$holder" 2>/dev/null) || live_incarnation=
   if [ "$pid" != "$holder" ] || [ -z "$sid" ] || [ -z "$path" ] \
+     || [ -z "$stashed_incarnation" ] || [ -z "$live_incarnation" ] \
+     || [ "$stashed_incarnation" != "$live_incarnation" ] \
      || ! file_postdates_this_container "$pending"; then
     discard_pending_record "$holder"
     return 1

@@ -1080,6 +1080,78 @@ test_a_stash_naming_another_holder_is_never_promoted() {
   pass "fm-sessionstart-nudge: a stash naming a holder other than the lock's is discarded, and the record becomes an explicit error"
 }
 
+# The one failure this mechanism could have made SILENTLY, and the reason the
+# stash names a process rather than a number. A session refused the record
+# stashes under harness pid P and exits without ever taking the lock, so nothing
+# sweeps its stash: it postdates this container, and the pid it names is handed
+# out again inside that same container. P later belongs to another session's
+# harness, that session takes the lock, and pid equality alone promotes the first
+# session's transcript as status=ok - the ceiling then measured against another
+# session's transcript with nothing said, which the record's own design forbids.
+# An error record is the required outcome instead.
+test_a_stash_from_an_earlier_owner_of_the_same_pid_is_never_promoted() {
+  local root="$TMP_ROOT/record-pending-recycled-pid" fakebin record pending own ns status=0
+  local earlier_incarnation live_incarnation
+  make_primary "$root"
+  fakebin=$(fm_fakebin "$root")
+  sleep 30 &
+  own=$!
+  make_fake_ps_two_claudes "$fakebin" "$own" 999001
+  record="$root/state/.primary-transcript"
+  pending="$record.pending.$own"
+  ns=$(fm_pid_namespace_token) || fail "this host cannot name its own pid table"
+  # An incarnation that is certainly not this holder's, taken from a process that
+  # started before it did rather than invented: pid 1 is this container's own
+  # init, so it stands in exactly for the process that held the number first.
+  earlier_incarnation=$(fm_pid_incarnation 1) \
+    || fail "this host cannot read a process incarnation"
+  live_incarnation=$(fm_pid_incarnation "$own") \
+    || fail "this host cannot read the holder's incarnation"
+  [ "$earlier_incarnation" != "$live_incarnation" ] \
+    || fail "the fixture needs two distinguishable incarnations, got '$live_incarnation' twice"
+  { printf '%s\n' "$own"; printf 'pidns=%s\n' "$ns"; } > "$root/state/.lock"
+
+  printf 'status=ok\nharness_pid=%s\nharness_incarnation=%s\nsession_id=other-session\ntranscript_path=/tmp/other.jsonl\nrecorded_at=1\n' \
+    "$own" "$earlier_incarnation" > "$pending"
+  env -u NO_MISTAKES_GATE PATH="$fakebin:$PATH" FM_GATE_REFUSE_BYPASS=0 \
+    FM_ROOT_OVERRIDE="$root" FM_HOME="$root" "$NUDGE" --rebind-to-lock </dev/null >/dev/null || status=$?
+  expect_code 0 "$status" "the rebind run against a recycled pid's stash"
+  [ "$(record_field "$record" status)" = error ] \
+    || fail "a stash from an earlier owner of this pid must never become this session's record: $(cat "$record")"
+  [ "$(record_field "$record" error)" = rebound-without-hook-payload ] \
+    || fail "the record must name why the transcript is unknown: $(cat "$record")"
+  [ "$(record_field "$record" harness_pid)" = "$own" ] \
+    || fail "the error record must still name the holder the lock names: $(cat "$record")"
+  ! record_field "$record" session_id >/dev/null \
+    || fail "the record must not carry the other session's session id: $(cat "$record")"
+  ! record_field "$record" transcript_path >/dev/null \
+    || fail "the record must not carry the other session's transcript path: $(cat "$record")"
+  [ ! -f "$pending" ] || fail "an unpromotable stash must be discarded rather than left to be tried again"
+
+  # And a stash carrying no incarnation at all is NOT PROVEN rather than proven:
+  # an unreadable identity refuses the promotion instead of allowing it. The
+  # record is put back to naming the dead pre-rebuild harness first, because a
+  # record that already names the holder is left alone and no promotion is
+  # attempted at all.
+  status=0
+  printf 'status=ok\nharness_pid=4242\nsession_id=dead-session\ntranscript_path=/previous/container.jsonl\nrecorded_at=1\n' \
+    > "$record"
+  printf 'status=ok\nharness_pid=%s\nsession_id=other-session\ntranscript_path=/tmp/other.jsonl\nrecorded_at=1\n' \
+    "$own" > "$pending"
+  env -u NO_MISTAKES_GATE PATH="$fakebin:$PATH" FM_GATE_REFUSE_BYPASS=0 \
+    FM_ROOT_OVERRIDE="$root" FM_HOME="$root" "$NUDGE" --rebind-to-lock </dev/null >/dev/null || status=$?
+  kill "$own" 2>/dev/null || true
+  wait "$own" 2>/dev/null || true
+  expect_code 0 "$status" "the rebind run against a stash with no incarnation"
+  [ "$(record_field "$record" error)" = rebound-without-hook-payload ] \
+    || fail "a stash that proves no incarnation must be refused, not promoted: $(cat "$record")"
+  ! record_field "$record" transcript_path >/dev/null \
+    || fail "an unproven stash must not carry its transcript path into the record: $(cat "$record")"
+  [ ! -f "$pending" ] || fail "an unproven stash must be discarded rather than left to be tried again"
+
+  pass "fm-sessionstart-nudge: a stash naming this pid in another incarnation, or in none, is refused and the record becomes an explicit error"
+}
+
 # Two sessions can be refused the same lock: the primary, and a helper the
 # harness started in the primary's own cwd while the dead pre-rebuild lock still
 # stood. Each keeps its own stash, so the helper's run - with a payload of its
@@ -1310,6 +1382,7 @@ test_an_unusable_parent_pid_is_recorded_as_unknown
 test_outer_whitespace_on_parent_pid_is_accepted
 test_a_refused_session_keeps_its_payload_and_the_rebind_promotes_it
 test_a_stash_naming_another_holder_is_never_promoted
+test_a_stash_from_an_earlier_owner_of_the_same_pid_is_never_promoted
 test_a_second_refused_session_cannot_destroy_the_primarys_stash
 test_a_stash_predating_this_container_is_swept
 test_primary_transcript_path_name_allowlist_contract

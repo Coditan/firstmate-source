@@ -160,6 +160,35 @@ run_lock() {
     FM_STATE_OVERRIDE="$root/state" "$LOCK_SH" "$@" 2>&1
 }
 
+# run_lock_in_home <root> <fakebin> [args...]: drive the real script against a
+# fixture that is a genuine firstmate primary home, with FM_ROOT_OVERRIDE naming
+# it. The redemption path invokes the SessionStart hook's rebind owner, and that
+# hook acts only in a primary home, so a fixture that only carries a state
+# directory would make it exit silently and prove nothing.
+run_lock_in_home() {
+  local root=$1 fakebin=$2
+  shift 2
+  env -u NO_MISTAKES_GATE FM_GATE_REFUSE_BYPASS=0 PATH="$fakebin:$PATH" \
+    FM_ROOT_OVERRIDE="$root" FM_HOME="$root" FM_STATE_OVERRIDE="$root/state" "$LOCK_SH" "$@" 2>&1
+}
+
+# primary_fixture <name>: a home the tracked hooks recognise as a genuine primary
+# - a plain checkout carrying AGENTS.md, bin/ and state/ - path on stdout.
+primary_fixture() {
+  local dir
+  dir=$(fixture "$1")
+  mkdir -p "$dir/bin"
+  : > "$dir/AGENTS.md"
+  git init -q "$dir" || fail "could not initialise the primary fixture repository"
+  printf '%s\n' "$dir"
+}
+
+# transcript_field <record> <name>: the value of a key=value field in this home's
+# context-ceiling record, empty if absent.
+transcript_field() {
+  sed -n "s/^$2=//p" "$1"
+}
+
 # prepare <name>: a fixture plus a fake `ps` whose ancestry resolves to one live
 # harness pid, published as PREP_ROOT, PREP_FAKEBIN and PREP_HARNESS. Assignment
 # rather than stdout for the same reason live_pid takes an output variable.
@@ -1037,6 +1066,65 @@ test_an_irrevocable_offer_keeps_the_home_owned_for_one_successor() {
     || fail "redemption must consume the final offer"
 }
 
+# The third door onto a lock, and the only one that does not run through
+# bin/fm-session-start.sh: a redeemed ticket. The successor's SessionStart hook
+# fired while the offering seat still held the lock, was correctly refused this
+# home's context-ceiling record, and fires once per harness session. So unless
+# the redemption rebinds that record itself, the seat that just took the home
+# runs its whole life with the ceiling reported unenforced against the seat that
+# stood down - the same failure the other two doors were closed against.
+test_a_redeemed_handover_rebinds_the_context_ceiling_record() {
+  local root fakebin harness otherbin other out ticket status=0
+  local record pending incarnation session transcript
+  session=77777777-6666-5555-4444-333333333333
+  transcript=/home/cap/.claude/projects/-home-cap-fm/$session.jsonl
+  root=$(primary_fixture handover-rebind)
+  fakebin=$(fm_fakebin "$root")
+  live_pid harness
+  make_fake_ps_holder "$fakebin" "$harness"
+  run_lock_in_home "$root" "$fakebin" >/dev/null \
+    || fail "the outgoing seat must hold the lock first"
+  out=$(run_lock_in_home "$root" "$fakebin" handover) \
+    || fail "the holder must be able to offer ownership"
+  ticket=$(printf '%s\n' "$out" | sed -n 's/^ticket: //p')
+  [ "${#ticket}" -eq 32 ] || fail "the offer must print a ticket a successor can present"
+
+  otherbin=$(fm_fakebin "$root/successor")
+  live_pid other
+  make_fake_ps_holder "$otherbin" "$other" "$harness"
+
+  record="$root/state/.primary-transcript"
+  pending="$record.pending.$other"
+  # The record as the offering seat left it, and beside it what the successor's
+  # own refused SessionStart hook stashed: its transcript position, named by its
+  # harness pid and that process's incarnation, the shape the hook writes.
+  printf 'status=ok\nharness_pid=%s\nsession_id=outgoing-session\ntranscript_path=/tmp/outgoing.jsonl\nrecorded_at=1\n' \
+    "$harness" > "$record"
+  incarnation=$(fm_pid_incarnation "$other") \
+    || fail "this host cannot read the successor's process incarnation"
+  printf 'status=ok\nharness_pid=%s\nharness_incarnation=%s\nsession_id=%s\ntranscript_path=%s\nrecorded_at=%s\n' \
+    "$other" "$incarnation" "$session" "$transcript" "$(date +%s)" > "$pending"
+
+  out=$(run_lock_in_home "$root" "$otherbin" acquire --handover "$ticket") || status=$?
+  expect_code 0 "$status" "the named successor must redeem the offer"
+  assert_contains "$out" "lock acquired by handover: harness pid $other (from pid $harness)" \
+    "redemption must still report the ownership transfer"
+  assert_contains "$out" "context-ceiling record: rebound to harness pid $other" \
+    "redemption must say what it did to the context-ceiling record, with the acquisition line"
+  [ "$(lock_pid "$root/state/.lock")" = "$other" ] \
+    || fail "redemption must publish the named successor as holder"
+  [ "$(transcript_field "$record" harness_pid)" = "$other" ] \
+    || fail "the record must name the redeeming session's harness, not the seat that stood down: $(cat "$record")"
+  [ "$(transcript_field "$record" status)" = ok ] \
+    || fail "the successor's own stash must be promoted rather than replaced by an error: $(cat "$record")"
+  [ "$(transcript_field "$record" session_id)" = "$session" ] \
+    || fail "the record must carry the redeeming session's own session id: $(cat "$record")"
+  [ "$(transcript_field "$record" transcript_path)" = "$transcript" ] \
+    || fail "the record must carry the redeeming session's own transcript path: $(cat "$record")"
+  [ ! -f "$pending" ] || fail "the stash must be spent by the promotion, not left to be promoted again"
+  pass "session lock: a redeemed handover rebinds this home's context-ceiling record to the redeeming session"
+}
+
 test_a_ticket_is_refused_when_no_offer_stands() {
   local root fakebin harness out status=0
   prepare handover-unoffered
@@ -1285,6 +1373,7 @@ test_a_real_pid_namespace_cannot_take_a_lock_held_on_this_host
 test_a_second_session_on_this_host_is_still_refused
 test_help_describes_the_irrevocable_handover_interface
 test_an_irrevocable_offer_keeps_the_home_owned_for_one_successor
+test_a_redeemed_handover_rebinds_the_context_ceiling_record
 test_a_ticket_is_refused_when_no_offer_stands
 test_a_seat_that_holds_nothing_cannot_offer_ownership
 test_ownership_passes_into_a_real_pid_namespace_by_handover
