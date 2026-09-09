@@ -33,10 +33,12 @@
 # is acting, and that gap was chosen over the alternative, because an
 # unsupervised minute is recoverable and two seats both dispatching and merging
 # is not.
-# Redeeming a ticket is also the only acquisition that does not run through
-# bin/fm-session-start.sh, so it asks bin/fm-sessionstart-nudge.sh to rebind this
-# home's context-ceiling record to the new holder itself, and prints what that
-# did with the acquisition line.
+#
+# Every acquisition also rebinds this home's context-ceiling transcript record to
+# the holder it just published, by invoking bin/fm-sessionstart-nudge.sh, and
+# prints what that did with its own acquisition line. That call sits under
+# publish_record, the one writer of the lock record, so no acquisition path can
+# name a new holder while the ceiling record still names the seat before it.
 #
 # A container rebuild is the one case where a foreign record can be shown to
 # name nobody without probing a process this session cannot see: the record's
@@ -76,7 +78,7 @@ case "${1:-}" in
   ''|acquire) [ -n "${1:-}" ] && shift ;;
   status) MODE=status; shift ;;
   handover) MODE=handover; shift ;;
-  -h|--help) sed -n '2,60p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+  -h|--help) sed -n '2,62p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
   *) echo "error: unknown command ${1}; run $0 --help" >&2; exit 2 ;;
 esac
 while [ $# -gt 0 ]; do
@@ -256,14 +258,44 @@ take_claim_lock() {
   CLAIM_LOCK_HELD=1
 }
 
-# publish_record <pid> <pidns> <ticket-or-empty>: write the whole record and
-# prove what is on disk afterwards. Read back rather than trusted, because a
+# The context-ceiling rebind's report, held from the moment the record is
+# published until the acquiring path prints its own line, so the two arrive
+# together. Empty when nothing was published, when the outcome was not an
+# acquisition, or when the rebind had nothing to say.
+LOCK_REBIND_REPORT=
+
+# print_rebind_report: say what the rebind did, after the line the acquiring path
+# prints for itself. Only the REPORT is per-path; the rebind itself is not, and a
+# path that forgot this would still have rebound the record.
+print_rebind_report() {
+  [ -z "$LOCK_REBIND_REPORT" ] || printf '%s\n' "$LOCK_REBIND_REPORT"
+}
+
+# publish_record <pid> <pidns> <ticket-or-empty> <outcome>: write the whole record
+# and prove what is on disk afterwards. Read back rather than trusted, because a
 # write that reported success and left something else behind - a full
 # filesystem, a lock replaced underneath us - is indistinguishable from a held
 # lock until someone reads it, and by then the session has already been
 # operating as if it had fleet authority.
+#
+# This is also where the home's context-ceiling record is rebound to the holder
+# just published, by invoking bin/fm-sessionstart-nudge.sh --rebind-to-lock. It
+# lives HERE, under the one writer of the lock record, rather than in each
+# acquiring caller: a caller that owns its own call site is a door onto the same
+# failure, and this branch found three of those one at a time - session start,
+# the dead-container supersede, the handover redemption - before the fourth, a
+# seat running this script directly, was found too. Under the publisher no
+# acquisition can name a new holder while the ceiling record still names the old
+# one, including any acquisition path added later.
+#
+# <outcome> says which kind of write this is, because publishing is not always
+# acquiring. `offer` is the handover offer: it rewrites the record to add a
+# ticket while the SAME seat stays the holder, so there is no new holder to
+# rebind to and the record must be left exactly as it is. `acquisition` is every
+# write that names a new holder: the plain acquisition, the dead-container
+# supersede, and the handover redemption.
 publish_record() {
-  local pid=$1 ns=$2 ticket=$3
+  local pid=$1 ns=$2 ticket=$3 outcome=$4
   LOCK_PUBLISH_TMP=$(mktemp "$STATE/.lock-publish.XXXXXX" 2>/dev/null) || {
     echo "error: cannot write session lock; operate read-only until resolved" >&2
     exit 1
@@ -291,6 +323,8 @@ publish_record() {
     echo "error: session lock ownership verification failed; operate read-only until resolved" >&2
     exit 1
   fi
+  [ "$outcome" = acquisition ] || return 0
+  LOCK_REBIND_REPORT=$("$SCRIPT_DIR/fm-sessionstart-nudge.sh" --rebind-to-lock </dev/null 2>&1) || true
 }
 
 if [ "$MODE" = handover ]; then
@@ -314,7 +348,7 @@ if [ "$MODE" = handover ]; then
     echo "error: cannot generate a handover ticket from /dev/urandom; ownership was not offered and this session still holds the lock" >&2
     exit 1
   fi
-  publish_record "$me" "$my_ns" "$new_ticket"
+  publish_record "$me" "$my_ns" "$new_ticket" offer
   release_claim_lock
   cat <<TXT
 handover offered by harness pid $me
@@ -357,7 +391,7 @@ if [ "$SUPERSEDE_DEAD_CONTAINER" -eq 1 ]; then
     echo "error: cannot copy the dead-container lock record to $kept; ownership was not taken and the record still stands unchanged" >&2
     exit 1
   fi
-  publish_record "$me" "$my_ns" ""
+  publish_record "$me" "$my_ns" "" acquisition
   release_claim_lock
   cat <<TXT
 lock acquired by superseding a dead container's record: harness pid $me
@@ -366,6 +400,7 @@ superseded: pid $superseded_pid, kept at $kept
   record modified at $superseded_mtime, this container started at $container_start
   not excluded by these readings: any live seat reaching this home from a pid namespace with a different machine id (host or sibling container over a bind mount, another machine over a network filesystem)
 TXT
+  print_rebind_report
   exit 0
 fi
 
@@ -392,21 +427,10 @@ if [ -n "$TICKET" ]; then
   # same variables and the outgoing holder would otherwise be reported as this
   # session handing over to itself.
   from_pid=$FM_LOCK_RECORD_PID
-  publish_record "$me" "$my_ns" ""
+  publish_record "$me" "$my_ns" "" acquisition
   release_claim_lock
   echo "lock acquired by handover: harness pid $me (from pid $from_pid)"
-  # This is the one acquisition that does not run through bin/fm-session-start.sh,
-  # so it is the one that would otherwise leave this home's context-ceiling record
-  # naming the seat that just stood down. The successor's SessionStart hook fired
-  # while the offering seat still held the lock, was correctly refused the record,
-  # and fires only once per harness session: without this the ceiling is reported
-  # unenforced as a session mismatch for the whole life of the redeeming session.
-  # The rebind owner is the hook's own --rebind-to-lock, the same one session
-  # start invokes, and what it did is printed with the acquisition line exactly as
-  # session start prints it. There is one rebind implementation for all three
-  # acquisition paths, and it stays where it is.
-  REBIND=$("$SCRIPT_DIR/fm-sessionstart-nudge.sh" --rebind-to-lock </dev/null 2>&1) || true
-  [ -z "$REBIND" ] || printf '%s\n' "$REBIND"
+  print_rebind_report
   exit 0
 fi
 
@@ -455,7 +479,7 @@ if fm_session_lock_held_by_other "$LOCK" "$me"; then
 fi
 [ "$FM_SESSION_LOCK_LEGACY" -eq 1 ] && TOOK_LEGACY=1
 
-publish_record "$me" "$my_ns" ""
+publish_record "$me" "$my_ns" "" acquisition
 release_claim_lock
 if [ "$TOOK_LEGACY" -eq 1 ]; then
   # Said out loud rather than upgraded quietly. The record this replaced named
@@ -466,3 +490,4 @@ if [ "$TOOK_LEGACY" -eq 1 ]; then
   echo "warning: the lock record this session replaced named no process namespace, so this session could not prove the previous holder was one it can see; the record it just wrote names one" >&2
 fi
 echo "lock acquired: harness pid $me"
+print_rebind_report

@@ -3,14 +3,14 @@
 # session already holds this home's lock, then print the one-line session-start
 # instruction unless that session already acquired the home lock.
 # With --rebind-to-lock it instead rebinds the standing record to the holder
-# named in this home's session lock, which bin/fm-session-start.sh invokes after
-# every acquisition, and bin/fm-lock.sh invokes after a handover redemption -
-# the one acquisition that does not pass through session start - because this
-# hook may have run against a lock it correctly refused to write over: a dead
-# container's record it read as foreign, a stale holder cleared only after the
-# hook had already run in this same harness process, or the standing offer of a
-# seat that had not yet handed over. No further SessionStart hook ever fires in
-# any of those sessions.
+# named in this home's session lock. bin/fm-lock.sh invokes it from under
+# publish_record, its one writer of that lock, so every acquisition reaches it -
+# the plain one, the dead-container supersede, and the handover redemption alike -
+# because this hook may have run against a lock it correctly refused to write
+# over: a dead container's record it read as foreign, a stale holder cleared only
+# after the hook had already run in this same harness process, or the standing
+# offer of a seat that had not yet handed over. No further SessionStart hook ever
+# fires in any of those sessions.
 # Every silence and error path exits 0 because Claude SessionStart exit 2 blocks
 # session initialization.
 set -u
@@ -269,33 +269,48 @@ discard_pending_record() {  # <pid>
   rm -f "$pending" 2>/dev/null || : > "$pending" 2>/dev/null || true
 }
 
-# Remove the stashes that can never be promoted again, on two readings.
-# A stash written before this container started names a process in a pid table
-# that no longer exists, and the same small numbers are handed out again here.
-# A stash whose named pid is no longer live cannot be promoted by anybody either,
-# because promotion needs that pid's process incarnation to be readable NOW and
-# to match what the stash recorded, and a process that is gone can satisfy
-# neither. Removing it is therefore lossless, and it is what bounds the one file
-# per refused session that would otherwise accumulate for the life of the
-# container: a helper session the harness starts in the primary's own cwd is
-# refused the record, stashes, and exits without ever taking the lock.
-# The whole sweep stands down when this host cannot read its own container start.
-# Nothing there can be PROVEN stale, and deleting on an unprovable reading would
-# throw away the very stashes the rebind promotes on exactly the hosts that need
-# them most.
+# Remove the files under this prefix that can never be used again, on two
+# readings that hold on different hosts.
+#
+# The LIVENESS reading holds everywhere and needs nothing from /proc: a stash
+# whose named pid is no longer live can never be promoted by anybody, because
+# promotion needs that pid's process incarnation to be readable NOW and to match
+# what the stash recorded, and a process that is gone satisfies neither. Removing
+# it is therefore lossless on any host, and it is what bounds the one file per
+# refused session that would otherwise accumulate for the life of the container:
+# a helper session the harness starts in the primary's own cwd is refused the
+# record, stashes, and exits without ever taking the lock. The same reading
+# clears the half-written temporaries publish_pending_record leaves if it dies
+# between writing and renaming, which nothing else ever removes: those are named
+# <stash>.<writer pid>, so a live writer's file is a rename still in flight and
+# is left alone, while a dead writer's is an orphan no rename will ever claim.
+#
+# The AGE reading needs this container's start and so holds only where that can
+# be read: a stash written before this container started names a process in a pid
+# table that no longer exists, where the same small numbers are handed out again.
+# Where the start cannot be read that half stands down rather than guessing,
+# because deleting on an unprovable reading would throw away the very stashes the
+# rebind promotes on exactly the hosts that need them most.
 sweep_stale_pending_records() {
-  local pending pid
-  container_start_epoch_once || return 0
+  local pending suffix pid
   for pending in "$PENDING_PREFIX"*; do
     [ -e "$pending" ] || continue
-    if file_postdates_this_container "$pending"; then
-      pid=$(kv_field "$pending" harness_pid) || pid=
-      case "$pid" in
-        ''|*[!0-9]*) ;;
-        *) kill -0 "$pid" 2>/dev/null && continue ;;
-      esac
+    suffix=${pending#"$PENDING_PREFIX"}
+    pid=${suffix##*.}
+    case "$pid" in
+      ''|*[!0-9]*) ;;
+      *)
+        if ! kill -0 "$pid" 2>/dev/null; then
+          rm -f "$pending" 2>/dev/null || : > "$pending" 2>/dev/null || true
+          continue
+        fi ;;
+    esac
+    case "$suffix" in
+      *.*) continue ;;
+    esac
+    if container_start_epoch_once && ! file_postdates_this_container "$pending"; then
+      rm -f "$pending" 2>/dev/null || : > "$pending" 2>/dev/null || true
     fi
-    rm -f "$pending" 2>/dev/null || : > "$pending" 2>/dev/null || true
   done
 }
 

@@ -1066,6 +1066,75 @@ test_an_irrevocable_offer_keeps_the_home_owned_for_one_successor() {
     || fail "redemption must consume the final offer"
 }
 
+# The door a seat uses when it takes the home by running this script itself,
+# with no session start involved: the plain acquisition. It publishes a new
+# holder like every other acquisition, so it rebinds like every other
+# acquisition, because the call lives under the publisher rather than in each
+# acquiring caller.
+test_a_plain_acquisition_rebinds_the_context_ceiling_record() {
+  local root fakebin harness out status=0
+  local record pending incarnation session transcript
+  session=88888888-7777-6666-5555-444444444444
+  transcript=/home/cap/.claude/projects/-home-cap-fm/$session.jsonl
+  root=$(primary_fixture plain-acquire-rebind)
+  fakebin=$(fm_fakebin "$root")
+  live_pid harness
+  make_fake_ps_holder "$fakebin" "$harness"
+
+  record="$root/state/.primary-transcript"
+  pending="$record.pending.$harness"
+  # The record as the seat before this one left it, and beside it what this
+  # session's own refused SessionStart hook stashed.
+  printf 'status=ok\nharness_pid=4242\nsession_id=previous-session\ntranscript_path=/previous/container.jsonl\nrecorded_at=1\n' \
+    > "$record"
+  incarnation=$(fm_pid_incarnation "$harness") \
+    || fail "this host cannot read the acquiring session's process incarnation"
+  printf 'status=ok\nharness_pid=%s\nharness_incarnation=%s\nsession_id=%s\ntranscript_path=%s\nrecorded_at=%s\n' \
+    "$harness" "$incarnation" "$session" "$transcript" "$(date +%s)" > "$pending"
+
+  out=$(run_lock_in_home "$root" "$fakebin") || status=$?
+  expect_code 0 "$status" "acquiring a free lock directly must succeed"
+  assert_contains "$out" "lock acquired: harness pid $harness" \
+    "the plain acquisition must still report the pid it published"
+  assert_contains "$out" "context-ceiling record: rebound to harness pid $harness" \
+    "the plain acquisition must say what it did to the context-ceiling record"
+  [ "$(transcript_field "$record" harness_pid)" = "$harness" ] \
+    || fail "the record must name the acquiring session's harness, not the seat before it: $(cat "$record")"
+  [ "$(transcript_field "$record" status)" = ok ] \
+    || fail "the acquiring session's own stash must be promoted rather than replaced by an error: $(cat "$record")"
+  [ "$(transcript_field "$record" session_id)" = "$session" ] \
+    || fail "the record must carry the acquiring session's own session id: $(cat "$record")"
+  [ "$(transcript_field "$record" transcript_path)" = "$transcript" ] \
+    || fail "the record must carry the acquiring session's own transcript path: $(cat "$record")"
+  [ ! -f "$pending" ] || fail "the stash must be spent by the promotion"
+  pass "session lock: a plain acquisition rebinds this home's context-ceiling record to the acquiring session"
+}
+
+# A handover OFFER publishes the record too, but it names the same holder and
+# stands that seat down rather than taking the home, so there is no new holder to
+# rebind to and the record must be left exactly as it is.
+test_a_handover_offer_leaves_the_context_ceiling_record_alone() {
+  local root fakebin harness out record status=0
+  root=$(primary_fixture handover-offer-no-rebind)
+  fakebin=$(fm_fakebin "$root")
+  live_pid harness
+  make_fake_ps_holder "$fakebin" "$harness"
+  run_lock_in_home "$root" "$fakebin" >/dev/null || fail "the seat must hold the lock first"
+
+  record="$root/state/.primary-transcript"
+  printf 'status=ok\nharness_pid=%s\nsession_id=standing-session\ntranscript_path=/tmp/standing.jsonl\nrecorded_at=1\n' \
+    "$harness" > "$record"
+  out=$(run_lock_in_home "$root" "$fakebin" handover) || status=$?
+  expect_code 0 "$status" "the holder must be able to offer ownership"
+  assert_not_contains "$out" "context-ceiling record" \
+    "an offer takes no home, so it must not report a rebind"
+  [ "$(transcript_field "$record" session_id)" = standing-session ] \
+    || fail "an offer must leave the standing record exactly as it is: $(cat "$record")"
+  [ "$(transcript_field "$record" transcript_path)" = /tmp/standing.jsonl ] \
+    || fail "an offer must not disturb the record's transcript path: $(cat "$record")"
+  pass "session lock: a handover offer publishes a ticket without rebinding the context-ceiling record"
+}
+
 # The third door onto a lock, and the only one that does not run through
 # bin/fm-session-start.sh: a redeemed ticket. The successor's SessionStart hook
 # fired while the offering seat still held the lock, was correctly refused this
@@ -1373,6 +1442,8 @@ test_a_real_pid_namespace_cannot_take_a_lock_held_on_this_host
 test_a_second_session_on_this_host_is_still_refused
 test_help_describes_the_irrevocable_handover_interface
 test_an_irrevocable_offer_keeps_the_home_owned_for_one_successor
+test_a_plain_acquisition_rebinds_the_context_ceiling_record
+test_a_handover_offer_leaves_the_context_ceiling_record_alone
 test_a_redeemed_handover_rebinds_the_context_ceiling_record
 test_a_ticket_is_refused_when_no_offer_stands
 test_a_seat_that_holds_nothing_cannot_offer_ownership

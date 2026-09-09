@@ -637,17 +637,12 @@ fi
 # Whichever of the two paths above took the lock, the SessionStart hook may have
 # run before it against a record it was right to leave alone - a dead container's
 # record it read as foreign, or a holder cleared only after the hook had already
-# run in this same harness process, where no second hook ever fires. So after
-# every acquisition the hook is asked, through its one rebind owner, to bring the
-# context-ceiling record back to the holder now published, and what it did is
-# printed with the rest: the seat's ceiling is not left measured against a dead
-# harness for the life of the session. A record already naming this holder is left
-# untouched and prints nothing new.
-if [ "$LOCK_RC" -eq 0 ]; then
-  LOCK_REBIND=$("$SCRIPT_DIR/fm-sessionstart-nudge.sh" --rebind-to-lock </dev/null 2>&1) || true
-  [ -z "$LOCK_REBIND" ] || LOCK_OUT="$LOCK_OUT
-$LOCK_REBIND"
-fi
+# run in this same harness process, where no second hook ever fires. Bringing the
+# context-ceiling record back to the holder now published is not this script's
+# job and no longer its call: bin/fm-lock.sh does it under publish_record, so
+# every acquisition rebinds whether or not it came through here. What it did is
+# in the output captured above and printed with the rest, so the seat still says
+# so, and a record already naming this holder is left untouched and adds nothing.
 printf '%s\n' "$LOCK_OUT"
 READ_ONLY=0
 if [ "$LOCK_RC" -ne 0 ]; then

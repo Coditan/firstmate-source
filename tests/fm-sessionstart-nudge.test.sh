@@ -1278,25 +1278,36 @@ SH
 # and on hidepid containers.
 test_a_host_that_cannot_read_its_container_start_keeps_a_good_record() {
   local root="$TMP_ROOT/record-container-start-unreadable" fakebin record pending
-  local own ns out status=0 other_stash incarnation sid path
+  local own helper ns out status=0 other_stash gone_stash live_temp orphan_temp
+  local incarnation sid path
   sid=11111111-2222-3333-4444-555555555555
   path=/home/cap/.claude/projects/-home-cap-fm/$sid.jsonl
   make_primary "$root"
   fakebin=$(fm_fakebin "$root")
   sleep 30 &
   own=$!
-  make_fake_ps_two_claudes "$fakebin" "$own" 999001
+  sleep 30 &
+  helper=$!
+  make_fake_ps_two_claudes "$fakebin" "$own" "$helper"
   make_fake_hidden_proc_1 "$fakebin"
   record="$root/state/.primary-transcript"
   pending="$record.pending.$own"
-  other_stash="$record.pending.999001"
+  other_stash="$record.pending.$helper"
+  gone_stash="$record.pending.999001"
+  live_temp="$record.pending.$own.$helper"
+  orphan_temp="$record.pending.$own.999002"
   ns=$(fm_pid_namespace_token) || fail "this host cannot name its own pid table"
   # The record this session's own hook published seconds ago against a free lock,
-  # and another refused session's stash beside it.
+  # and beside it a refused helper's stash, a stash whose process is gone, a
+  # rename still in flight, and one no rename will ever claim.
   printf 'status=ok\nharness_pid=%s\nsession_id=%s\ntranscript_path=%s\nrecorded_at=%s\n' \
     "$own" "$sid" "$path" "$(date +%s)" > "$record"
-  printf 'status=ok\nharness_pid=999001\nsession_id=other-session\ntranscript_path=/tmp/other.jsonl\nrecorded_at=1\n' \
-    > "$other_stash"
+  printf 'status=ok\nharness_pid=%s\nsession_id=other-session\ntranscript_path=/tmp/other.jsonl\nrecorded_at=1\n' \
+    "$helper" > "$other_stash"
+  printf 'status=ok\nharness_pid=999001\nsession_id=gone-session\ntranscript_path=/tmp/gone.jsonl\nrecorded_at=1\n' \
+    > "$gone_stash"
+  : > "$live_temp"
+  : > "$orphan_temp"
   { printf '%s\n' "$own"; printf 'pidns=%s\n' "$ns"; } > "$root/state/.lock"
 
   out=$(env -u NO_MISTAKES_GATE PATH="$fakebin:$PATH" FM_GATE_REFUSE_BYPASS=0 \
@@ -1312,7 +1323,13 @@ test_a_host_that_cannot_read_its_container_start_keeps_a_good_record() {
   [ "$(record_field "$record" transcript_path)" = "$path" ] \
     || fail "the surviving record must keep its own transcript path: $(cat "$record")"
   [ -f "$other_stash" ] \
-    || fail "the sweep must stand down where no stash can be proven stale"
+    || fail "a stash whose process is still live must survive where nothing can be proven stale by age"
+  [ ! -e "$gone_stash" ] \
+    || fail "a stash whose process is gone is unusable on any host and must still be swept here"
+  [ -f "$live_temp" ] \
+    || fail "a rename still in flight must be left alone"
+  [ ! -e "$orphan_temp" ] \
+    || fail "a temporary whose writer is gone is an orphan no rename will claim and must be swept here"
 
   # And the promotion half still works on that host, which is why the sweep must
   # not have thrown the stashes away: a record naming a dead pid is rebound from
@@ -1326,8 +1343,9 @@ test_a_host_that_cannot_read_its_container_start_keeps_a_good_record() {
   status=0
   out=$(env -u NO_MISTAKES_GATE PATH="$fakebin:$PATH" FM_GATE_REFUSE_BYPASS=0 \
     FM_ROOT_OVERRIDE="$root" FM_HOME="$root" "$NUDGE" --rebind-to-lock </dev/null) || status=$?
-  kill "$own" 2>/dev/null || true
+  kill "$own" "$helper" 2>/dev/null || true
   wait "$own" 2>/dev/null || true
+  wait "$helper" 2>/dev/null || true
   expect_code 0 "$status" "the promoting rebind run on the same host"
   [ "$(record_field "$record" status)" = ok ] \
     || fail "the stash must still be promotable where the container start cannot be read: $(cat "$record")"
@@ -1340,7 +1358,7 @@ test_a_host_that_cannot_read_its_container_start_keeps_a_good_record() {
   [ ! -f "$pending" ] || fail "the promoted stash must be spent"
   [ -f "$other_stash" ] || fail "another session's stash must still be left alone"
 
-  pass "fm-sessionstart-nudge: a host that cannot read its container start keeps the record naming its live holder, keeps the stashes, and still promotes"
+  pass "fm-sessionstart-nudge: a host that cannot read its container start keeps the record naming its live holder, keeps every usable stash, sweeps the unusable ones, and still promotes"
 }
 
 # A session refused the record stashes and can then exit without ever taking the
@@ -1371,6 +1389,10 @@ test_a_stash_whose_process_is_gone_is_swept_and_a_live_one_is_kept() {
     "$dead" > "$record.pending.$dead"
   printf 'status=ok\nharness_pid=%s\nsession_id=holder-session\ntranscript_path=/tmp/holder.jsonl\nrecorded_at=1\n' \
     "$own" > "$record"
+  # A half-written stash the writer is still renaming, and one whose writer died
+  # between writing and renaming: nothing but this sweep ever removes either.
+  : > "$record.pending.$own.$own"
+  : > "$record.pending.$own.$dead"
   { printf '%s\n' "$own"; printf 'pidns=%s\n' "$ns"; } > "$root/state/.lock"
 
   env -u NO_MISTAKES_GATE PATH="$fakebin:$PATH" FM_GATE_REFUSE_BYPASS=0 \
@@ -1382,6 +1404,10 @@ test_a_stash_whose_process_is_gone_is_swept_and_a_live_one_is_kept() {
     || fail "a stash whose process is gone can never be promoted and must not be kept for the life of the container"
   [ -f "$record.pending.$own" ] \
     || fail "a stash whose process is still live must be left alone: it is that session's only copy"
+  [ -f "$record.pending.$own.$own" ] \
+    || fail "a rename still in flight must be left alone"
+  [ ! -e "$record.pending.$own.$dead" ] \
+    || fail "a temporary whose writer is gone must not be left behind for the life of the container"
   [ "$(record_field "$record" session_id)" = holder-session ] \
     || fail "the sweep must not have disturbed a record that already names the holder: $(cat "$record")"
   pass "fm-sessionstart-nudge: the rebind sweeps a stash whose process is gone and keeps one whose process is still live"
