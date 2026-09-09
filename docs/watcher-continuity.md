@@ -6,6 +6,8 @@ Continuity lives above that process boundary rather than depending on the model 
 Wake DELIVERY is no longer part of this document.
 It moved out of the harness entirely on 2026-08-13 and `docs/wake-delivery.md` owns it: the listener, its verdicts, the endpoint record, and the evidence.
 What remains here is the watcher loop's own continuity and the Claude PreToolUse gate that protects a session whose watcher is down.
+One delivery fact stays here rather than moving: which file a guard compares its lock against, because the watcher lock and the delivery lock are compared by one rule and the section below was written from the incident that broke both.
+The PreToolUse gate reads only the watcher lock; `bin/fm-guard.sh` and `bin/fm-turnend-guard.sh` read both.
 
 ## Ownership
 
@@ -23,7 +25,7 @@ Whether a listener is up at that moment is irrelevant to whether the record surv
 Claude's PreToolUse continuity gate allows the wake drain, the supervision-repair commands, a worker's own status line, and independently fail-closed teardown, but refuses other fleet commands while tasks are in flight and no identity-matched live watcher holds the home lock.
 Allowing an ordinary literal teardown prevents a terminal wake from creating a recovery circle: forced or dynamically constructed teardown remains blocked, ordinary teardown itself still refuses dirty, unlanded, incomplete-scout, and unresolved-decision cases, and the turn-end guard continues to require supervision for any tasks left in flight.
 
-### Which watcher file the lock is compared against
+### Which file each lock is compared against
 
 The lock records the absolute path of the watcher that took it, and `fm_watcher_lock_matches_pid` compares that recorded path as a string.
 That recorded path names the watcher of the checkout the watcher was launched from: `bin/fm-watch.sh` records its own `SCRIPT_DIR` copy, and `bin/fm-watcher-service.sh` launches the checkout's copy, so the lock names the checkout's `bin/fm-watch.sh` and never a file under the home's state directory.
@@ -34,6 +36,15 @@ The pid half of the check is unchanged, so a dead process holding the home lock 
 For a session operating the home, `FM_ROOT` and `SCRIPT_DIR/..` are the same directory, so nothing about that case changed.
 One residual is accepted: when a worker's environment carries `FM_HOME` but no `FM_ROOT_OVERRIDE`, `FM_ROOT` falls back to the worktree.
 The PreToolUse gate and the turn-end guard are unaffected in that shape, because `fm_primary_scope_matches` exits them before the lock is ever read, so the residual is confined to the advisory banner of `bin/fm-guard.sh`, which warns and never blocks.
+
+The delivery lock is compared by the identical rule and was moved to `$FM_ROOT/bin/fm-delivery.sh` on 2026-09-09 for the identical reason.
+`bin/fm-delivery.sh` records its own `SCRIPT_DIR` copy in `state/.delivery.lock/delivery-path`, exactly as the watcher does, so `fm_delivery_lock_matches_pid` compares the same kind of string and inherits the same worker shape.
+The watcher half of these two adjacent lines was moved on 2026-09-06 and the delivery line beside it was not, which left `bin/fm-guard.sh` and `bin/fm-turnend-guard.sh` reading every home as `down` from a task worktree however healthy its listener was.
+That was measured on 2026-09-09 against a listener `bin/fm-delivery-service.sh status` called `idle` in the same minute: three workers hit it within one hour, and because the condition holds for every worker on every turn, the warning could no longer distinguish the turn where delivery was genuinely gone.
+The pid-identity half again carries the real check, so a listener that is dead or whose beacon aged out still stops a worker's turn from the same worktree; `tests/fm-turnend-guard.test.sh` and `tests/fm-guard-stale-banner.test.sh` hold the false positive and both true positives as one set, so silencing the alarm cannot pass on its own.
+`bin/fm-delivery-service.sh` deliberately keeps its `SCRIPT_DIR` resolution and is not part of this move.
+It is the launcher rather than a judge: the path it names is the file it execs, the `FM_DELIVERY_EXEC` it writes into the unit environment, and one entry in a source-version digest whose other entries are all `SCRIPT_DIR` siblings named relative to `SCRIPT_DIR`, so repointing that one entry would spell it as an absolute path from another checkout and change the digest without a byte of the listener changing.
+That leaves a foreign-checkout invocation of the service reading `down` against a healthy listener, which is a real residual and is accepted: the service is a supervision-repair command `AGENTS.md` reserves to firstmate, so the invocation is out of contract before the path is compared.
 
 `bin/fm-status.sh` is classified as a recovery command alongside the wake drain, delivery service repair, and teardown.
 A worker's own status line is never a fleet mutation, and it is the channel the refusal itself tells the worker to report through, so denying it left the worker with no sanctioned way to answer.
@@ -84,6 +95,7 @@ Nothing now exits on a single stale reading, because nothing is a one-shot wait:
 `tests/fm-watcher-lock.test.sh` covers verified-successor attach, the typed self-eviction failure, bounded and successor-linked lifecycle rows, a SIGSTOP counterfactual that distinguishes a live PID from a stale beacon before classifying termination, and the guard's three states with work in flight.
 `tests/fm-continuity-pretool-check.test.sh` proves the Claude gate rejects only non-recovery fleet execution in the precise unhealthy state and preserves the existing Stop registration.
 It also pairs the two addressees: a worker running the gate from a task worktree is still refused but is handed none of the commands reserved to firstmate, while the session operating the home still gets its full recovery instruction.
+It pins the gate against the delivery predicate as well: a worker's own status line is still allowed with the launching home's watcher down AND no live listener for it, so the reporting channel the refusal names cannot later be gated on delivery health.
 `tests/fm-turnend-guard.test.sh` pairs them the same way for the turn-end banner, for the grok adapter's prepended instruction, and for the OpenCode plugin's prepended headline.
 `tests/fm-guard-stale-banner.test.sh` pairs them for the advisory daemon banner and the delivery warning, and its operator cases now run the guard out of the fixture home's own `bin/` so that shape is real rather than implied.
 Both worker tests were run against the pre-fix code first and reproduced the defect verbatim.
