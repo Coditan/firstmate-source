@@ -275,7 +275,7 @@ wait_for_running() {
 # not fail out of existence, because a runtime it cannot read still needs an
 # owner watching for the moment it can.
 supervise_once() {
-  local state confirm now cause
+  local state confirm now held cause
   cap_server_log
   read_server_state
   state=$STATE_READING
@@ -297,6 +297,25 @@ supervise_once() {
       ;;
   esac
 
+  # The reading this pass has already taken is published before the confirm and
+  # the start attempt, not after them.  Those two together run for the whole
+  # start timeout when a start does not take, which is longer than a converging
+  # session waits for a first reading - so an owner that publishes only at the
+  # end of the pass looks to that session like a tier that failed to start at
+  # all, on exactly the down runtime this whole loop exists for.
+  now=$(date +%s)
+  held=0
+  if [ "${LAST_START_AT:-0}" -gt 0 ]; then
+    held=$(( ${BACKOFF:-$BASE_BACKOFF} - (now - LAST_START_AT) ))
+    [ "$held" -gt 0 ] || held=0
+  fi
+  LAST_STATE=down
+  if [ "$held" -gt 0 ]; then
+    write_reading down "the next start attempt is held off for ${held}s"
+  else
+    write_reading down "the owner is starting it"
+  fi
+
   # A single `down` is not enough to act on: a status call can lose a race with a
   # server that is still binding, and a start against a live socket is exactly
   # the mistake that would cost a fleet its workers.  Confirm it once more.
@@ -308,12 +327,7 @@ supervise_once() {
     return 0
   fi
 
-  now=$(date +%s)
-  if [ "${LAST_START_AT:-0}" -gt 0 ] && [ $((now - LAST_START_AT)) -lt "${BACKOFF:-$BASE_BACKOFF}" ]; then
-    LAST_STATE=down
-    write_reading down "the runtime is down and the next start attempt is held off for $(( BACKOFF - (now - LAST_START_AT) ))s"
-    return 0
-  fi
+  [ "$held" -eq 0 ] || return 0
 
   LAST_START_AT=$now
   STARTS=$(( ${STARTS:-0} + 1 ))

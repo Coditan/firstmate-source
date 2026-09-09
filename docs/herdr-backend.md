@@ -129,7 +129,8 @@ Stopping the owner leaves the runtime running, which is the whole rollback:
 bin/fm-herdr-service.sh stop-owner
 ```
 
-That stops the keeper session or disables the unit, whichever tier this home selected, and the home returns to its previous behavior with no worker disturbed - `fm_backend_herdr_server_ensure` keeps starting the server lazily exactly as it did before.
+That stops the keeper session or disables the unit, whichever tier this home selected, and then stops the recorded owner itself, because a keeper killed outright leaves its owner alive and reparented and ending the tier does not reach it.
+It reports success only once no live recorded owner is left, so the home has genuinely returned to its previous behavior with no worker disturbed - `fm_backend_herdr_server_ensure` keeps starting the server lazily exactly as it did before.
 Reverting the code is equally safe for the same reason: nothing about a running server depends on the owner existing, so the removal is invisible to every worker in it.
 The one thing rollback restores along with the old behavior is the old exposure: the runtime goes back to being a child of whichever reader touched it first.
 

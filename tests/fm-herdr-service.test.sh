@@ -183,6 +183,20 @@ reading_field() {  # <home> <key>
   sed -n "s/^$2=//p" "$1/state/.herdr-runtime.lock/reading" 2>/dev/null | head -1
 }
 
+# The owner publishes its first reading from its first status read, so a
+# convergence returns while a start it began is still in flight.  A case that
+# wants the settled reading waits for it rather than assuming convergence and
+# the runtime coming up are the same moment.
+wait_for_reading() {  # <home> <value> [tries]
+  local home=$1 want=$2 tries=${3:-100}
+  while [ "$tries" -gt 0 ]; do
+    [ "$(reading_field "$home" reading)" = "$want" ] && return 0
+    sleep 0.1
+    tries=$((tries - 1))
+  done
+  return 1
+}
+
 # A reading published after the one taken at <previous-at>, which is how a caller
 # tells a loop that is still going round from one frozen mid-poll.
 wait_for_new_reading() {  # <home> <previous-at> [tries]
@@ -433,6 +447,8 @@ test_the_keeper_tier_starts_stops_and_readopts_one_runtime() {
   wait_for_file "$state/running-keeper" || fail "the keeper-owned runtime never came up"
   server_pid=$(stub_server_pid "$state" keeper)
   keeper_pid=$(cat "$TMP_ROOT/keeper.pid")
+  wait_for_reading "$home" running \
+    || fail "the owner never settled on a running reading for the runtime it started"
 
   out=$(PATH="$fakebin:$PATH" FM_HOME="$home" FM_HERDR_SERVICE_FORCE_BACKEND=keeper \
     FM_HERDR_TMUX="$fakebin/tmux" FM_HERDR_RUNTIME_SESSION=keeper \
@@ -578,6 +594,273 @@ test_a_killed_keeper_leaves_no_second_owner_behind() {
   pass "a keeper killed outright leaves exactly one owner after convergence"
 }
 
+# A stub whose `server` waits for a release file before it binds, so a case can
+# hold the owner inside its start attempt and look at what it has published.
+make_gated_herdr() {  # <fakebin> <state-dir> <release-file>
+  local fakebin=$1 state=$2 release=$3
+  mkdir -p "$fakebin" "$state"
+  cat > "$fakebin/herdr" <<SH
+#!/usr/bin/env bash
+set -u
+HERDR_STUB_STATE='$state'
+HERDR_STUB_RELEASE='$release'
+SH
+  cat >> "$fakebin/herdr" <<'SH'
+prev_flag=
+session=default
+sub=
+for arg in "$@"; do
+  if [ "$prev_flag" = session ]; then session=$arg; prev_flag=; continue; fi
+  case "$arg" in
+    --session) prev_flag=session ;;
+    --*) ;;
+    *) [ -n "$sub" ] || sub=$arg ;;
+  esac
+done
+run="$HERDR_STUB_STATE/running-$session"
+case "$sub" in
+  status)
+    running=false
+    if [ -e "$run" ] && kill -0 "$(cat "$run" 2>/dev/null || echo 0)" 2>/dev/null; then
+      running=true
+    fi
+    printf '{"client":{"version":"0.7.4","protocol":16},"server":{"status":"running","running":%s,"protocol":16,"capabilities":{"detached_server_daemon":false},"compatible":true}}\n' "$running"
+    ;;
+  server)
+    while [ ! -e "$HERDR_STUB_RELEASE" ]; do sleep 0.1; done
+    printf '%s\n' "$$" > "$run"
+    printf '%s\n' "$$" >> "$HERDR_STUB_STATE/server-pids"
+    trap 'rm -f "$run"; exit 0' TERM INT HUP
+    while :; do sleep 0.2; done
+    ;;
+  *) exit 1 ;;
+esac
+SH
+  chmod +x "$fakebin/herdr"
+}
+
+# The digest a converging session would print for whatever the owner has
+# published right now.
+herdr_digest() {  # <home> <fakebin>
+  PATH="$2:$PATH" FM_HOME="$1" FM_HERDR_SERVICE_FORCE_BACKEND=keeper \
+    FM_HERDR_TMUX="$2/tmux" FM_BOOTSTRAP_DETECT_ONLY=1 "$SERVICE" bootstrap
+}
+
+# A converging session waits a bounded time for the owner's FIRST reading, and a
+# down runtime is the case where the owner has the most work to do before it has
+# one - so the reading has to be published from the first status read rather than
+# after the confirm-and-start sequence, and it has to say something true.
+test_a_down_runtime_is_reported_before_the_start_attempt_finishes() {
+  local fakebin state home release owner digest
+  fakebin="$TMP_ROOT/early-bin"
+  state="$TMP_ROOT/herdr-state"
+  home=$(make_home "$TMP_ROOT/early-home")
+  release="$TMP_ROOT/early-release"
+  make_gated_herdr "$fakebin" "$state" "$release"
+  printf '#!/usr/bin/env bash\nexit 1\n' > "$fakebin/tmux"
+  chmod +x "$fakebin/tmux"
+
+  PATH="$fakebin:$PATH" FM_HOME="$home" FM_HERDR_RUNTIME_SESSION=early \
+    FM_HERDR_RUNTIME_CONFIRM_SLEEP=0.2 FM_HERDR_RUNTIME_START_TIMEOUT=60 \
+    FM_HERDR_RUNTIME_ONCE=1 "$RUNTIME" >/dev/null 2>&1 &
+  owner=$!
+  TRACKED_PIDS+=("$owner")
+
+  wait_for_file "$home/state/.herdr-runtime.lock/reading" 100 \
+    || fail "the owner published no reading before its start attempt finished"
+  # The gate is still closed, so the start attempt demonstrably has not finished.
+  [ ! -e "$state/running-early" ] || fail "the fixture released the server before the assertion"
+  [ "$(reading_field "$home" reading)" = down ] \
+    || fail "the early reading of a down runtime was '$(reading_field "$home" reading)'"
+
+  digest=$(herdr_digest "$home" "$fakebin")
+  assert_contains "$digest" "the worker runtime is not running - the owner is starting it" \
+    "the digest did not report the early reading in the owner's own words: $digest"
+  case "$digest" in
+    *"has not been able to start it"*) fail "the digest accused the owner of a failure it had not had yet: $digest" ;;
+  esac
+
+  : > "$release"
+  wait_for_file "$state/running-early" 200 || fail "the released runtime never came up"
+  wait_for_dead "$owner" 200 || fail "the owner did not finish its single pass"
+  [ "$(reading_field "$home" reading)" = running ] \
+    || fail "the owner did not record the started runtime as running"
+  pass "a down runtime is reported from the first read, before the start attempt finishes"
+}
+
+# The other two down notes have to compose true sentences under the same prefix.
+test_a_failed_start_says_so_without_claiming_more() {
+  local fakebin state home digest
+  fakebin="$TMP_ROOT/failstart-bin"
+  state="$TMP_ROOT/failstart-state"
+  home=$(make_home "$TMP_ROOT/failstart-home")
+  mkdir -p "$fakebin" "$state"
+  cat > "$fakebin/herdr" <<'SH'
+#!/usr/bin/env bash
+set -u
+for arg in "$@"; do
+  case "$arg" in
+    status) printf '{"client":{"version":"0.7.4","protocol":16},"server":{"status":"stopped","running":false,"protocol":16,"capabilities":{"detached_server_daemon":false},"compatible":true}}\n'; exit 0 ;;
+    server) echo "stub: this server refuses to bind" >&2; exit 1 ;;
+  esac
+done
+exit 1
+SH
+  chmod +x "$fakebin/herdr"
+  printf '#!/usr/bin/env bash\nexit 1\n' > "$fakebin/tmux"
+  chmod +x "$fakebin/tmux"
+
+  PATH="$fakebin:$PATH" FM_HOME="$home" FM_HERDR_RUNTIME_SESSION=failstart \
+    FM_HERDR_RUNTIME_CONFIRM_SLEEP=0.2 FM_HERDR_RUNTIME_START_TIMEOUT=2 \
+    FM_HERDR_RUNTIME_ONCE=1 "$RUNTIME" || fail "the owner failed rather than recording a failed start"
+  [ "$(reading_field "$home" reading)" = down ] \
+    || fail "a start that never reported a running server was recorded as '$(reading_field "$home" reading)'"
+
+  digest=$(herdr_digest "$home" "$fakebin")
+  assert_contains "$digest" "the worker runtime is not running - a detached start" \
+    "the digest did not report the failed start attempt: $digest"
+  assert_contains "$digest" "did not report a running server within 2s" \
+    "the digest lost the reason the start attempt failed: $digest"
+  pass "a start attempt that did not take composes a true digest line"
+}
+
+# The rollback's whole promise is that the watching stops; a keeper killed
+# outright leaves an owner the tier teardown cannot reach.
+test_stop_owner_ends_an_orphaned_owner() {
+  local fakebin state home log pidfile keeper_pid owner_pid server_pid out
+  fakebin="$TMP_ROOT/rollback-bin"
+  state="$TMP_ROOT/herdr-state"
+  home=$(make_home "$TMP_ROOT/rollback-home")
+  log="$TMP_ROOT/rollback-tmux.log"
+  pidfile="$TMP_ROOT/rollback-keeper.pid"
+  make_fake_herdr "$fakebin" "$state"
+  make_fake_tmux_keeper "$fakebin"
+  : > "$log"
+
+  PATH="$fakebin:$PATH" FM_HOME="$home" FM_HERDR_SERVICE_FORCE_BACKEND=keeper \
+    FM_HERDR_TMUX="$fakebin/tmux" FM_HERDR_RUNTIME_SESSION=rollback \
+    FM_SERVICE_TOOLS='herdr jq tmux' \
+    FM_TEST_TMUX_LOG="$log" FM_TEST_KEEPER_PID_FILE="$pidfile" \
+    FM_HERDR_CONFIRM_TIMEOUT=15 "$SERVICE" ensure \
+    || fail "the keeper tier did not establish a runtime owner"
+  keeper_pid=$(cat "$pidfile")
+  owner_pid=$(sed -n 's/^pid=//p' "$home/state/.herdr-runtime.lock/record" | head -1)
+  TRACKED_PIDS+=("$keeper_pid" "$owner_pid")
+  wait_for_file "$state/running-rollback" || fail "the keeper-owned runtime never came up"
+  server_pid=$(stub_server_pid "$state" rollback)
+
+  kill -KILL "$keeper_pid" 2>/dev/null || fail "could not kill the keeper"
+  wait_for_dead "$keeper_pid" || fail "the keeper did not die"
+  kill -0 "$owner_pid" 2>/dev/null || fail "the fixture left no orphaned owner to roll back over"
+
+  out=$(PATH="$fakebin:$PATH" FM_HOME="$home" FM_HERDR_SERVICE_FORCE_BACKEND=keeper \
+    FM_HERDR_TMUX="$fakebin/tmux" FM_HERDR_RUNTIME_SESSION=rollback \
+    FM_TEST_TMUX_LOG="$log" FM_TEST_KEEPER_PID_FILE="$pidfile" \
+    FM_HERDR_CONFIRM_TIMEOUT=15 "$SERVICE" stop-owner) \
+    || fail "stop-owner failed over an orphaned owner"
+  assert_contains "$out" "the runtime itself is left running" \
+    "stop-owner did not report the rollback it performed: $out"
+  wait_for_dead "$owner_pid" 50 \
+    || fail "stop-owner reported success while the orphaned owner kept watching (pid $owner_pid)"
+
+  kill -0 "$server_pid" 2>/dev/null || fail "the rollback ended the runtime it was supposed to leave running"
+  [ "$(stub_server_pid "$state" rollback)" = "$server_pid" ] \
+    || fail "the rollback disturbed the runtime record"
+  pass "stop-owner ends an orphaned owner and leaves the runtime running"
+}
+
+# A home that gains a usable user manager after running the keeper tier must end
+# with one owner, not with a unit-managed one beside a keeper still respawning
+# its own every two seconds.
+test_the_systemd_tier_clears_a_leftover_keeper() {
+  local fakebin state home log pidfile unitdir unitpid keeper_pid keeper_owner server_pid unit_owner
+  fakebin="$TMP_ROOT/cross-bin"
+  state="$TMP_ROOT/herdr-state"
+  home=$(make_home "$TMP_ROOT/cross-home")
+  log="$TMP_ROOT/cross-tmux.log"
+  pidfile="$TMP_ROOT/cross-keeper.pid"
+  unitdir="$TMP_ROOT/cross-units"
+  unitpid="$TMP_ROOT/cross-unit.pid"
+  make_fake_herdr "$fakebin" "$state"
+  make_fake_tmux_keeper "$fakebin"
+  mkdir -p "$unitdir"
+  install -m 0644 "$ROOT/systemd/fm-herdr@.service" "$unitdir/fm-herdr@.service"
+  : > "$log"
+
+  printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$(printf "%%s" "$2" | tr / -)"\n' > "$fakebin/systemd-escape"
+  # A stand-in user manager: `restart` starts the owner from the environment file
+  # the service just wrote, exactly as the unit's EnvironmentFile would.
+  cat > "$fakebin/systemctl" <<'SH'
+#!/usr/bin/env bash
+set -u
+case "${2:-}" in
+  show-environment|daemon-reload|enable|disable) exit 0 ;;
+  is-enabled) exit 0 ;;
+  is-active)
+    pid=$(cat "${FM_TEST_UNIT_PID_FILE:?}" 2>/dev/null || true)
+    [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null
+    ;;
+  restart)
+    pid=$(cat "${FM_TEST_UNIT_PID_FILE:?}" 2>/dev/null || true)
+    [ -z "$pid" ] || kill -TERM "$pid" 2>/dev/null || true
+    while IFS= read -r line; do
+      case "$line" in
+        FM_*=*|PATH=*)
+          key=${line%%=*}
+          val=${line#*=}
+          val=${val#\"}
+          val=${val%\"}
+          export "$key=$val"
+          ;;
+      esac
+    done < "${FM_TEST_SERVICE_ENV:?}"
+    FM_HERDR_RUNTIME_MANAGER=systemd bash "${FM_HERDR_RUNTIME_EXEC:?}" >/dev/null 2>&1 &
+    printf '%s\n' "$!" > "$FM_TEST_UNIT_PID_FILE"
+    ;;
+  *) exit 1 ;;
+esac
+SH
+  chmod +x "$fakebin/systemctl" "$fakebin/systemd-escape"
+
+  PATH="$fakebin:$PATH" FM_HOME="$home" FM_HERDR_SERVICE_FORCE_BACKEND=keeper \
+    FM_HERDR_TMUX="$fakebin/tmux" FM_HERDR_RUNTIME_SESSION=cross \
+    FM_SERVICE_TOOLS='herdr jq tmux' \
+    FM_TEST_TMUX_LOG="$log" FM_TEST_KEEPER_PID_FILE="$pidfile" \
+    FM_HERDR_CONFIRM_TIMEOUT=15 "$SERVICE" ensure \
+    || fail "the keeper tier did not establish a runtime owner"
+  keeper_pid=$(cat "$pidfile")
+  keeper_owner=$(sed -n 's/^pid=//p' "$home/state/.herdr-runtime.lock/record" | head -1)
+  TRACKED_PIDS+=("$keeper_pid" "$keeper_owner")
+  wait_for_file "$state/running-cross" || fail "the keeper-owned runtime never came up"
+  server_pid=$(stub_server_pid "$state" cross)
+
+  # The user manager becomes usable; the keeper is now a leftover.
+  PATH="$fakebin:$PATH" FM_HOME="$home" FM_HERDR_SERVICE_FORCE_BACKEND=systemd \
+    FM_HERDR_SYSTEMCTL="$fakebin/systemctl" FM_HERDR_SYSTEMD_ESCAPE="$fakebin/systemd-escape" \
+    FM_HERDR_SYSTEMD_UNIT_DIR="$unitdir" FM_HERDR_TMUX="$fakebin/tmux" \
+    FM_HERDR_RUNTIME_SESSION=cross FM_SERVICE_TOOLS='herdr jq tmux' \
+    FM_TEST_TMUX_LOG="$log" FM_TEST_KEEPER_PID_FILE="$pidfile" \
+    FM_TEST_UNIT_PID_FILE="$unitpid" FM_TEST_SERVICE_ENV="$home/state/.herdr-service.env" \
+    FM_HERDR_CONFIRM_TIMEOUT=15 "$SERVICE" ensure \
+    || fail "the systemd tier did not converge over a keeper-tier home"
+  TRACKED_PIDS+=("$(cat "$unitpid" 2>/dev/null || true)")
+
+  wait_for_dead "$keeper_pid" 50 \
+    || fail "the systemd convergence left the keeper running to respawn its own owner"
+  wait_for_dead "$keeper_owner" 50 \
+    || fail "the systemd convergence left the keeper-tier owner running beside the unit's"
+  unit_owner=$(sed -n 's/^pid=//p' "$home/state/.herdr-runtime.lock/record" | head -1)
+  [ "$unit_owner" != "$keeper_owner" ] || fail "the unit did not take over the record"
+  kill -0 "$unit_owner" 2>/dev/null || fail "the unit's owner is not running"
+  [ "$(sed -n 's/^manager=//p' "$home/state/.herdr-runtime.lock/record" | head -1)" = systemd ] \
+    || fail "the surviving owner is not the unit's"
+
+  kill -0 "$server_pid" 2>/dev/null || fail "changing tiers ended the runtime"
+  [ "$(stub_server_pid "$state" cross)" = "$server_pid" ] \
+    || fail "changing tiers replaced the runtime instead of readopting it"
+  pass "a systemd convergence clears a leftover keeper and leaves one owner"
+}
+
 test_the_entrypoint_command_is_printed_verbatim() {
   local home out
   home=$(make_home "$TMP_ROOT/entrypoint-home")
@@ -598,4 +881,8 @@ test_a_keeper_teardown_does_not_take_the_runtime_with_it
 test_the_keeper_tier_starts_stops_and_readopts_one_runtime
 test_a_client_that_never_answers_leaves_the_owner_beating
 test_a_killed_keeper_leaves_no_second_owner_behind
+test_a_down_runtime_is_reported_before_the_start_attempt_finishes
+test_a_failed_start_says_so_without_claiming_more
+test_stop_owner_ends_an_orphaned_owner
+test_the_systemd_tier_clears_a_leftover_keeper
 test_the_entrypoint_command_is_printed_verbatim

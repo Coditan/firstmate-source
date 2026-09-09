@@ -424,7 +424,9 @@ ensure_systemd() {
   [ "${FM_HERDR_ENV_CHANGED:-0}" -eq 0 ] || changed=1
   # An owner recorded under the other tier is not this unit's to restart, and
   # restarting the unit would leave it running alongside the new one; the unit's
-  # own KillMode=process makes that worse, not better.
+  # own KillMode=process makes that worse, not better.  The keeper that would
+  # respawn it goes first, or stopping the owner only buys two seconds.
+  stop_leftover_keeper
   if healthy_owner && ! owner_record_matches systemd; then
     stop_recorded_owner || return 1
     changed=1
@@ -499,6 +501,15 @@ recorded_service_path() {
   printf '%s' "$line"
 }
 
+# A keeper left over from a boot without a usable user manager is another live
+# owner of the same record, and its own respawn loop puts a new one back two
+# seconds after any stop, so every systemd-tier path that ends the watching has
+# to end the keeper too rather than leave two of them watching one runtime.
+stop_leftover_keeper() {
+  "$TMUX_CMD" has-session -t "$(keeper_name)" 2>/dev/null || return 0
+  stop_keeper 2>/dev/null || true
+}
+
 # What the owner last established about the runtime, said in the digest rather
 # than left in a file: an owner that is up but reading `unreadable` looks exactly
 # like a healthy home from the outside, and that is the state this whole area
@@ -525,7 +536,7 @@ report_reading() {
       echo "HERDR_RUNTIME: the runtime owner cannot read whether the worker runtime is running - $note"
       ;;
     down)
-      echo "HERDR_RUNTIME: the worker runtime is down and the owner has not been able to start it - $note"
+      echo "HERDR_RUNTIME: the worker runtime is not running - $note"
       ;;
     *)
       echo "HERDR_RUNTIME: the runtime owner published an unrecognized reading '$reading' - $note"
@@ -623,12 +634,7 @@ restart_selected() {
         return 2
       fi
       write_service_env || return 1
-      # A keeper left over from a boot without a usable user manager is another
-      # live owner of the same record; restarting the unit next to it would
-      # leave two of them watching one runtime.
-      if "$TMUX_CMD" has-session -t "$(keeper_name)" 2>/dev/null; then
-        stop_keeper 2>/dev/null || true
-      fi
+      stop_leftover_keeper
       "$SYSTEMCTL" --user restart "$(unit_instance)" || return 1
       wait_for_healthy
       ;;
@@ -645,13 +651,22 @@ restart_selected() {
 stop_owner() {
   case "$(select_backend)" in
     systemd)
-      systemd_installed || { echo "no herdr runtime unit is installed for this home" >&2; return 0; }
-      "$SYSTEMCTL" --user disable --now "$(unit_instance)" || return 1
+      if systemd_installed; then
+        "$SYSTEMCTL" --user disable --now "$(unit_instance)" || return 1
+      else
+        echo "no herdr runtime unit is installed for this home" >&2
+      fi
+      stop_leftover_keeper
       ;;
     *)
       stop_keeper || return 1
       ;;
   esac
+  # The sentence below is a postcondition, not a hope: a keeper killed outright
+  # leaves its owner alive and reparented, and stopping the tier it was hosted by
+  # does not reach it.  The rollback is only true once no live recorded owner is
+  # left, so it is claimed only after this returns.
+  stop_recorded_owner || return 1
   printf 'the herdr runtime owner is stopped; the runtime itself is left running\n'
 }
 
