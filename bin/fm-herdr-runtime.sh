@@ -6,7 +6,6 @@
 #   FM_HERDR_RUNTIME_ONCE=1 fm-herdr-runtime.sh  # one reading, one start at most
 #   fm-herdr-runtime.sh __serve <session>      # internal: the detached server
 #   fm-herdr-runtime.sh __status <session>     # internal: the bounded reading
-#   fm-herdr-runtime.sh __status-timeout       # internal: that reading's deadline
 #
 # bin/fm-herdr-service.sh owns which tier runs this (a systemd user unit or a
 # tmux keeper) and how it is converged; this file owns the loop itself.
@@ -79,22 +78,18 @@ POLL=${FM_HERDR_RUNTIME_POLL:-30}
 # publishes its `unreadable` reading and beats on roughly its normal schedule
 # instead of freezing inside the blocked call.
 #
-# THIS FILE IS THE ONE PLACE THAT DECIDES THIS NUMBER, and the converging session
-# sizes its own wait from it rather than from a second copy: a running owner
-# records the value below as `status-timeout`, and an owner that does not exist
-# yet is asked for it through the __status-timeout arm.  That matters because
-# FM_HERDR_RUNTIME_STATUS_TIMEOUT does NOT reach a supervised owner - `tmux
+# A SUPERVISED OWNER IS HANDED THIS VALUE RATHER THAN INHERITING IT.  `tmux
 # new-session` runs the keeper under the tmux server's environment and the unit
-# reads only its environment file - so a value exported in a converging shell is
-# one this loop is not using, and sizing a wait from it would be sizing it from
-# fiction.  Raise it here (or in the environment an owner is actually started
-# with) and the wait follows on its own.
-#
-# The relationship it has with that wait: the wait must OUTLAST one read, with
-# margin.  When the wait is the shorter of the two, convergence times out inside
-# this very read and the digest reports a failed tier and an unsupervised runtime
-# instead of the `unreadable` reading this loop is about to publish.
-# bin/fm-herdr-service.sh states it in full and refuses an override that loses it.
+# reads only its environment file, so bin/fm-herdr-service.sh passes the value it
+# sized its own convergence wait from - a launch argument on the keeper tier, an
+# environment-file line on the systemd tier - and this default applies only to an
+# owner run by hand.  The relationship that makes the passing matter: that wait
+# must OUTLAST one read, with margin.  When the wait is the shorter of the two,
+# convergence times out inside this very read and the digest reports a failed
+# tier and an unsupervised runtime instead of the `unreadable` reading this loop
+# is about to publish.  That file states it in full and refuses an override that
+# loses it; the value is also recorded as `status-timeout` so a reader can see
+# which deadline an owner is actually running with.
 STATUS_TIMEOUT=${FM_HERDR_RUNTIME_STATUS_TIMEOUT:-10}
 START_TIMEOUT=${FM_HERDR_RUNTIME_START_TIMEOUT:-20}
 BASE_BACKOFF=${FM_HERDR_RUNTIME_BACKOFF:-30}
@@ -116,14 +111,6 @@ case "$BASE_BACKOFF" in ''|*[!0-9]*|0) BASE_BACKOFF=30 ;; esac
 case "$MAX_BACKOFF" in ''|*[!0-9]*|0) MAX_BACKOFF=300 ;; esac
 case "$CONFIRM_SLEEP" in ''|.|*[!0-9.]*|*.*.*) CONFIRM_SLEEP=1 ;; esac
 case "$SERVER_LOG_MAX_BYTES" in ''|*[!0-9]*|0) SERVER_LOG_MAX_BYTES=4194304 ;; esac
-
-# Answered before anything is sourced, because the converging session asks this
-# of a home that has no owner yet and must not pay for an adapter it is not
-# going to use.
-if [ "${1:-}" = __status-timeout ]; then
-  printf '%s\n' "$STATUS_TIMEOUT"
-  exit 0
-fi
 
 # shellcheck source=bin/fm-wake-lib.sh
 . "$SCRIPT_DIR/fm-wake-lib.sh"
@@ -244,13 +231,6 @@ read_server_state() {
   return 0
 }
 
-# The same reading for callers that only need the word, and can therefore afford
-# a subshell.
-server_state() {
-  read_server_state
-  printf '%s' "$STATE_READING"
-}
-
 unreadable_cause() {
   command -v herdr >/dev/null 2>&1 || { printf 'the herdr CLI is not on this service PATH'; return 0; }
   command -v jq >/dev/null 2>&1 || { printf 'jq is not on this service PATH, so herdr status cannot be parsed'; return 0; }
@@ -288,14 +268,22 @@ start_detached() {
   return 0
 }
 
+# Poll until the runtime reads as running or the deadline passes, leaving the
+# LAST state it established in STATE_READING/STATE_CAUSE.  It reads through
+# read_server_state rather than a subshell for the same reason the split exists:
+# a client that wedges AFTER the start attempt is a runtime this loop could not
+# READ, and the caller has to be able to record that rather than the `down` it
+# started from.
 wait_for_running() {
   local deadline
   deadline=$(( $(date +%s) + START_TIMEOUT ))
   while [ "$(date +%s)" -lt "$deadline" ]; do
-    [ "$(server_state)" = running ] && return 0
+    read_server_state
+    [ "$STATE_READING" = running ] && return 0
     sleep 0.5
   done
-  [ "$(server_state)" = running ]
+  read_server_state
+  [ "$STATE_READING" = running ]
 }
 
 # One supervision pass.  Returns 0 whatever it found: this loop reports, it does
@@ -347,7 +335,13 @@ supervise_once() {
   # server that is still binding, and a start against a live socket is exactly
   # the mistake that would cost a fleet its workers.  Confirm it once more.
   sleep "$CONFIRM_SLEEP"
-  confirm=$(server_state)
+  read_server_state
+  confirm=$STATE_READING
+  if [ "$confirm" = unreadable ]; then
+    LAST_STATE=$confirm
+    write_reading unreadable "${STATE_CAUSE:-$(unreadable_cause)}"
+    return 0
+  fi
   if [ "$confirm" != down ]; then
     LAST_STATE=$confirm
     write_reading "$confirm" "a first reading of down did not hold on confirmation"
@@ -367,9 +361,13 @@ supervise_once() {
     return 0
   fi
   log "start attempt $STARTS for session $SESSION did not report a running server within ${START_TIMEOUT}s"
-  LAST_STATE=down
+  LAST_STATE=$STATE_READING
   BACKOFF=$(( ${BACKOFF:-$BASE_BACKOFF} * 2 ))
   [ "$BACKOFF" -le "$MAX_BACKOFF" ] || BACKOFF=$MAX_BACKOFF
+  if [ "$STATE_READING" = unreadable ]; then
+    write_reading unreadable "${STATE_CAUSE:-$(unreadable_cause)}"
+    return 0
+  fi
   write_reading down "a detached start ($LAST_DETACH) did not report a running server within ${START_TIMEOUT}s"
   return 0
 }
@@ -403,7 +401,7 @@ if [ "${1:-}" = __status ]; then
   exit $?
 fi
 
-[ "$#" -eq 0 ] || { echo "usage: $(basename "$0") [__serve <session>|__status <session>|__status-timeout]" >&2; exit 2; }
+[ "$#" -eq 0 ] || { echo "usage: $(basename "$0") [__serve <session>|__status <session>]" >&2; exit 2; }
 
 cleanup() {
   trap - HUP INT TERM

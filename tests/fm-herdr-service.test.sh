@@ -121,7 +121,7 @@ SH
 }
 
 # The fake tmux the watcher-service suite already uses, adapted to this keeper's
-# six launch arguments.
+# seven launch arguments.
 make_fake_tmux_keeper() {  # <fakebin>
   local fakebin=$1
   mkdir -p "$fakebin"
@@ -135,12 +135,17 @@ case "${1:-}" in
     kill -0 "$pid" 2>/dev/null
     ;;
   new-session)
-    "$5" "$6" "$7" "$8" "$9" "${10}" "${11}" >/dev/null 2>&1 &
+    # `env -u` because a real tmux server runs its command under its OWN
+    # environment, not the converging session's: anything the owner needs has to
+    # arrive as a launch argument, and a fixture that leaked it would hide that.
+    env -u FM_HERDR_RUNTIME_STATUS_TIMEOUT \
+      "$5" "$6" "$7" "$8" "$9" "${10}" "${11}" "${12:-}" >/dev/null 2>&1 &
     printf '%s\n' "$!" > "$FM_TEST_KEEPER_PID_FILE"
     ;;
   kill-session)
     # A kill-session that does not reach the keeper, so a case can put the
     # service in front of a stop that did not take.
+    [ "${FM_TEST_TMUX_KILL_FAIL:-0}" = 1 ] && exit 1
     [ "${FM_TEST_TMUX_KILL_NOOP:-0}" = 1 ] && exit 0
     pid=$(cat "${FM_TEST_KEEPER_PID_FILE:?}" 2>/dev/null || true)
     kill -TERM "$pid" 2>/dev/null || true
@@ -206,6 +211,9 @@ case "${2:-}" in
   disable) stop_unit ;;
   enable|restart)
     stop_unit
+    # A unit's firstmate environment is its environment file, not the shell that
+    # ran systemctl; unset first so only that file can supply a value.
+    unset FM_HERDR_RUNTIME_STATUS_TIMEOUT
     while IFS= read -r line; do
       case "$line" in
         FM_*=*|PATH=*)
@@ -1127,41 +1135,54 @@ test_every_systemd_tier_path_clears_a_replaced_owner() {
 # The wait is sized from the deadline the OWNER is using, which it records, not
 # from the converging shell's own environment - that value never reaches a
 # supervised owner, so sizing a wait from it would be sizing it from fiction.
-test_the_convergence_wait_is_sized_from_the_owners_recorded_deadline() {
-  local fakebin state home log pidfile err
-  fakebin="$TMP_ROOT/deadline-record-bin"
+# The deadline the converging session sized its wait from is the one the owner
+# has to run with, and neither tier inherits it - the keeper runs under the tmux
+# server's environment and the unit reads only its environment file - so the
+# session passes it on.  The fixtures strip it from both, so only the launch
+# argument and the environment file can carry it here.
+test_the_status_deadline_reaches_the_owner_on_both_tiers() {
+  local fakebin state home log pidfile unitdir unitpid recorded
+  fakebin="$TMP_ROOT/deadline-pass-bin"
   state="$TMP_ROOT/herdr-state"
-  home=$(make_home "$TMP_ROOT/deadline-record-home")
-  log="$TMP_ROOT/deadline-record-tmux.log"
-  pidfile="$TMP_ROOT/deadline-record-keeper.pid"
+  home=$(make_home "$TMP_ROOT/deadline-pass-home")
+  log="$TMP_ROOT/deadline-pass-tmux.log"
+  pidfile="$TMP_ROOT/deadline-pass-keeper.pid"
+  unitdir="$TMP_ROOT/deadline-pass-units"
+  unitpid="$TMP_ROOT/deadline-pass-unit.pid"
   make_fake_herdr "$fakebin" "$state"
   make_fake_tmux_keeper "$fakebin"
+  make_fake_systemd "$fakebin"
+  mkdir -p "$unitdir"
+  install -m 0644 "$ROOT/systemd/fm-herdr@.service" "$unitdir/fm-herdr@.service"
   : > "$log"
 
   PATH="$fakebin:$PATH" FM_HOME="$home" FM_HERDR_SERVICE_FORCE_BACKEND=keeper \
-    FM_HERDR_TMUX="$fakebin/tmux" FM_HERDR_RUNTIME_SESSION=deadlinerec \
+    FM_HERDR_TMUX="$fakebin/tmux" FM_HERDR_RUNTIME_SESSION=deadlinepass \
     FM_SERVICE_TOOLS='herdr jq tmux' \
     FM_TEST_TMUX_LOG="$log" FM_TEST_KEEPER_PID_FILE="$pidfile" \
-    FM_HERDR_RUNTIME_STATUS_TIMEOUT=20 \
+    FM_HERDR_RUNTIME_STATUS_TIMEOUT=7 \
     "$SERVICE" ensure || fail "the keeper tier did not establish a runtime owner"
   TRACKED_PIDS+=("$(cat "$pidfile")")
   TRACKED_PIDS+=("$(sed -n 's/^pid=//p' "$home/state/.herdr-runtime.lock/record" | head -1)")
-  [ "$(sed -n 's/^status-timeout=//p' "$home/state/.herdr-runtime.lock/record" | head -1)" = 20 ] \
-    || fail "the owner did not record the status deadline it reads with"
+  recorded=$(sed -n 's/^status-timeout=//p' "$home/state/.herdr-runtime.lock/record" | head -1)
+  [ "$recorded" = 7 ] \
+    || fail "the keeper-tier owner runs with a ${recorded}s status deadline, not the 7s this session sized its wait from"
 
-  # This session sets no status deadline of its own, so a wait sized from its own
-  # environment would use the default and find 15s perfectly adequate.  Sized
-  # from the owner's recorded 20s it is not, and the service says so.
-  err=$(PATH="$fakebin:$PATH" FM_HOME="$home" FM_HERDR_SERVICE_FORCE_BACKEND=keeper \
-    FM_HERDR_TMUX="$fakebin/tmux" FM_HERDR_RUNTIME_SESSION=deadlinerec \
-    FM_SERVICE_TOOLS='herdr jq tmux' FM_SERVICE_PATH_BASE='/usr/bin:/bin' \
+  PATH="$fakebin:$PATH" FM_HOME="$home" FM_HERDR_SERVICE_FORCE_BACKEND=systemd \
+    FM_HERDR_SYSTEMCTL="$fakebin/systemctl" FM_HERDR_SYSTEMD_ESCAPE="$fakebin/systemd-escape" \
+    FM_HERDR_SYSTEMD_UNIT_DIR="$unitdir" FM_HERDR_TMUX="$fakebin/tmux" \
+    FM_HERDR_RUNTIME_SESSION=deadlinepass FM_SERVICE_TOOLS='herdr jq tmux' \
     FM_TEST_TMUX_LOG="$log" FM_TEST_KEEPER_PID_FILE="$pidfile" \
-    FM_HERDR_CONFIRM_TIMEOUT=15 "$SERVICE" ensure 2>&1 >/dev/null) \
-    || fail "convergence failed over an owner with a raised status deadline: $err"
-  TRACKED_PIDS+=("$(cat "$pidfile")")
-  assert_contains "$err" "is not longer than the owner's status read deadline (20s)" \
-    "the convergence wait was not sized from the owner's own recorded deadline: $err"
-  pass "the convergence wait is sized from the deadline the owner records"
+    FM_TEST_UNIT_PID_FILE="$unitpid" FM_TEST_SERVICE_ENV="$home/state/.herdr-service.env" \
+    FM_HERDR_RUNTIME_STATUS_TIMEOUT=7 \
+    "$SERVICE" ensure || fail "the systemd tier did not establish a runtime owner"
+  TRACKED_PIDS+=("$(cat "$unitpid" 2>/dev/null || true)")
+  [ "$(sed -n 's/^manager=//p' "$home/state/.herdr-runtime.lock/record" | head -1)" = systemd ] \
+    || fail "the unit did not take over the record"
+  recorded=$(sed -n 's/^status-timeout=//p' "$home/state/.herdr-runtime.lock/record" | head -1)
+  [ "$recorded" = 7 ] \
+    || fail "the unit-tier owner runs with a ${recorded}s status deadline, not the 7s this session sized its wait from"
+  pass "the status deadline a session sizes its wait from reaches the owner on both tiers"
 }
 
 # Trading a false sentence for no sentence is not the trade: a convergence that
@@ -1208,6 +1229,111 @@ test_a_failed_convergence_over_a_live_owner_still_says_so() {
   pass "a convergence that fails over a live owner still reports itself"
 }
 
+# A client that wedges AFTER the start attempt leaves the owner unable to READ
+# the runtime, which is not the same fact as a runtime it established to be down
+# - and the digest sends a reader somewhere different for each.
+test_a_client_that_wedges_after_a_start_is_not_reported_as_down() {
+  local fakebin state home digest
+  fakebin="$TMP_ROOT/wedge-after-bin"
+  state="$TMP_ROOT/wedge-after-state"
+  home=$(make_home "$TMP_ROOT/wedge-after-home")
+  mkdir -p "$fakebin" "$state"
+  # Reads down until something asks it to serve; from then on `status` never
+  # answers, so every probe inside the start attempt times out.
+  cat > "$fakebin/herdr" <<SH
+#!/usr/bin/env bash
+set -u
+HERDR_STUB_STATE='$state'
+SH
+  cat >> "$fakebin/herdr" <<'SH'
+sub=
+for arg in "$@"; do
+  case "$arg" in --*) ;; *) [ -n "$sub" ] || sub=$arg ;; esac
+done
+case "$sub" in
+  status)
+    [ -e "$HERDR_STUB_STATE/wedged" ] && while :; do sleep 0.2; done
+    printf '{"client":{"version":"0.7.4","protocol":16},"server":{"status":"stopped","running":false,"protocol":16,"capabilities":{"detached_server_daemon":false},"compatible":true}}\n'
+    ;;
+  server)
+    : > "$HERDR_STUB_STATE/wedged"
+    printf '%s\n' "$$" >> "$HERDR_STUB_STATE/server-pids"
+    while :; do sleep 0.2; done
+    ;;
+esac
+exit 0
+SH
+  chmod +x "$fakebin/herdr"
+  printf '#!/usr/bin/env bash\nexit 1\n' > "$fakebin/tmux"
+  chmod +x "$fakebin/tmux"
+
+  PATH="$fakebin:$PATH" FM_HOME="$home" FM_HERDR_RUNTIME_SESSION=wedgeafter \
+    FM_HERDR_RUNTIME_CONFIRM_SLEEP=0.2 FM_HERDR_RUNTIME_STATUS_TIMEOUT=1 \
+    FM_HERDR_RUNTIME_START_TIMEOUT=2 FM_HERDR_RUNTIME_ONCE=1 "$RUNTIME" \
+    || fail "the owner failed rather than recording what it could see"
+  while IFS= read -r pid; do TRACKED_PIDS+=("$pid"); done < "$state/server-pids"
+
+  [ "$(reading_field "$home" reading)" = unreadable ] \
+    || fail "a runtime the owner could not read after its start attempt was recorded as '$(reading_field "$home" reading)'"
+  case "$(reading_field "$home" note)" in
+    *"did not answer"*) ;;
+    *) fail "the reading lost the cause that tells a wedged client from a missing tool: $(reading_field "$home" note)" ;;
+  esac
+
+  digest=$(herdr_digest "$home" "$fakebin")
+  assert_contains "$digest" "cannot read whether the worker runtime is running" \
+    "the digest did not report the runtime as unreadable: $digest"
+  case "$digest" in
+    *"the worker runtime is not running"*)
+      fail "the digest asserted a runtime state the owner never established: $digest" ;;
+  esac
+  pass "a client that wedges after a start is reported as unreadable, not as down"
+}
+
+# The stop that makes room for a replacement has to be able to fail: carrying on
+# past a keeper that is still alive is how a path ends with two owners.
+test_a_keeper_stop_that_fails_fails_the_convergence() {
+  local fakebin state home log pidfile unitdir unitpid keeper_pid owner err
+  fakebin="$TMP_ROOT/stopfail-bin"
+  state="$TMP_ROOT/herdr-state"
+  home=$(make_home "$TMP_ROOT/stopfail-home")
+  log="$TMP_ROOT/stopfail-tmux.log"
+  pidfile="$TMP_ROOT/stopfail-keeper.pid"
+  unitdir="$TMP_ROOT/stopfail-units"
+  unitpid="$TMP_ROOT/stopfail-unit.pid"
+  make_fake_herdr "$fakebin" "$state"
+  make_fake_tmux_keeper "$fakebin"
+  make_fake_systemd "$fakebin"
+  mkdir -p "$unitdir"
+  install -m 0644 "$ROOT/systemd/fm-herdr@.service" "$unitdir/fm-herdr@.service"
+  : > "$log"
+
+  PATH="$fakebin:$PATH" FM_HOME="$home" FM_HERDR_SERVICE_FORCE_BACKEND=keeper \
+    FM_HERDR_TMUX="$fakebin/tmux" FM_HERDR_RUNTIME_SESSION=stopfail \
+    FM_SERVICE_TOOLS='herdr jq tmux' \
+    FM_TEST_TMUX_LOG="$log" FM_TEST_KEEPER_PID_FILE="$pidfile" \
+    "$SERVICE" ensure || fail "the keeper tier did not establish a runtime owner"
+  keeper_pid=$(cat "$pidfile")
+  owner=$(sed -n 's/^pid=//p' "$home/state/.herdr-runtime.lock/record" | head -1)
+  TRACKED_PIDS+=("$keeper_pid" "$owner")
+
+  # The user manager becomes usable, but the keeper cannot be stopped.
+  err=$(PATH="$fakebin:$PATH" FM_HOME="$home" FM_HERDR_SERVICE_FORCE_BACKEND=systemd \
+    FM_HERDR_SYSTEMCTL="$fakebin/systemctl" FM_HERDR_SYSTEMD_ESCAPE="$fakebin/systemd-escape" \
+    FM_HERDR_SYSTEMD_UNIT_DIR="$unitdir" FM_HERDR_TMUX="$fakebin/tmux" \
+    FM_HERDR_RUNTIME_SESSION=stopfail FM_SERVICE_TOOLS='herdr jq tmux' \
+    FM_TEST_TMUX_LOG="$log" FM_TEST_KEEPER_PID_FILE="$pidfile" \
+    FM_TEST_UNIT_PID_FILE="$unitpid" FM_TEST_SERVICE_ENV="$home/state/.herdr-service.env" \
+    FM_TEST_TMUX_KILL_FAIL=1 "$SERVICE" ensure 2>&1 >/dev/null) \
+    && fail "convergence reported success over a keeper it could not stop"
+
+  [ ! -e "$unitpid" ] \
+    || fail "convergence started a unit owner beside the keeper it had failed to stop"
+  kill -0 "$keeper_pid" 2>/dev/null || fail "the fixture's keeper did not survive as intended"
+  kill -0 "$owner" 2>/dev/null || fail "the keeper-tier owner was stopped by a convergence that failed"
+  pass "a keeper stop that fails fails the convergence instead of adding an owner"
+}
+
 test_the_entrypoint_command_is_printed_verbatim() {
   local home out
   home=$(make_home "$TMP_ROOT/entrypoint-home")
@@ -1236,6 +1362,8 @@ test_the_convergence_wait_outlasts_one_status_read
 test_a_wedged_client_is_not_reported_as_an_unsupervised_runtime
 test_installing_the_unit_clears_a_leftover_keeper
 test_every_systemd_tier_path_clears_a_replaced_owner
-test_the_convergence_wait_is_sized_from_the_owners_recorded_deadline
+test_the_status_deadline_reaches_the_owner_on_both_tiers
 test_a_failed_convergence_over_a_live_owner_still_says_so
+test_a_client_that_wedges_after_a_start_is_not_reported_as_down
+test_a_keeper_stop_that_fails_fails_the_convergence
 test_the_entrypoint_command_is_printed_verbatim

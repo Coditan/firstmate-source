@@ -88,9 +88,8 @@ A missing `herdr`, a missing `jq`, a client that does not answer, or JSON that d
 Every reading is taken under a deadline, `FM_HERDR_RUNTIME_STATUS_TIMEOUT` (default 10s, held below the 30s poll), because a client blocked on a wedged socket is the degradation this owner exists to notice and an unbounded read would stop the loop inside it - no beat, no reading, and no signal serviced until the call returned.
 That deadline binds a second one: a converging session waits `FM_HERDR_CONFIRM_TIMEOUT` for the owner's first reading, and the first thing a new owner does is one bounded status read.
 The convergence wait must outlast that read with margin, or convergence times out inside it and the digest reports a failed tier and an unsupervised runtime instead of the `unreadable` reading the owner is about to publish; an override that leaves the wait the shorter of the two is reported and refused rather than obeyed.
-The wait is sized from the deadline the owner is ACTUALLY using, not from the converging shell's own environment: an owner records its deadline as `status-timeout` in `state/.herdr-runtime.lock/record`, and a home with no owner yet is asked through `bin/fm-herdr-runtime.sh __status-timeout`, so the default is decided in exactly one place.
-That matters because `FM_HERDR_RUNTIME_STATUS_TIMEOUT` does not reach a supervised owner - `tmux new-session` runs the keeper under the tmux server's environment, and the unit reads only `state/.herdr-service.env` - so exporting it in a session changes what that session waits for and nothing about what the owner does.
-Set it where the owner is actually started, and the wait follows on its own.
+The session that converges the owner does not merely read `FM_HERDR_RUNTIME_STATUS_TIMEOUT`, it PASSES IT ON to whichever tier starts that owner - a launch argument for the keeper, a `FM_HERDR_RUNTIME_STATUS_TIMEOUT=` line in `state/.herdr-service.env` for the unit - because neither tier inherits it otherwise: `tmux new-session` runs the keeper under the tmux server's environment, and the unit reads only its environment file.
+So the owner runs with exactly the deadline the wait was sized from, and setting the variable for a converging session is enough; the owner also records it as `status-timeout` in `state/.herdr-runtime.lock/record`, where it is an observable fact for diagnosis rather than something a wait is sized from.
 A reading that times out says so in its own words, so a wedged client stays distinguishable from a missing tool in the digest.
 
 The owner and the server write to two separate files under `state/`, and only one of them is bounded:
@@ -123,7 +122,7 @@ It is idempotent by construction - it adopts a runtime that is already up and st
 Either seam can carry it: one call in the supervisor beside `start_home_services`, or a tenant start hook if the definition sets `VESSEL_START_HOOK`.
 
 Prefer that one call over adding `bin/fm-herdr-keeper.sh` to `start_home_services` beside the other two keepers, even though the parity is tempting.
-The keeper takes six positional launch arguments whose version and PATH values must be composed by the service rather than by the caller, so that route couples the container definition to a signature this repository owns and would break silently the day it changes; `ensure` is a one-line contract that composes those values itself.
+The keeper takes seven positional launch arguments whose version, PATH and deadline values must be composed by the service rather than by the caller, so that route couples the container definition to a signature this repository owns and would break silently the day it changes; `ensure` is a one-line contract that composes those values itself.
 Until either call exists, session start still converges the owner at every locked bootstrap, so the gap is the window between a rebuild and the first session, not a permanent absence.
 
 ### Rollback
