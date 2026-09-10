@@ -88,8 +88,8 @@ The test a granting vessel applies at the moment it is about to type is a fact a
 That test only has an answer while the vessel still holds its own record of the seats it has typed at: the durable window marker owned by `bin/fm-omega.sh` carries the task and the decision-record id, not a per-seat log, so after a mid-window restart nothing durable is left to test a breach against.
 Re-announcing to a seat is therefore never a breach, and it is what a restarted vessel does rather than guess.
 
-Every seat this duty covers is one of this vessel's own workers, which firstmate already supervises and whose instructions it already wrote, so the announcement is one more thing typed into a seat it owns rather than a message crossing a boundary.
-`docs/omega-announcement-duty.md` records why this duty is stated in the skill rather than elsewhere.
+Every seat this duty covers is one of this vessel's own workers, which firstmate already supervises and whose instructions it already wrote, and that is the ground of the duty: firstmate owes the announcement because it is typing at a seat it briefed, not because of anything assumed here about what that seat makes of the text.
+`docs/omega-announcement-duty.md` records why this duty is stated in the skill rather than elsewhere, and the measured reason it matters most at a secondmate seat.
 
 ## What it does not grant
 
