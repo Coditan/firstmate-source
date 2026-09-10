@@ -89,7 +89,7 @@ That test only has an answer while the vessel still holds its own record of the 
 Re-announcing to a seat is therefore never a breach, and it is what a restarted vessel does rather than guess.
 
 Every seat this duty covers is one of this vessel's own workers, which firstmate already supervises and whose instructions it already wrote, and that is the ground of the duty: firstmate owes the announcement because it is typing at a seat it briefed, not because of anything assumed here about what that seat makes of the text.
-`docs/omega-announcement-duty.md` records why this duty is stated in the skill rather than elsewhere, and the measured reason it matters most at a secondmate seat.
+`docs/omega-announcement-duty.md` records why this duty is stated in the skill rather than elsewhere, and the measured incident behind the secondmate case with what it does and does not settle.
 
 ## What it does not grant
 
