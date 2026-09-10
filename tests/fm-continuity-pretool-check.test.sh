@@ -23,7 +23,7 @@ install_check_scripts() {
   mkdir -p "$dir/bin"
   for file in fm-continuity-pretool-check.sh fm-continuity-command-policy.mjs \
     fm-arm-command-policy.mjs fm-supervision-lib.sh fm-primary-scope-lib.sh \
-    fm-wake-lib.sh fm-journal-lib.sh; do
+    fm-wake-lib.sh fm-journal-lib.sh fm-harness-pid-lib.sh; do
     cp "$ROOT/bin/$file" "$dir/bin/$file"
   done
   chmod +x "$dir/bin/fm-continuity-pretool-check.sh"
