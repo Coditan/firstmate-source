@@ -75,7 +75,7 @@ On 2026-09-04 it was the watcher's own poll instead, and restarting the watcher 
 
 `bin/fm-herdr-service.sh` gives the runtime an owner of its own, in the same family as `bin/fm-watcher-service.sh` and `bin/fm-delivery-service.sh`.
 A working `systemd --user` selects the tracked `systemd/fm-herdr@.service` template, installed only after the captain approves the `HERDR_RUNTIME` bootstrap diagnostic; where systemd is unusable, a home-scoped tmux keeper is selected automatically.
-Both tiers run one loop, `bin/fm-herdr-runtime.sh` - hosted by `bin/fm-herdr-keeper.sh` on the keeper tier - and both are silent on a home whose resolved backend is not herdr.
+Both tiers run one loop, `bin/fm-herdr-runtime.sh` - hosted by `bin/fm-herdr-keeper.sh` on the keeper tier - and neither is ever started on a home whose resolved backend is not herdr, because the guard is in `bin/fm-herdr-service.sh` rather than in the loop: `bootstrap` returns silently there, and every other subcommand says so and does nothing.
 
 Three properties are what make this safe to land on a vessel with a full fleet already running, and each is enforced rather than intended.
 
@@ -115,7 +115,19 @@ FM_HOME=<this home> <firstmate checkout>/bin/fm-herdr-service.sh ensure
 ```
 
 `bin/fm-herdr-service.sh entrypoint-command` prints that line already filled in for the home it is run against.
-It is idempotent by construction - it adopts a runtime that is already up and starts one that is not - it needs no seat, it is silent on a home that does not run herdr, and it is safe to run before any session exists.
+It is idempotent by construction - it adopts a runtime that is already up and starts one that is not - it needs no seat, and it is safe to run before any session exists.
+
+What it is not is silent, so a container definition should read its boot log against these four outcomes rather than treat any line in it as a fault:
+
+- The home spawns into herdr and the tier converged: no output at all, exit 0. That is the ordinary rebuild case, and it is the only one that says nothing.
+- The home does not spawn into herdr: one stderr line, `this home does not spawn workers into herdr; nothing to supervise`, exit 0. Nothing is wrong and nothing was installed; the call had nothing to do.
+- The home selected the systemd tier and the unit is not installed or not enabled: one stderr line, `HERDR_RUNTIME: missing - approve: bin/fm-bootstrap.sh install herdr-unit` (or the same line reading `disabled`), exit 2. Installing that unit needs the captain's approval from a session, so the line repeats at every boot until it is given, and the runtime stays unsupervised meanwhile.
+- The tier was selected and convergence failed: exit 1, sometimes with a `HERDR_RUNTIME:` line naming the step and sometimes with no output at all. The non-zero exit is the reliable signal; `bin/fm-herdr-service.sh status` is what names the state afterwards. An entrypoint whose own PATH reaches neither `tmux` nor a usable `systemd --user` also exits 1, with `error: no herdr runtime service backend available`.
+
+Which of those it takes before any session exists is decided by `FM_BACKEND` and then by `$FM_HOME/config/backend`, in that order, because those are the only two inputs an entrypoint has.
+Runtime auto-detection cannot answer it there - no seat exists, so neither `$TMUX` nor `HERDR_ENV` is set - and it resolves `tmux`, so a home that ends up on herdr only because something in a session selects it gets the second outcome above and stays unsupervised until that session starts.
+A home carrying `config/backend=herdr`, which the coditan vessel does, needs nothing further; anything else has to set `FM_BACKEND=herdr` in the call itself.
+
 Either seam can carry it: one call in the supervisor beside `start_home_services`, or a tenant start hook if the definition sets `VESSEL_START_HOOK`.
 
 Prefer that one call over adding `bin/fm-herdr-keeper.sh` to `start_home_services` beside the other two keepers, even though the parity is tempting.

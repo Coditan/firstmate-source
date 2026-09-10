@@ -302,6 +302,24 @@ wait_for_new_reading() {  # <home> <previous-at> [tries]
   return 1
 }
 
+# What `herdr` resolves to on a PATH this suite is about to hand an owner.
+#
+# The brief this work came from carries no Herdr lab contract, so no case in this
+# file may drive real Herdr lifecycle under ANY host layout: an owner that
+# resolved the seat's own client would read a real socket and, on a `down`
+# reading, start a real `herdr server`.  Every PATH an owner is given therefore
+# resolves either this suite's stub or nothing at all - and which one it is has
+# to be established rather than inferred from where this seat happens to keep its
+# tools.  Asked before the owner runs, a seat laid out differently fails here
+# instead of after a real server is already up.
+assert_herdr_resolution() {  # <path> <expected-stub-path|none> <what>
+  local path=$1 want=$2 what=$3 got
+  got=$(PATH="$path" command -v herdr 2>/dev/null || true)
+  [ -n "$got" ] || got=none
+  [ "$got" = "$want" ] \
+    || fail "$what resolves herdr to $got, not to $want; this suite must never reach a real herdr client"
+}
+
 test_a_home_that_does_not_run_herdr_is_left_alone() {
   local home out
   home=$(make_home "$TMP_ROOT/tmux-home" tmux)
@@ -433,23 +451,28 @@ test_server_output_has_its_own_capped_file() {
 }
 
 test_a_reading_that_could_not_be_taken_is_not_a_reading_of_down() {
-  local emptybin state home out
+  local emptybin toolpath state home out
   emptybin="$TMP_ROOT/empty-bin"
   state="$TMP_ROOT/herdr-state"
   home=$(make_home "$TMP_ROOT/unreadable-home")
   mkdir -p "$emptybin"
-  # jq is present, herdr is not: the owner cannot see the runtime at all.
+  # No herdr anywhere the owner can reach, so it cannot see the runtime at all.
+  # The system directories are here for the tools the loop itself runs, not for a
+  # client: the line below is what makes that a fact rather than a hope about
+  # this seat, and it is asked before the owner is started.
   printf '#!/usr/bin/env bash\nexit 0\n' > "$emptybin/tmux"
   chmod +x "$emptybin/tmux"
+  toolpath="$emptybin:/usr/bin:/bin"
+  assert_herdr_resolution "$toolpath" none "the PATH this case hands the owner"
 
-  PATH="$emptybin:/usr/bin:/bin" FM_HOME="$home" FM_HERDR_RUNTIME_SESSION=blind \
+  PATH="$toolpath" FM_HOME="$home" FM_HERDR_RUNTIME_SESSION=blind \
     FM_HERDR_RUNTIME_ONCE=1 "$RUNTIME" || fail "the owner failed rather than reporting an unreadable runtime"
   [ "$(reading_field "$home" reading)" = unreadable ] \
     || fail "an unreadable runtime was recorded as '$(reading_field "$home" reading)'"
   [ "$(reading_field "$home" starts)" = 0 ] || fail "the owner started a server on a reading it could not take"
   [ ! -e "$state/running-blind" ] || fail "the owner bound a server for a session it could not read"
 
-  out=$(PATH="$emptybin:/usr/bin:/bin" FM_HOME="$home" FM_HERDR_SERVICE_FORCE_BACKEND=keeper \
+  out=$(PATH="$toolpath" FM_HOME="$home" FM_HERDR_SERVICE_FORCE_BACKEND=keeper \
     FM_HERDR_TMUX="$emptybin/tmux" FM_BOOTSTRAP_DETECT_ONLY=1 "$SERVICE" bootstrap)
   assert_contains "$out" "cannot read whether the worker runtime is running" \
     "the digest did not report the unreadable runtime as unreadable"
@@ -534,8 +557,7 @@ test_the_keeper_tier_starts_stops_and_readopts_one_runtime() {
   # What the owner would actually run, resolved through the PATH it was handed.
   recorded_path=$(sed -n 's/^service-path=//p' "$home/state/.herdr-runtime.lock/record" | head -1)
   [ -n "$recorded_path" ] || fail "the owner did not record the PATH it was launched with"
-  [ "$(PATH="$recorded_path" command -v herdr 2>/dev/null)" = "$fakebin/herdr" ] \
-    || fail "the owner's recorded PATH resolves herdr to $(PATH="$recorded_path" command -v herdr 2>/dev/null || echo nothing), not to this suite's stub"
+  assert_herdr_resolution "$recorded_path" "$fakebin/herdr" "the PATH the owner was launched with"
   wait_for_file "$state/running-keeper" || fail "the keeper-owned runtime never came up"
   server_pid=$(stub_server_pid "$state" keeper)
   keeper_pid=$(cat "$TMP_ROOT/keeper.pid")
