@@ -86,6 +86,7 @@ Three properties are what make this safe to land on a vessel with a full fleet a
 A reading the owner could not take is never rendered as `down`.
 A missing `herdr`, a missing `jq`, a client that does not answer, or JSON that does not parse are recorded as `unreadable` and reported as themselves, because starting a server on a `down` the owner invented could bind a second server against a live socket.
 Every reading is taken under a deadline, `FM_HERDR_RUNTIME_STATUS_TIMEOUT` (default 10s, held below the 30s poll), because a client blocked on a wedged socket is the degradation this owner exists to notice and an unbounded read would stop the loop inside it - no beat, no reading, and no signal serviced until the call returned.
+[`docs/configuration.md`](configuration.md#herdr-runtime-service) owns where that knob has to be set for a supervised owner to read it, which is neither the converging session nor the managed environment file.
 A reading that times out says so in its own words, so a wedged client stays distinguishable from a missing tool in the digest.
 
 The owner and the server write to two separate files under `state/`, and only one of them is bounded:
