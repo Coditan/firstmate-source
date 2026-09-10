@@ -231,21 +231,40 @@ record_transcript_position() {
   return 0
 }
 
-# Clear the stash this run's own session must no longer be represented by.
-# With a pid this is one file, its own, and every other session's is left alone.
-# WITHOUT a pid it is all of them, and that is the point rather than an excess:
-# a stash proves which PROCESS wrote it, and a clear starts a new SESSION inside
-# that same process, so a stash left by the session before this one passes every
-# process-level proof there is. This run is that new session and cannot name the
-# file that speaks for it, so it cannot leave any stash standing as its own. The
-# cost is a stash another live session might still have promoted; it is the right
-# way round, because a discarded stash costs an unmeasured ceiling that says so,
-# while a stash promoted for the wrong session measures the ceiling against
-# another session's transcript and says nothing.
+# Clear the stashes this run's own session must no longer be represented by.
+# Why anything beyond its own file has to go: a stash proves which PROCESS wrote
+# it, and a clear starts a new SESSION inside that same process, so a stash left
+# by the session before this one passes every process-level proof there is. A run
+# that cannot name its own harness cannot name the file that speaks for it, so it
+# must not leave one standing as its own.
+# How WIDE that has to be is the whole question, and the two failures answer it
+# differently, which is why they are kept apart here:
+#   a pid          one file, its own, and every other session's is left alone.
+#   no-harness-process  the walk COMPLETED and simply found no harness among the
+#                  processes it read, so this run does know which processes it
+#                  runs under: only a stash naming one of those could be confused
+#                  with its own, and only those are cleared.
+#   anything else  harness-lookup-failed, where the process table could not be
+#                  read at all and this run knows nothing about its own ancestry,
+#                  so every stash is cleared.
+# The narrowing matters because both failures are measured rather than
+# hypothetical, and the wide sweep run from an unrelated helper session would
+# destroy the primary's only copy of its transcript position over a probe that
+# had nothing to do with it. Within the set it does clear, the trade is the right
+# way round: a discarded stash costs an unmeasured ceiling that says so, while a
+# stash promoted for the wrong session measures the ceiling against another
+# session's transcript and says nothing.
 discard_or_sweep_pending_records() {  # <pid-or-empty>
-  local pending
+  local pending ancestor
   if [ -n "$1" ]; then
     discard_pending_record "$1"
+    return 0
+  fi
+  if [ "${FM_HARNESS_PID_ERROR:-}" = no-harness-process ] \
+     && [ -n "${FM_HARNESS_PID_ANCESTRY:-}" ]; then
+    for ancestor in $FM_HARNESS_PID_ANCESTRY; do
+      discard_pending_record "$ancestor"
+    done
     return 0
   fi
   for pending in "$PENDING_PREFIX"*; do
@@ -506,6 +525,22 @@ rebind_record_to_lock() {
       "$FM_LOCK_RECORD_PIDNS"
     return 0
   fi
+  # Promotion is attempted FIRST, before any question about the record standing.
+  # A stash and a record that name the same process are not equal claims: the
+  # stash is always the newer of the two, because every hook run that publishes
+  # the record clears the stashes it owns before writing, and promotion clears
+  # the stash before publishing. So a record naming this holder can be one an
+  # EARLIER session wrote in this same process, which a clear leaves behind, and
+  # letting it win would measure this session's ceiling against that session's
+  # transcript with nothing said - the wrong number rather than no number, which
+  # is the one outcome this record's design refuses.
+  if promote_pending_record "$lock_pid"; then
+    printf 'context-ceiling record: rebound to harness pid %s from the transcript this session recorded at its own start, which the lock standing then forbade publishing\n' \
+      "$lock_pid"
+    return 0
+  fi
+  # Nothing promotable, so what is standing is all there is, and a record that
+  # already names this holder is kept rather than replaced by an error.
   if [ "$(record_field harness_pid)" = "$lock_pid" ]; then
     record_postdates_this_container
     record_age=$?
@@ -517,16 +552,12 @@ rebind_record_to_lock() {
     # session on that host - the failure this rebind exists to remove, made
     # unconditional. The cost is stated rather than hidden: on such a host a
     # record left by a previous container whose harness pid is live again here is
-    # kept, because nothing on this host can tell the two apart.
+    # kept when no stash contradicts it, because nothing else on that host tells
+    # the two apart.
     case "$record_age" in
       0) return 0 ;;
       2) kill -0 "$lock_pid" 2>/dev/null && return 0 ;;
     esac
-  fi
-  if promote_pending_record "$lock_pid"; then
-    printf 'context-ceiling record: rebound to harness pid %s from the transcript this session recorded at its own start, which the lock standing then forbade publishing\n' \
-      "$lock_pid"
-    return 0
   fi
   publish_transcript_record "$lock_pid" "" "" rebound-without-hook-payload
   if [ "$(record_field harness_pid)" = "$lock_pid" ]; then

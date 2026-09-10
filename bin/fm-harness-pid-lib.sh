@@ -34,14 +34,27 @@ FM_HARNESS_PID_ERROR=
 # leave the caller unable to say why it failed.
 FM_HARNESS_PID=
 
+# The pids the walk actually visited, nearest first, whether or not it found a
+# harness among them. It is published because a caller that gets the SETTLED
+# negative - the walk completed and no ancestor was a harness - still learns
+# something real from it: these numbers are the processes this one runs under,
+# and therefore the only ones it could be confused with. bin/fm-sessionstart-nudge.sh
+# reads it to decide which stashes a run that cannot name its own harness must
+# clear. It says nothing after harness-lookup-failed, where the table itself
+# could not be read and the walk stopped early with the rest unknown.
+FM_HARNESS_PID_ANCESTRY=
+
 # Print the nearest harness pid at or above the sourcing shell's own pid,
 # walking at most eight parents. Return 1 when no harness ancestor is found,
 # with FM_HARNESS_PID_ERROR naming which of the two failures above it was.
 fm_harness_pid() {
   local pid=$$ comm args _
   FM_HARNESS_PID=
+  # shellcheck disable=SC2034 # Read by callers after fm_harness_pid returns.
+  FM_HARNESS_PID_ANCESTRY=
   FM_HARNESS_PID_ERROR=no-harness-process
   for _ in 1 2 3 4 5 6 7 8; do
+    FM_HARNESS_PID_ANCESTRY="${FM_HARNESS_PID_ANCESTRY:+$FM_HARNESS_PID_ANCESTRY }$pid"
     if ! comm=$(ps -o comm= -p "$pid" 2>/dev/null); then
       FM_HARNESS_PID_ERROR=harness-lookup-failed
       return 1
