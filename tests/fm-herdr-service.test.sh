@@ -135,7 +135,20 @@ case "${1:-}" in
     kill -0 "$pid" 2>/dev/null
     ;;
   new-session)
-    "$5" "$6" "$7" "$8" "$9" "${10}" "${11}" >/dev/null 2>&1 &
+    # A real tmux server runs its command under the SERVER's environment, not the
+    # client's, so nothing a converging session exports reaches the keeper.  The
+    # fixture holds that boundary: it drops the client's copy and hands the keeper
+    # only what FM_TEST_TMUX_SERVER_STATUS_TIMEOUT names, which stands for the
+    # environment the tmux server itself was started with.  A case that needs the
+    # owner to read with a short deadline has to arrange it there, as production
+    # would, rather than by exporting it beside the convergence.
+    if [ -n "${FM_TEST_TMUX_SERVER_STATUS_TIMEOUT:-}" ]; then
+      FM_HERDR_RUNTIME_STATUS_TIMEOUT="$FM_TEST_TMUX_SERVER_STATUS_TIMEOUT" \
+        "$5" "$6" "$7" "$8" "$9" "${10}" "${11}" >/dev/null 2>&1 &
+    else
+      env -u FM_HERDR_RUNTIME_STATUS_TIMEOUT \
+        "$5" "$6" "$7" "$8" "$9" "${10}" "${11}" >/dev/null 2>&1 &
+    fi
     printf '%s\n' "$!" > "$FM_TEST_KEEPER_PID_FILE"
     ;;
   kill-session)
@@ -924,7 +937,7 @@ test_a_wedged_client_is_not_reported_as_an_unsupervised_runtime() {
     FM_HERDR_TMUX="$fakebin/tmux" FM_HERDR_RUNTIME_SESSION=wedged \
     FM_SERVICE_TOOLS='herdr jq tmux' \
     FM_TEST_TMUX_LOG="$log" FM_TEST_KEEPER_PID_FILE="$pidfile" \
-    FM_HERDR_RUNTIME_STATUS_TIMEOUT=1 FM_HERDR_CONFIRM_TIMEOUT=3 \
+    FM_TEST_TMUX_SERVER_STATUS_TIMEOUT=1 FM_HERDR_CONFIRM_TIMEOUT=3 \
     "$SERVICE" ensure 2>/dev/null || fail "the keeper tier did not establish an owner against a wedged client"
   owner=$(sed -n 's/^pid=//p' "$home/state/.herdr-runtime.lock/record" | head -1)
   TRACKED_PIDS+=("$(cat "$pidfile")" "$owner")
@@ -939,7 +952,7 @@ test_a_wedged_client_is_not_reported_as_an_unsupervised_runtime() {
     FM_SERVICE_TOOLS='herdr jq tmux' FM_SERVICE_PATH_BASE='/usr/bin:/bin' \
     FM_TEST_TMUX_LOG="$log" FM_TEST_KEEPER_PID_FILE="$pidfile" \
     FM_TEST_TMUX_KILL_NOOP=1 \
-    FM_HERDR_RUNTIME_STATUS_TIMEOUT=1 FM_HERDR_CONFIRM_TIMEOUT=3 \
+    FM_TEST_TMUX_SERVER_STATUS_TIMEOUT=1 FM_HERDR_CONFIRM_TIMEOUT=3 \
     "$SERVICE" bootstrap 2>/dev/null)
   kill -0 "$owner" 2>/dev/null || fail "the fixture lost the owner the digest was supposed to describe"
   case "$digest" in
@@ -1084,9 +1097,6 @@ test_every_systemd_tier_path_clears_a_replaced_owner() {
   pass "every systemd-tier path clears the owner it replaces"
 }
 
-# The wait is sized from the deadline the OWNER is using, which it records, not
-# from the converging shell's own environment - that value never reaches a
-# supervised owner, so sizing a wait from it would be sizing it from fiction.
 # Trading a false sentence for no sentence is not the trade: a convergence that
 # failed while its owner survived has to say so too.
 test_a_failed_convergence_over_a_live_owner_still_says_so() {
@@ -1104,7 +1114,6 @@ test_a_failed_convergence_over_a_live_owner_still_says_so() {
     FM_HERDR_TMUX="$fakebin/tmux" FM_HERDR_RUNTIME_SESSION=silent \
     FM_SERVICE_TOOLS='herdr jq tmux' \
     FM_TEST_TMUX_LOG="$log" FM_TEST_KEEPER_PID_FILE="$pidfile" \
-    FM_HERDR_RUNTIME_STATUS_TIMEOUT=1 \
     "$SERVICE" ensure || fail "the keeper tier did not establish a runtime owner"
   owner=$(sed -n 's/^pid=//p' "$home/state/.herdr-runtime.lock/record" | head -1)
   TRACKED_PIDS+=("$(cat "$pidfile")" "$owner")
@@ -1236,6 +1245,70 @@ test_a_keeper_stop_that_fails_fails_the_convergence() {
   pass "a keeper stop that fails fails the convergence instead of adding an owner"
 }
 
+# A leftover keeper and a systemd-managed owner can be alive at once - the unit
+# is WantedBy=default.target, so the user manager starts its owner at login while
+# a keeper from a previous keeper-tier boot is still running.  Stopping that
+# keeper must not be judged by whether the OTHER tier's owner went away.
+test_stopping_a_keeper_does_not_wait_on_the_other_tiers_owner() {
+  local fakebin state home log pidfile unitdir unitpid keeper_pid keeper_owner unit_owner server_pid err
+  fakebin="$TMP_ROOT/crosswait-bin"
+  state="$TMP_ROOT/herdr-state"
+  home=$(make_home "$TMP_ROOT/crosswait-home")
+  log="$TMP_ROOT/crosswait-tmux.log"
+  pidfile="$TMP_ROOT/crosswait-keeper.pid"
+  unitdir="$TMP_ROOT/crosswait-units"
+  unitpid="$TMP_ROOT/crosswait-unit.pid"
+  make_fake_herdr "$fakebin" "$state"
+  make_fake_tmux_keeper "$fakebin"
+  make_fake_systemd "$fakebin"
+  mkdir -p "$unitdir"
+  install -m 0644 "$ROOT/systemd/fm-herdr@.service" "$unitdir/fm-herdr@.service"
+  : > "$log"
+
+  # A keeper whose respawn sleep is long enough to hold the window open.
+  PATH="$fakebin:$PATH" FM_HOME="$home" FM_HERDR_SERVICE_FORCE_BACKEND=keeper \
+    FM_HERDR_TMUX="$fakebin/tmux" FM_HERDR_RUNTIME_SESSION=crosswait \
+    FM_SERVICE_TOOLS='herdr jq tmux' \
+    FM_TEST_TMUX_LOG="$log" FM_TEST_KEEPER_PID_FILE="$pidfile" \
+    "$SERVICE" ensure || fail "the keeper tier did not establish a runtime owner"
+  keeper_pid=$(cat "$pidfile")
+  keeper_owner=$(sed -n 's/^pid=//p' "$home/state/.herdr-runtime.lock/record" | head -1)
+  TRACKED_PIDS+=("$keeper_pid" "$keeper_owner")
+  wait_for_file "$state/running-crosswait" || fail "the keeper-owned runtime never came up"
+  server_pid=$(stub_server_pid "$state" crosswait)
+
+  # The user manager's own owner starts beside it and takes the record, as it
+  # would at login; the keeper's owner will not rewrite it for a full poll.
+  PATH="$fakebin:$PATH" FM_HOME="$home" FM_HERDR_RUNTIME_SESSION=crosswait \
+    FM_HERDR_RUNTIME_MANAGER=systemd "$RUNTIME" >/dev/null 2>&1 &
+  unit_owner=$!
+  TRACKED_PIDS+=("$unit_owner")
+  wait_for_reading "$home" running || fail "the unit-tier owner never published a reading"
+  [ "$(sed -n 's/^pid=//p' "$home/state/.herdr-runtime.lock/record" | head -1)" = "$unit_owner" ] \
+    || fail "the fixture did not leave the record with the unit-tier owner"
+
+  err=$(PATH="$fakebin:$PATH" FM_HOME="$home" FM_HERDR_SERVICE_FORCE_BACKEND=systemd \
+    FM_HERDR_SYSTEMCTL="$fakebin/systemctl" FM_HERDR_SYSTEMD_ESCAPE="$fakebin/systemd-escape" \
+    FM_HERDR_SYSTEMD_UNIT_DIR="$unitdir" FM_HERDR_TMUX="$fakebin/tmux" \
+    FM_HERDR_RUNTIME_SESSION=crosswait FM_SERVICE_TOOLS='herdr jq tmux' \
+    FM_TEST_TMUX_LOG="$log" FM_TEST_KEEPER_PID_FILE="$pidfile" \
+    FM_TEST_UNIT_PID_FILE="$unitpid" FM_TEST_SERVICE_ENV="$home/state/.herdr-service.env" \
+    FM_HERDR_CONFIRM_TIMEOUT=3 "$SERVICE" ensure 2>&1 >/dev/null) \
+    || fail "the systemd tier failed to converge over a leftover keeper: $err"
+  TRACKED_PIDS+=("$(cat "$unitpid" 2>/dev/null || true)")
+  case "$err" in
+    *"did not exit after its keeper was stopped"*)
+      fail "stopping the keeper was judged by an owner it never signalled: $err" ;;
+  esac
+  wait_for_dead "$keeper_pid" 100 || fail "the leftover keeper survived the convergence"
+  wait_for_dead "$keeper_owner" 100 || fail "the leftover keeper's own owner survived it"
+
+  kill -0 "$server_pid" 2>/dev/null || fail "the convergence ended the runtime"
+  [ "$(stub_server_pid "$state" crosswait)" = "$server_pid" ] \
+    || fail "the convergence replaced the runtime instead of readopting it"
+  pass "stopping a keeper is not judged by the other tier's owner"
+}
+
 test_the_entrypoint_command_is_printed_verbatim() {
   local home out
   home=$(make_home "$TMP_ROOT/entrypoint-home")
@@ -1266,4 +1339,5 @@ test_every_systemd_tier_path_clears_a_replaced_owner
 test_a_failed_convergence_over_a_live_owner_still_says_so
 test_a_client_that_wedges_after_a_start_is_not_reported_as_down
 test_a_keeper_stop_that_fails_fails_the_convergence
+test_stopping_a_keeper_does_not_wait_on_the_other_tiers_owner
 test_the_entrypoint_command_is_printed_verbatim

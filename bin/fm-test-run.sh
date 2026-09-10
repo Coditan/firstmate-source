@@ -992,6 +992,12 @@ families_for_changed_path() {
       printf '%s\n' afk
       printf '%s\n' session-bootstrap
       ;;
+    bin/fm-herdr-service.sh|bin/fm-herdr-runtime.sh|bin/fm-herdr-keeper.sh)
+      # Named rather than left to the basename fallback: no test file mentions
+      # fm-herdr-keeper.sh, so that fallback refuses the path outright, and the
+      # other two resolve only by happening to be named inside one test.
+      printf '%s\n' service-units
+      ;;
     bin/fm-seat-stay-down.sh|bin/fm-seat-respawner-service.sh)
       printf '%s\n' service-units
       printf '%s\n' session-bootstrap

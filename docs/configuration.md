@@ -1092,6 +1092,17 @@ FM_SEAT_WATCHER_GRACE=       # seconds before the respawner reads a watcher beac
 FM_SEAT_WATCHER_REVIVE_EVERY=120   # seconds between attempts to revive a provably DEAD watcher; a live watcher whose beacon aged out is never restarted here (docs/seat-absence.md)
 FM_SEAT_LAUNCH_COMMAND=      # test or specialized override for config/seat-launch-command; must be a fresh start, not resume-style
 # FM_SEAT_KEEPER_* tune the hand-started container stopgap instead (bin/fm-seat-keeper.sh); its own header owns that list, and docs/seat-respawner.md owns what the keeper is for
+FM_HERDR_GRACE=120      # seconds before a herdr runtime owner's beacon reads as stale; a live owner whose beacon is older answers status stalled rather than up
+FM_HERDR_CONFIRM_TIMEOUT=10   # seconds fm-herdr-service waits to confirm a converged runtime owner, and to confirm one it stopped is gone
+# The knobs below are read by the OWNER process, not by the converging session, and neither tier inherits that session's environment: the unit reads state/.herdr-service.env and `tmux new-session` runs the keeper under the tmux server's environment. Setting one of these in a session changes nothing about a supervised owner already running under either tier.
+FM_HERDR_RUNTIME_POLL=30     # seconds between the owner's `herdr status --json` readings, chosen against what one call per interval costs forever
+FM_HERDR_RUNTIME_STATUS_TIMEOUT=10   # seconds one of those readings may take before it is recorded as unreadable; held below the poll so a wedged client still leaves the loop beating
+FM_HERDR_RUNTIME_START_TIMEOUT=20    # seconds the owner waits for a runtime it started detached to report itself running
+FM_HERDR_RUNTIME_CONFIRM_SLEEP=1     # seconds before a first reading of down is re-read, because a start against a live socket would cost the fleet its workers
+FM_HERDR_RUNTIME_BACKOFF=30          # seconds before a second start attempt after one that did not report a running server; doubles per attempt
+FM_HERDR_RUNTIME_MAX_BACKOFF=300     # ceiling on that doubling
+FM_HERDR_RUNTIME_RESTART_SEC=2       # seconds bin/fm-herdr-keeper.sh waits before respawning its own owner child
+FM_HERDR_SERVER_LOG_MAX_BYTES=4194304   # size cap on state/.herdr-server.log before one copy is taken to .herdr-server.log.1 and the live file truncated in place
 FM_TG_RECV_ATTACH_POLL=0.5  # seconds between checks while fm-tg-recv-arm is attached to an existing receiver
 FM_TG_RECV_ATTACH_CONFIRM_TIMEOUT=2  # seconds fm-tg-recv-arm waits for a competing arm to publish receiver metadata
 FM_TG_RECV_TERM_WAIT_CYCLES=30  # termination polling cycles before fm-tg-recv-arm preserves a live receiver lock after wrapper shutdown

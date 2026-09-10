@@ -245,12 +245,20 @@ start_keeper() {
 # Stops the WATCHING, never the runtime: the owner leaves the server running by
 # construction (bin/fm-herdr-runtime.sh's cleanup), so nothing here can reach a
 # worker.
+# ITS POST-CONDITION IS SCOPED TO THE OWNER THIS KEEPER WAS HOSTING, which is
+# the recorded one only while the record names a keeper-managed owner.  An owner
+# recorded under another manager is not this keeper's child and this stop never
+# signalled it, so waiting for it to exit would be waiting on something that was
+# never asked to go - and on a systemd home that is the very owner the caller
+# means to keep, a wait that could never be satisfied and would fail an install
+# or a restart that had in fact just succeeded.
 stop_keeper() {
-  local name
+  local name pid=
   name=$(keeper_name) || return 1
   "$TMUX_CMD" has-session -t "$name" 2>/dev/null || return 0
+  [ "$(recorded_owner_field manager)" = keeper ] && pid=$(recorded_owner_field pid)
   "$TMUX_CMD" kill-session -t "$name" || return 1
-  wait_for_owner_stop || {
+  wait_for_owner_stop "$pid" || {
     echo "HERDR_RUNTIME: the previous runtime owner did not exit after its keeper was stopped" >&2
     return 1
   }
@@ -262,12 +270,11 @@ stop_keeper() {
 # a converged owner that is on its way out.  That is not a cosmetic race: the
 # reported reading would be the dead owner's, so the digest would describe a
 # runtime nothing is watching.
-wait_for_owner_stop() {
-  local deadline pid
+wait_for_owner_stop() {  # <pid>
+  local deadline pid=$1
+  case "$pid" in ''|*[!0-9]*) return 0 ;; esac
   deadline=$(( $(date +%s) + CONFIRM_TIMEOUT ))
   while [ "$(date +%s)" -lt "$deadline" ]; do
-    pid=$(recorded_owner_field pid)
-    case "$pid" in ''|*[!0-9]*) return 0 ;; esac
     kill -0 "$pid" 2>/dev/null || return 0
     sleep 0.1
   done
@@ -305,7 +312,7 @@ stop_recorded_owner() {
   recorded_owner_alive || return 0
   pid=$(recorded_owner_field pid)
   kill -TERM "$pid" 2>/dev/null || true
-  wait_for_owner_stop || {
+  wait_for_owner_stop "$pid" || {
     echo "HERDR_RUNTIME: the recorded runtime owner (pid $pid) did not exit when it was replaced" >&2
     return 1
   }
