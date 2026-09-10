@@ -26,6 +26,8 @@ DOMAIN_PROVENANCE="$ROOT/docs/domain-modeling-provenance.md"
 README="$ROOT/README.md"
 AFK="$ROOT/.agents/skills/afk/SKILL.md"
 AWAY_RECORD="$ROOT/docs/away-mode-approval-authority.md"
+OMEGA_SKILL="$ROOT/.agents/skills/omega-protocol/SKILL.md"
+OMEGA_DUTY="$ROOT/docs/omega-announcement-duty.md"
 
 test_new_skill_metadata_and_triggers() {
   local skill name skill_trigger agents_trigger count i
@@ -713,6 +715,67 @@ test_claims_that_outrun_measurement_agree_across_surfaces() {
   pass "the claims-that-outrun-measurement rule is stated once and agrees on all three surfaces"
 }
 
+# The omega material sends a reader to another document BY LINE NUMBER eight
+# times, which is every such citation in this repository bar one, and a line
+# number is the one kind of citation that rots silently: nothing warns when an
+# edit to AGENTS.md or docs/configuration.md pushes the cited sentence down a
+# line and the omega reader is quietly pointed at a neighbour instead. Five of
+# them arrived with the 2026-09-08 narrowing and carry the bounds the removed
+# cross-vessel reach used to carry, so the claim each one supports is only as
+# good as the target still being where it says.
+#
+# Neither side of the comparison is written down here. The citations are read
+# out of the omega files and each target is read out of the cited document, so
+# this catches drift instead of restating it. Where the citing sentence also
+# REPRODUCES the cited line in quotes, the reproduction is held against the real
+# line byte for byte; a short quoted span is a scare-quoted word rather than a
+# reproduction, and is deliberately not compared.
+test_omega_line_citations_resolve() {
+  local file cite target lineno text quote source_line count=0
+
+  for file in "$OMEGA_SKILL" "$OMEGA_DUTY"; do
+    assert_present "$file" "omega material is missing: $file"
+    while IFS= read -r source_line; do
+      while IFS= read -r cite; do
+        [ -n "$cite" ] || continue
+        target=${cite%:*}
+        lineno=${cite##*:}
+        count=$((count + 1))
+
+        assert_present "$ROOT/$target" \
+          "$(basename "$file") cites $cite but $target does not exist"
+        [ "$(wc -l < "$ROOT/$target")" -ge "$lineno" ] \
+          || fail "$(basename "$file") cites $cite but $target has no line $lineno"
+
+        text=$(sed -n "${lineno}p" "$ROOT/$target")
+        [ -n "${text//[[:space:]]/}" ] \
+          || fail "$(basename "$file") cites $cite but that line is blank"
+        case "$text" in
+          '#'*|'```'*|'---'*|'|'*)
+            fail "$(basename "$file") cites $cite but that line is structure, not prose:"$'\n'"$text" ;;
+        esac
+
+        # A reproduction on the citing line has to be the cited line itself.
+        quote=$(printf '%s\n' "$source_line" | grep -oE '"[^"]{40,}"' | head -n 1)
+        if [ -n "$quote" ]; then
+          quote=${quote#\"}
+          quote=${quote%\"}
+          case "$text" in
+            *"$quote"*) : ;;
+            *) fail "$(basename "$file") reproduces as $target:$lineno a line that file does not carry there:"$'\n'"$quote" ;;
+          esac
+        fi
+      done <<<"$(printf '%s\n' "$source_line" | grep -oE '[A-Za-z0-9._/-]+\.md:[0-9]+')"
+    done < "$file"
+  done
+
+  # Presence alone would pass vacuously if every citation were dropped, and the
+  # narrowing put five in on top of the three the duty document already made.
+  [ "$count" -ge 8 ] \
+    || fail "the omega material carries $count line citations, fewer than the eight it is written around"
+  pass "every omega line citation resolves and every reproduction matches its source"
+}
+
 test_new_skill_metadata_and_triggers
 test_every_skill_declares_a_load_trigger
 test_domain_modeling_owner_is_triggered_and_attributed
@@ -731,4 +794,5 @@ test_compressed_agents_retains_authority_and_supervision_safety
 test_away_mode_neither_widens_nor_withdraws_authority
 test_afk_skill_keeps_one_merge_authority_owner
 test_record_quotes_the_stub_verbatim
+test_omega_line_citations_resolve
 test_agents_md_tells_a_worker_it_is_not_addressed
