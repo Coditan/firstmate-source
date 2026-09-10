@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Portable tmux-hosted keeper for the herdr runtime owner of a home whose
 # systemd user manager is unusable.
-# Usage: fm-herdr-keeper.sh <fm-home> <code-root> <state-dir> <source-version> <service-path> <session> <status-timeout>
+# Usage: fm-herdr-keeper.sh <fm-home> <code-root> <state-dir> <source-version> <service-path> <session>
 #
 # fm-herdr-service.sh owns selection and launch of this process.
 # The keeper records its pid in state/.herdr-keeper.pid and respawns only its
@@ -24,24 +24,18 @@
 # is correct but useless.  It is handed on as FM_HERDR_RUNTIME_SERVICE_PATH so
 # the owner can RECORD what it was given; without that record a keeper-backed
 # home keeps a stale PATH forever while the systemd tier reconverges on its own.
-#
-# <status-timeout> travels the same way and for the same reason: it is the
-# deadline the owner puts on one status read, and the converging session sizes
-# its own convergence wait from it, so the owner has to run with the value that
-# session used rather than with whatever this tmux server's environment holds.
 set -u
 
-[ "$#" -eq 7 ] || { echo "usage: $(basename "$0") <fm-home> <code-root> <state-dir> <source-version> <service-path> <session> <status-timeout>" >&2; exit 2; }
+[ "$#" -eq 6 ] || { echo "usage: $(basename "$0") <fm-home> <code-root> <state-dir> <source-version> <service-path> <session>" >&2; exit 2; }
 FM_HOME=$1
 FM_ROOT_OVERRIDE=$2
 FM_STATE_OVERRIDE=$3
 FM_HERDR_RUNTIME_SOURCE_VERSION=$4
 FM_HERDR_RUNTIME_SERVICE_PATH=$5
 FM_HERDR_RUNTIME_SESSION=$6
-FM_HERDR_RUNTIME_STATUS_TIMEOUT=$7
 PATH=$5
 export FM_HOME FM_ROOT_OVERRIDE FM_STATE_OVERRIDE FM_HERDR_RUNTIME_SOURCE_VERSION \
-  FM_HERDR_RUNTIME_SERVICE_PATH FM_HERDR_RUNTIME_SESSION FM_HERDR_RUNTIME_STATUS_TIMEOUT PATH
+  FM_HERDR_RUNTIME_SERVICE_PATH FM_HERDR_RUNTIME_SESSION PATH
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 RUNTIME="$SCRIPT_DIR/fm-herdr-runtime.sh"

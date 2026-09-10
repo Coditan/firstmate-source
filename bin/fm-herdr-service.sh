@@ -60,31 +60,9 @@ RECORD="$LOCKDIR/record"
 READING="$LOCKDIR/reading"
 BEAT="$STATE/.last-herdr-runtime-beat"
 GRACE=${FM_HERDR_GRACE:-120}
+CONFIRM_TIMEOUT=${FM_HERDR_CONFIRM_TIMEOUT:-10}
 case "$GRACE" in ''|*[!0-9]*|0) GRACE=120 ;; esac
-# The deadline the OWNER puts on one status read.  This session does not merely
-# read it, it PASSES IT ON to whichever tier starts the owner - an environment
-# file line for the unit, a launch argument for the keeper - so the owner runs
-# with exactly the value the convergence wait below was sized from.
-STATUS_TIMEOUT=${FM_HERDR_RUNTIME_STATUS_TIMEOUT:-10}
-case "$STATUS_TIMEOUT" in ''|*[!0-9]*|0) STATUS_TIMEOUT=10 ;; esac
-# IF YOU ARE TUNING EITHER OF THESE TWO NUMBERS, THIS IS THE RELATIONSHIP THEY
-# HAVE.  A converging session waits CONFIRM_TIMEOUT for the owner it just started
-# to publish its first reading, and the first thing that owner does is one
-# bounded status read of at most STATUS_TIMEOUT.  So the convergence wait must
-# OUTLAST one such read, with margin for the tier's own startup - if the wait is
-# the shorter of the two, convergence times out INSIDE the owner's first read and
-# then reports the wrong fault: it says the tier failed and nothing supervises the
-# runtime, while the keeper and its owner are both running and about to publish a
-# perfectly good `unreadable` reading about the wedged client that caused the slow
-# read in the first place.  The margin is what the default carries; an override
-# that loses the relationship is said out loud rather than silently obeyed.
-CONVERGE_MARGIN=15
-CONFIRM_TIMEOUT=${FM_HERDR_CONFIRM_TIMEOUT:-$(( STATUS_TIMEOUT + CONVERGE_MARGIN ))}
-case "$CONFIRM_TIMEOUT" in ''|*[!0-9]*|0) CONFIRM_TIMEOUT=$(( STATUS_TIMEOUT + CONVERGE_MARGIN )) ;; esac
-if [ "$CONFIRM_TIMEOUT" -le "$STATUS_TIMEOUT" ]; then
-  echo "HERDR_RUNTIME: FM_HERDR_CONFIRM_TIMEOUT (${CONFIRM_TIMEOUT}s) is not longer than the owner's status read deadline (${STATUS_TIMEOUT}s), so convergence would time out inside the owner's first read and report a failed tier instead of what the owner saw; using $(( STATUS_TIMEOUT + CONVERGE_MARGIN ))s" >&2
-  CONFIRM_TIMEOUT=$(( STATUS_TIMEOUT + CONVERGE_MARGIN ))
-fi
+case "$CONFIRM_TIMEOUT" in ''|*[!0-9]*|0) CONFIRM_TIMEOUT=10 ;; esac
 
 # shellcheck source=bin/fm-wake-lib.sh
 . "$SCRIPT_DIR/fm-wake-lib.sh"
@@ -194,7 +172,6 @@ recorded_reading_field() {  # <key>
   sed -n "s/^$1=//p" "$READING" 2>/dev/null | head -1
 }
 
-
 # The running owner, judged by its own published record and its own beacon,
 # never by a process name: a process-name test cannot tell one home's owner from
 # another's on a machine that hosts several.
@@ -262,7 +239,7 @@ start_keeper() {
   resolved_path=$(fm_service_path) || return 1
   mkdir -p "$STATE" || return 1
   "$TMUX_CMD" new-session -d -s "$name" "$KEEPER" "$FM_HOME" "$FM_ROOT" "$STATE" \
-    "$version" "$resolved_path" "$(runtime_session)" "$STATUS_TIMEOUT"
+    "$version" "$resolved_path" "$(runtime_session)"
 }
 
 # Stops the WATCHING, never the runtime: the owner leaves the server running by
@@ -437,7 +414,6 @@ write_service_env() {
     printf 'FM_HERDR_RUNTIME_EXEC=%s\n' "$(systemd_env_quote "$RUNTIME")"
     printf 'FM_HERDR_RUNTIME_MANAGER=systemd\n'
     printf 'FM_HERDR_RUNTIME_SESSION=%s\n' "$(systemd_env_quote "$(runtime_session)")"
-    printf 'FM_HERDR_RUNTIME_STATUS_TIMEOUT=%s\n' "$(systemd_env_quote "$STATUS_TIMEOUT")"
     printf 'PATH=%s\n' "$(systemd_env_quote "$resolved_path")"
     printf 'FM_HERDR_RUNTIME_SOURCE_VERSION=%s\n' "$(systemd_env_quote "$version")"
   } > "$tmp" || { rm -f "$tmp"; return 1; }
@@ -463,7 +439,6 @@ service_env_matches() {
     && grep -Fx "FM_HERDR_RUNTIME_EXEC=$(systemd_env_quote "$RUNTIME")" "$SERVICE_ENV" >/dev/null 2>&1 \
     && grep -Fx 'FM_HERDR_RUNTIME_MANAGER=systemd' "$SERVICE_ENV" >/dev/null 2>&1 \
     && grep -Fx "FM_HERDR_RUNTIME_SESSION=$(systemd_env_quote "$(runtime_session)")" "$SERVICE_ENV" >/dev/null 2>&1 \
-    && grep -Fx "FM_HERDR_RUNTIME_STATUS_TIMEOUT=$(systemd_env_quote "$STATUS_TIMEOUT")" "$SERVICE_ENV" >/dev/null 2>&1 \
     && grep -Fx "PATH=$(systemd_env_quote "$resolved_path")" "$SERVICE_ENV" >/dev/null 2>&1 \
     && grep -Fx "FM_HERDR_RUNTIME_SOURCE_VERSION=$(systemd_env_quote "$version")" "$SERVICE_ENV" >/dev/null 2>&1
 }

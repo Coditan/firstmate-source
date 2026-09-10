@@ -77,19 +77,6 @@ POLL=${FM_HERDR_RUNTIME_POLL:-30}
 # client which never answers still costs less than one interval: the loop
 # publishes its `unreadable` reading and beats on roughly its normal schedule
 # instead of freezing inside the blocked call.
-#
-# A SUPERVISED OWNER IS HANDED THIS VALUE RATHER THAN INHERITING IT.  `tmux
-# new-session` runs the keeper under the tmux server's environment and the unit
-# reads only its environment file, so bin/fm-herdr-service.sh passes the value it
-# sized its own convergence wait from - a launch argument on the keeper tier, an
-# environment-file line on the systemd tier - and this default applies only to an
-# owner run by hand.  The relationship that makes the passing matter: that wait
-# must OUTLAST one read, with margin.  When the wait is the shorter of the two,
-# convergence times out inside this very read and the digest reports a failed
-# tier and an unsupervised runtime instead of the `unreadable` reading this loop
-# is about to publish.  That file states it in full and refuses an override that
-# loses it; the value is also recorded as `status-timeout` so a reader can see
-# which deadline an owner is actually running with.
 STATUS_TIMEOUT=${FM_HERDR_RUNTIME_STATUS_TIMEOUT:-10}
 START_TIMEOUT=${FM_HERDR_RUNTIME_START_TIMEOUT:-20}
 BASE_BACKOFF=${FM_HERDR_RUNTIME_BACKOFF:-30}
@@ -150,7 +137,6 @@ write_record() {
     printf 'fm-home=%s\n' "$FM_HOME"
     printf 'runtime-path=%s\n' "$RUNTIME_PATH"
     printf 'session=%s\n' "$SESSION"
-    printf 'status-timeout=%s\n' "$STATUS_TIMEOUT"
     # What this process was STARTED with, recorded for the same reason
     # bin/fm-seat-respawner.sh records its three: a keeper receives its version
     # and PATH as launch arguments that would otherwise leave no trace, so

@@ -121,7 +121,7 @@ SH
 }
 
 # The fake tmux the watcher-service suite already uses, adapted to this keeper's
-# seven launch arguments.
+# six launch arguments.
 make_fake_tmux_keeper() {  # <fakebin>
   local fakebin=$1
   mkdir -p "$fakebin"
@@ -135,11 +135,7 @@ case "${1:-}" in
     kill -0 "$pid" 2>/dev/null
     ;;
   new-session)
-    # `env -u` because a real tmux server runs its command under its OWN
-    # environment, not the converging session's: anything the owner needs has to
-    # arrive as a launch argument, and a fixture that leaked it would hide that.
-    env -u FM_HERDR_RUNTIME_STATUS_TIMEOUT \
-      "$5" "$6" "$7" "$8" "$9" "${10}" "${11}" "${12:-}" >/dev/null 2>&1 &
+    "$5" "$6" "$7" "$8" "$9" "${10}" "${11}" >/dev/null 2>&1 &
     printf '%s\n' "$!" > "$FM_TEST_KEEPER_PID_FILE"
     ;;
   kill-session)
@@ -211,9 +207,6 @@ case "${2:-}" in
   disable) stop_unit ;;
   enable|restart)
     stop_unit
-    # A unit's firstmate environment is its environment file, not the shell that
-    # ran systemctl; unset first so only that file can supply a value.
-    unset FM_HERDR_RUNTIME_STATUS_TIMEOUT
     while IFS= read -r line; do
       case "$line" in
         FM_*=*|PATH=*)
@@ -914,47 +907,6 @@ test_the_systemd_tier_clears_a_leftover_keeper() {
   pass "a systemd convergence clears a leftover keeper and leaves one owner"
 }
 
-# The owner's first act is one bounded status read, so a convergence deadline no
-# longer than that read expires inside it and never sees the reading it is
-# waiting for.  A wedged client is where the two meet.
-test_the_convergence_wait_outlasts_one_status_read() {
-  local fakebin state home log pidfile err digest
-  fakebin="$TMP_ROOT/deadline-bin"
-  state="$TMP_ROOT/herdr-state"
-  home=$(make_home "$TMP_ROOT/deadline-home")
-  log="$TMP_ROOT/deadline-tmux.log"
-  pidfile="$TMP_ROOT/deadline-keeper.pid"
-  make_wedged_herdr "$fakebin" "$state" deadline
-  make_fake_tmux_keeper "$fakebin"
-  : > "$log"
-
-  # Deliberately equal, which is the relationship that breaks: the convergence
-  # wait must outlast one read, and the service says so and refuses the override
-  # rather than timing out inside the owner's first look.
-  err=$(PATH="$fakebin:$PATH" FM_HOME="$home" FM_HERDR_SERVICE_FORCE_BACKEND=keeper \
-    FM_HERDR_TMUX="$fakebin/tmux" FM_HERDR_RUNTIME_SESSION=deadline \
-    FM_SERVICE_TOOLS='herdr jq tmux' \
-    FM_TEST_TMUX_LOG="$log" FM_TEST_KEEPER_PID_FILE="$pidfile" \
-    FM_HERDR_RUNTIME_STATUS_TIMEOUT=3 FM_HERDR_CONFIRM_TIMEOUT=3 \
-    "$SERVICE" ensure 2>&1 >/dev/null) \
-    || fail "convergence expired inside the owner's own status read: $err"
-  TRACKED_PIDS+=("$(cat "$pidfile" 2>/dev/null || true)")
-  TRACKED_PIDS+=("$(sed -n 's/^pid=//p' "$home/state/.herdr-runtime.lock/record" 2>/dev/null | head -1)")
-  assert_contains "$err" "is not longer than the owner's status read deadline" \
-    "the service obeyed a convergence deadline that cannot outlast one read without saying so: $err"
-
-  digest=$(PATH="$fakebin:$PATH" FM_HOME="$home" FM_HERDR_SERVICE_FORCE_BACKEND=keeper \
-    FM_HERDR_TMUX="$fakebin/tmux" FM_HERDR_RUNTIME_SESSION=deadline \
-    FM_TEST_TMUX_LOG="$log" FM_TEST_KEEPER_PID_FILE="$pidfile" \
-    FM_BOOTSTRAP_DETECT_ONLY=1 "$SERVICE" bootstrap 2>/dev/null)
-  assert_contains "$digest" "cannot read whether the worker runtime is running" \
-    "the digest did not name the wedged client: $digest"
-  assert_contains "$digest" "did not answer" \
-    "the digest did not distinguish a wedged client from a missing tool: $digest"
-  [ ! -e "$state/running-deadline" ] || fail "a server was started on a reading that could not be taken"
-  pass "the convergence wait outlasts one bounded status read"
-}
-
 # The one degradation this owner exists to notice must never be reported as the
 # owner's own absence.
 test_a_wedged_client_is_not_reported_as_an_unsupervised_runtime() {
@@ -1135,56 +1087,6 @@ test_every_systemd_tier_path_clears_a_replaced_owner() {
 # The wait is sized from the deadline the OWNER is using, which it records, not
 # from the converging shell's own environment - that value never reaches a
 # supervised owner, so sizing a wait from it would be sizing it from fiction.
-# The deadline the converging session sized its wait from is the one the owner
-# has to run with, and neither tier inherits it - the keeper runs under the tmux
-# server's environment and the unit reads only its environment file - so the
-# session passes it on.  The fixtures strip it from both, so only the launch
-# argument and the environment file can carry it here.
-test_the_status_deadline_reaches_the_owner_on_both_tiers() {
-  local fakebin state home log pidfile unitdir unitpid recorded
-  fakebin="$TMP_ROOT/deadline-pass-bin"
-  state="$TMP_ROOT/herdr-state"
-  home=$(make_home "$TMP_ROOT/deadline-pass-home")
-  log="$TMP_ROOT/deadline-pass-tmux.log"
-  pidfile="$TMP_ROOT/deadline-pass-keeper.pid"
-  unitdir="$TMP_ROOT/deadline-pass-units"
-  unitpid="$TMP_ROOT/deadline-pass-unit.pid"
-  make_fake_herdr "$fakebin" "$state"
-  make_fake_tmux_keeper "$fakebin"
-  make_fake_systemd "$fakebin"
-  mkdir -p "$unitdir"
-  install -m 0644 "$ROOT/systemd/fm-herdr@.service" "$unitdir/fm-herdr@.service"
-  : > "$log"
-
-  PATH="$fakebin:$PATH" FM_HOME="$home" FM_HERDR_SERVICE_FORCE_BACKEND=keeper \
-    FM_HERDR_TMUX="$fakebin/tmux" FM_HERDR_RUNTIME_SESSION=deadlinepass \
-    FM_SERVICE_TOOLS='herdr jq tmux' \
-    FM_TEST_TMUX_LOG="$log" FM_TEST_KEEPER_PID_FILE="$pidfile" \
-    FM_HERDR_RUNTIME_STATUS_TIMEOUT=7 \
-    "$SERVICE" ensure || fail "the keeper tier did not establish a runtime owner"
-  TRACKED_PIDS+=("$(cat "$pidfile")")
-  TRACKED_PIDS+=("$(sed -n 's/^pid=//p' "$home/state/.herdr-runtime.lock/record" | head -1)")
-  recorded=$(sed -n 's/^status-timeout=//p' "$home/state/.herdr-runtime.lock/record" | head -1)
-  [ "$recorded" = 7 ] \
-    || fail "the keeper-tier owner runs with a ${recorded}s status deadline, not the 7s this session sized its wait from"
-
-  PATH="$fakebin:$PATH" FM_HOME="$home" FM_HERDR_SERVICE_FORCE_BACKEND=systemd \
-    FM_HERDR_SYSTEMCTL="$fakebin/systemctl" FM_HERDR_SYSTEMD_ESCAPE="$fakebin/systemd-escape" \
-    FM_HERDR_SYSTEMD_UNIT_DIR="$unitdir" FM_HERDR_TMUX="$fakebin/tmux" \
-    FM_HERDR_RUNTIME_SESSION=deadlinepass FM_SERVICE_TOOLS='herdr jq tmux' \
-    FM_TEST_TMUX_LOG="$log" FM_TEST_KEEPER_PID_FILE="$pidfile" \
-    FM_TEST_UNIT_PID_FILE="$unitpid" FM_TEST_SERVICE_ENV="$home/state/.herdr-service.env" \
-    FM_HERDR_RUNTIME_STATUS_TIMEOUT=7 \
-    "$SERVICE" ensure || fail "the systemd tier did not establish a runtime owner"
-  TRACKED_PIDS+=("$(cat "$unitpid" 2>/dev/null || true)")
-  [ "$(sed -n 's/^manager=//p' "$home/state/.herdr-runtime.lock/record" | head -1)" = systemd ] \
-    || fail "the unit did not take over the record"
-  recorded=$(sed -n 's/^status-timeout=//p' "$home/state/.herdr-runtime.lock/record" | head -1)
-  [ "$recorded" = 7 ] \
-    || fail "the unit-tier owner runs with a ${recorded}s status deadline, not the 7s this session sized its wait from"
-  pass "the status deadline a session sizes its wait from reaches the owner on both tiers"
-}
-
 # Trading a false sentence for no sentence is not the trade: a convergence that
 # failed while its owner survived has to say so too.
 test_a_failed_convergence_over_a_live_owner_still_says_so() {
@@ -1358,11 +1260,9 @@ test_a_down_runtime_is_reported_before_the_start_attempt_finishes
 test_a_failed_start_says_so_without_claiming_more
 test_stop_owner_ends_an_orphaned_owner
 test_the_systemd_tier_clears_a_leftover_keeper
-test_the_convergence_wait_outlasts_one_status_read
 test_a_wedged_client_is_not_reported_as_an_unsupervised_runtime
 test_installing_the_unit_clears_a_leftover_keeper
 test_every_systemd_tier_path_clears_a_replaced_owner
-test_the_status_deadline_reaches_the_owner_on_both_tiers
 test_a_failed_convergence_over_a_live_owner_still_says_so
 test_a_client_that_wedges_after_a_start_is_not_reported_as_down
 test_a_keeper_stop_that_fails_fails_the_convergence
