@@ -298,6 +298,17 @@ test_a_legacy_lock_record_needs_a_live_harness_rather_than_a_live_number() {
   local home holder
 
   home=$(make_home legacy-table)
+  # The holder whose SHAPE this case turns on has to be a process the fixture
+  # controls. On the legacy branch the classifier asks fm_harness_alive, which
+  # reads `ps -o args=`, and this test script's own command line carries the
+  # checkout path: a repository sitting under a directory named for one of the
+  # harnesses would answer "harness" and flip the verdict, making the assertion
+  # depend on where the tree lives rather than on the code. A sleeping process
+  # names no path and is a harness on no host.
+  sleep 300 &
+  holder=$!
+  HOLDERS+=("$holder")
+  hold_lock "$home" "$holder"
   make_live_listener "$home"
   queue_wake "$home"
   publish_endpoint "$home"

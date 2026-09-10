@@ -217,7 +217,7 @@ record_transcript_position() {
     # rather than published. A payload that yielded no usable transcript is worth
     # nothing to a later rebind, so it leaves no pending file behind to promote.
     if [ -n "$err" ]; then
-      [ -z "$pid" ] || discard_pending_record "$pid"
+      discard_or_sweep_pending_records "$pid"
     else
       publish_pending_record "$pid" "$sid" "$path"
     fi
@@ -226,9 +226,32 @@ record_transcript_position() {
   # This session is publishing for real, so its own stash has nothing left to
   # say. Another session's stash is left where it is: that session may still take
   # the lock later, and it is the only copy of its transcript position.
-  [ -z "$pid" ] || discard_pending_record "$pid"
+  discard_or_sweep_pending_records "$pid"
   publish_transcript_record "$pid" "$sid" "$path" "$err"
   return 0
+}
+
+# Clear the stash this run's own session must no longer be represented by.
+# With a pid this is one file, its own, and every other session's is left alone.
+# WITHOUT a pid it is all of them, and that is the point rather than an excess:
+# a stash proves which PROCESS wrote it, and a clear starts a new SESSION inside
+# that same process, so a stash left by the session before this one passes every
+# process-level proof there is. This run is that new session and cannot name the
+# file that speaks for it, so it cannot leave any stash standing as its own. The
+# cost is a stash another live session might still have promoted; it is the right
+# way round, because a discarded stash costs an unmeasured ceiling that says so,
+# while a stash promoted for the wrong session measures the ceiling against
+# another session's transcript and says nothing.
+discard_or_sweep_pending_records() {  # <pid-or-empty>
+  local pending
+  if [ -n "$1" ]; then
+    discard_pending_record "$1"
+    return 0
+  fi
+  for pending in "$PENDING_PREFIX"*; do
+    [ -e "$pending" ] || continue
+    rm -f "$pending" 2>/dev/null || : > "$pending" 2>/dev/null || true
+  done
 }
 
 pending_path() {  # <pid>
@@ -259,6 +282,20 @@ publish_pending_record() {  # <pid> <session-id> <transcript-path>
   mv -f "$tmp" "$pending" 2>/dev/null \
     || { rm -f "$tmp" 2>/dev/null; discard_pending_record "$1"; }
   return 0
+}
+
+# 0 when <pending> records the incarnation the process at <pid> is running under
+# right now, which proves that very process wrote it and is still alive. A
+# reading that cannot be taken on either side is NOT PROVEN and answers 1.
+# This is the strongest thing anything here can establish about a stash, and both
+# the sweep and the promotion turn on it.
+pending_incarnation_is_current() {  # <pending-path> <pid>
+  local stashed live
+  stashed=$(kv_field "$1" harness_incarnation) || return 1
+  [ -n "$stashed" ] || return 1
+  live=$(fm_pid_incarnation "$2" 2>/dev/null) || return 1
+  [ -n "$live" ] || return 1
+  [ "$stashed" = "$live" ]
 }
 
 # Remove only the stash named by <pid>. Every other session's stash is left
@@ -308,6 +345,12 @@ sweep_stale_pending_records() {
     case "$suffix" in
       *.*) continue ;;
     esac
+    # A stash whose recorded incarnation is the one its pid is running under now
+    # was written by that live process, which cannot be older than the container
+    # it is running in. So the age reading is never allowed to remove it: when the
+    # two disagree the clock is the reading to doubt, and this file is that
+    # session's only copy of where its transcript is.
+    pending_incarnation_is_current "$pending" "$pid" && continue
     if container_start_epoch_once && ! file_postdates_this_container "$pending"; then
       rm -f "$pending" 2>/dev/null || : > "$pending" 2>/dev/null || true
     fi
@@ -400,44 +443,36 @@ record_postdates_this_container() {
 }
 
 # Promote the stash this session left at its own SessionStart into the record.
-# Only the file named by <holder> - the pid the lock now publishes - is read,
-# and it is promoted when it proves it was written by that very process and was
-# written after this container started. Three tests, each the record's own:
-# a stash naming another pid belongs to another session; a stash naming that pid
-# in another INCARNATION belongs to the process that held the number before this
-# harness session did, inside this same container, which the container-age test
-# alone cannot see; and a stash predating this container was written in a pid
-# table that no longer exists, where the same small pid numbers are handed out
-# again. An incarnation that cannot be read on either side is NOT PROVEN and
-# refuses the promotion, because this is the one failure here that would be
-# silent: an error record says the ceiling is unmeasured, while a wrong record
-# measures it against another session's transcript and says nothing.
+# Only the file named by <holder> - the pid the lock now publishes - is read, and
+# it is promoted when it proves it was written by that very process, as that
+# process is running now: its harness_pid names the holder, and its recorded
+# incarnation is the one the holder is running under at this moment. A stash
+# naming another pid belongs to another session; a stash naming that pid in
+# another incarnation belongs to whoever held the number before this harness
+# session did, inside this same container.
+# The incarnation is asked FIRST and is decisive, and this function no longer
+# consults the container-age reading at all: a live process cannot be older than
+# the container it is running in, so an age reading that disagrees with a matching
+# incarnation is the reading that is wrong, and refusing on it would delete the
+# only copy of this session's transcript position over a clock. The age reading
+# still runs in the sweep, where it removes what no incarnation vouches for.
+# A reading that cannot be taken on either side is NOT PROVEN and refuses the
+# promotion, because this is the one failure here that would be silent: an error
+# record says the ceiling is unmeasured, while a wrong record measures it against
+# another session's transcript and says nothing.
 # Returns 1 when there is nothing promotable, leaving the record untouched for
 # the caller's error path. The holder's stash is discarded either way: it has
 # served its one purpose, and a stash left behind would be promoted again by a
 # later rebind against a pid it no longer describes. Every other session's stash
 # is left alone.
 promote_pending_record() {  # <holder-pid>
-  local holder=$1 pending pid sid path stashed_incarnation live_incarnation age
+  local holder=$1 pending pid sid path
   pending=$(pending_path "$holder")
   pid=$(kv_field "$pending" harness_pid) || return 1
   sid=$(kv_field "$pending" session_id) || { discard_pending_record "$holder"; return 1; }
   path=$(kv_field "$pending" transcript_path) || { discard_pending_record "$holder"; return 1; }
-  stashed_incarnation=$(kv_field "$pending" harness_incarnation) || stashed_incarnation=
-  live_incarnation=$(fm_pid_incarnation "$holder" 2>/dev/null) || live_incarnation=
-  file_postdates_this_container "$pending"
-  age=$?
-  # 2 is "this host cannot say when the container started", and it does not
-  # condemn the stash: the incarnation match above is the stronger proof anyway,
-  # since the process that wrote this stash is alive and is still the same one,
-  # so the stash cannot have come from a container that has already gone.
-  case "$age" in
-    0|2) ;;
-    *) discard_pending_record "$holder"; return 1 ;;
-  esac
   if [ "$pid" != "$holder" ] || [ -z "$sid" ] || [ -z "$path" ] \
-     || [ -z "$stashed_incarnation" ] || [ -z "$live_incarnation" ] \
-     || [ "$stashed_incarnation" != "$live_incarnation" ]; then
+     || ! pending_incarnation_is_current "$pending" "$holder"; then
     discard_pending_record "$holder"
     return 1
   fi

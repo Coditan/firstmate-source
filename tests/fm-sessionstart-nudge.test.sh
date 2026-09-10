@@ -1413,6 +1413,99 @@ test_a_stash_whose_process_is_gone_is_swept_and_a_live_one_is_kept() {
   pass "fm-sessionstart-nudge: the rebind sweeps a stash whose process is gone and keeps one whose process is still live"
 }
 
+# A stash proves which PROCESS wrote it, and a clear starts a new SESSION inside
+# that same process, so the pid and the incarnation both pass for a stash the
+# previous session left. The run that would have replaced it is the one that
+# cannot name itself: its harness pid is unresolvable, so it has no filename to
+# discard and the previous session's stash survives to be promoted for this one,
+# publishing status=ok against another session's transcript with nothing said.
+test_a_run_that_cannot_name_itself_leaves_no_stash_standing_as_its_own() {
+  local root="$TMP_ROOT/record-pending-unclaimable" fakebin record own ns status=0 out
+  make_primary "$root"
+  fakebin=$(fm_fakebin "$root")
+  sleep 30 &
+  own=$!
+  record="$root/state/.primary-transcript"
+  ns=$(fm_pid_namespace_token) || fail "this host cannot name its own pid table"
+
+  # What the session before this one stashed while another seat held the home:
+  # its own transcript, under the harness process both sessions share.
+  printf 'status=ok\nharness_pid=%s\nharness_incarnation=%s\nsession_id=first-session\ntranscript_path=/tmp/first-session.jsonl\nrecorded_at=1\n' \
+    "$own" "$(fm_pid_incarnation "$own")" > "$record.pending.$own"
+  printf 'status=ok\nharness_pid=4242\nsession_id=dead-session\ntranscript_path=/previous/container.jsonl\nrecorded_at=1\n' \
+    > "$record"
+  { printf '%s\n' "$own"; printf 'pidns=%s\n' "$ns"; } > "$root/state/.lock"
+
+  # This session's own hook run, which cannot resolve its harness pid.
+  make_fake_ps_no_harness "$fakebin"
+  run_nudge_with_payload "$root" "$fakebin" "$CLAUDE_PAYLOAD" >/dev/null || status=$?
+  expect_code 0 "$status" "the hook run that cannot name its own harness"
+  [ ! -e "$record.pending.$own" ] \
+    || fail "a run that cannot name itself must leave no stash standing as its own: $(cat "$record.pending.$own")"
+
+  # And the acquisition that follows must say the ceiling is unmeasured rather
+  # than measure it against the previous session's transcript.
+  make_fake_ps_two_claudes "$fakebin" "$own" 999001
+  status=0
+  out=$(env -u NO_MISTAKES_GATE PATH="$fakebin:$PATH" FM_GATE_REFUSE_BYPASS=0 \
+    FM_ROOT_OVERRIDE="$root" FM_HOME="$root" "$NUDGE" --rebind-to-lock </dev/null) || status=$?
+  kill "$own" 2>/dev/null || true
+  wait "$own" 2>/dev/null || true
+  expect_code 0 "$status" "the rebind run"
+  [ "$(record_field "$record" error)" = rebound-without-hook-payload ] \
+    || fail "the record must be the explicit error, not another session's transcript: $(cat "$record")"
+  ! record_field "$record" transcript_path >/dev/null \
+    || fail "the record must not carry the previous session's transcript path: $(cat "$record")"
+  assert_contains "$out" "context-ceiling record: rebound to harness pid $own" \
+    "the rebind must say what it did"
+  pass "fm-sessionstart-nudge: a hook run that cannot name its own harness leaves no stash for a later rebind to promote as its own"
+}
+
+# Two readings can disagree about one stash: the container start is a wall-clock
+# reading (btime, which this repo already records as drifting on some hosts) and
+# the incarnation is a process fact. A live process cannot be older than the
+# container it runs in, so when they disagree the clock is wrong - and refusing
+# on it would also DELETE the only copy of this session's transcript position,
+# leaving the ceiling unmeasured for the life of the session with nothing left to
+# repair it from.
+test_a_stash_its_own_process_vouches_for_survives_a_clock_that_calls_it_old() {
+  local root="$TMP_ROOT/record-pending-clock-disagrees" fakebin record pending
+  local own ns out status=0 sid path
+  sid=11111111-2222-3333-4444-555555555555
+  path=/home/cap/.claude/projects/-home-cap-fm/$sid.jsonl
+  make_primary "$root"
+  fakebin=$(fm_fakebin "$root")
+  sleep 30 &
+  own=$!
+  make_fake_ps_two_claudes "$fakebin" "$own" 999001
+  record="$root/state/.primary-transcript"
+  pending="$record.pending.$own"
+  ns=$(fm_pid_namespace_token) || fail "this host cannot name its own pid table"
+  printf 'status=ok\nharness_pid=4242\nsession_id=dead-session\ntranscript_path=/previous/container.jsonl\nrecorded_at=1\n' \
+    > "$record"
+  printf 'status=ok\nharness_pid=%s\nharness_incarnation=%s\nsession_id=%s\ntranscript_path=%s\nrecorded_at=1\n' \
+    "$own" "$(fm_pid_incarnation "$own")" "$sid" "$path" > "$pending"
+  # The clock's answer, staged: an mtime that says this file predates a container
+  # its writer is demonstrably still running inside.
+  touch -d 2001-01-01 "$pending"
+  { printf '%s\n' "$own"; printf 'pidns=%s\n' "$ns"; } > "$root/state/.lock"
+
+  out=$(env -u NO_MISTAKES_GATE PATH="$fakebin:$PATH" FM_GATE_REFUSE_BYPASS=0 \
+    FM_ROOT_OVERRIDE="$root" FM_HOME="$root" "$NUDGE" --rebind-to-lock </dev/null) || status=$?
+  kill "$own" 2>/dev/null || true
+  wait "$own" 2>/dev/null || true
+  expect_code 0 "$status" "the rebind run"
+  [ "$(record_field "$record" status)" = ok ] \
+    || fail "a stash its own live process vouches for must be promoted, not refused on a clock: $(cat "$record")"
+  [ "$(record_field "$record" session_id)" = "$sid" ] \
+    || fail "the promoted record must carry this session's own session id: $(cat "$record")"
+  [ "$(record_field "$record" transcript_path)" = "$path" ] \
+    || fail "the promoted record must carry this session's own transcript path: $(cat "$record")"
+  assert_contains "$out" "context-ceiling record: rebound to harness pid $own" \
+    "the rebind must say what it did"
+  pass "fm-sessionstart-nudge: a stash the live process that wrote it vouches for is neither swept nor refused by a clock that calls it old"
+}
+
 # This allowlist contract is a deliberate exemption from the test-quality rule's
 # prohibition on source-content tests because this is a repository-wide negative
 # property that no single executable interface can demonstrate. It enumerates
@@ -1550,6 +1643,8 @@ test_a_second_refused_session_cannot_destroy_the_primarys_stash
 test_a_stash_predating_this_container_is_swept
 test_a_host_that_cannot_read_its_container_start_keeps_a_good_record
 test_a_stash_whose_process_is_gone_is_swept_and_a_live_one_is_kept
+test_a_run_that_cannot_name_itself_leaves_no_stash_standing_as_its_own
+test_a_stash_its_own_process_vouches_for_survives_a_clock_that_calls_it_old
 test_primary_transcript_path_name_allowlist_contract
 test_opencode_plugin_delivers_exact_nudge_once
 test_tracked_harness_registration

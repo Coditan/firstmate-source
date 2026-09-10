@@ -1037,6 +1037,12 @@ families_for_changed_path() {
     bin/fm-sessionstart-nudge.sh|bin/fm-tangle*|bin/fm-update.sh|\
     bin/fm-gate-refuse*|bin/fm-lock*)
       printf '%s\n' session-bootstrap
+      # bin/fm-lock.sh runs bin/fm-sessionstart-nudge.sh from under its own
+      # record publisher, so every acquisition's output depends on both scripts,
+      # and tests/fm-lock.test.sh asserts what that output does to the
+      # context-ceiling record. Its basename family (pure-contract-unit) would
+      # never select it from either side of that dependency.
+      printf '%s\n' "__script_required__:fm-lock.test.sh"
       ;;
     bin/fm-pr-*|bin/fm-merge-local.sh|bin/fm-teardown.sh|bin/fm-review-diff.sh|\
     bin/fm-x-*|bin/fm-check*)
