@@ -6,6 +6,7 @@
 #   FM_HERDR_RUNTIME_ONCE=1 fm-herdr-runtime.sh  # one reading, one start at most
 #   fm-herdr-runtime.sh __serve <session>      # internal: the detached server
 #   fm-herdr-runtime.sh __status <session>     # internal: the bounded reading
+#   fm-herdr-runtime.sh __status-timeout       # internal: that reading's deadline
 #
 # bin/fm-herdr-service.sh owns which tier runs this (a systemd user unit or a
 # tmux keeper) and how it is converged; this file owns the loop itself.
@@ -78,14 +79,22 @@ POLL=${FM_HERDR_RUNTIME_POLL:-30}
 # publishes its `unreadable` reading and beats on roughly its normal schedule
 # instead of freezing inside the blocked call.
 #
-# IF YOU ARE RAISING THIS, RAISE THE CONVERGENCE WAIT WITH IT.  A converging
-# session waits FM_HERDR_CONFIRM_TIMEOUT (bin/fm-herdr-service.sh) for this
-# owner's FIRST reading, and this deadline is how long the read before that
-# reading can take.  The wait must OUTLAST one read, with margin: when the two
-# are equal, convergence times out inside this very read and the digest reports a
-# failed tier and an unsupervised runtime instead of the `unreadable` reading
-# this loop is about to publish.  That file states the relationship and refuses
-# an override that loses it.
+# THIS FILE IS THE ONE PLACE THAT DECIDES THIS NUMBER, and the converging session
+# sizes its own wait from it rather than from a second copy: a running owner
+# records the value below as `status-timeout`, and an owner that does not exist
+# yet is asked for it through the __status-timeout arm.  That matters because
+# FM_HERDR_RUNTIME_STATUS_TIMEOUT does NOT reach a supervised owner - `tmux
+# new-session` runs the keeper under the tmux server's environment and the unit
+# reads only its environment file - so a value exported in a converging shell is
+# one this loop is not using, and sizing a wait from it would be sizing it from
+# fiction.  Raise it here (or in the environment an owner is actually started
+# with) and the wait follows on its own.
+#
+# The relationship it has with that wait: the wait must OUTLAST one read, with
+# margin.  When the wait is the shorter of the two, convergence times out inside
+# this very read and the digest reports a failed tier and an unsupervised runtime
+# instead of the `unreadable` reading this loop is about to publish.
+# bin/fm-herdr-service.sh states it in full and refuses an override that loses it.
 STATUS_TIMEOUT=${FM_HERDR_RUNTIME_STATUS_TIMEOUT:-10}
 START_TIMEOUT=${FM_HERDR_RUNTIME_START_TIMEOUT:-20}
 BASE_BACKOFF=${FM_HERDR_RUNTIME_BACKOFF:-30}
@@ -107,6 +116,14 @@ case "$BASE_BACKOFF" in ''|*[!0-9]*|0) BASE_BACKOFF=30 ;; esac
 case "$MAX_BACKOFF" in ''|*[!0-9]*|0) MAX_BACKOFF=300 ;; esac
 case "$CONFIRM_SLEEP" in ''|.|*[!0-9.]*|*.*.*) CONFIRM_SLEEP=1 ;; esac
 case "$SERVER_LOG_MAX_BYTES" in ''|*[!0-9]*|0) SERVER_LOG_MAX_BYTES=4194304 ;; esac
+
+# Answered before anything is sourced, because the converging session asks this
+# of a home that has no owner yet and must not pay for an adapter it is not
+# going to use.
+if [ "${1:-}" = __status-timeout ]; then
+  printf '%s\n' "$STATUS_TIMEOUT"
+  exit 0
+fi
 
 # shellcheck source=bin/fm-wake-lib.sh
 . "$SCRIPT_DIR/fm-wake-lib.sh"
@@ -146,6 +163,7 @@ write_record() {
     printf 'fm-home=%s\n' "$FM_HOME"
     printf 'runtime-path=%s\n' "$RUNTIME_PATH"
     printf 'session=%s\n' "$SESSION"
+    printf 'status-timeout=%s\n' "$STATUS_TIMEOUT"
     # What this process was STARTED with, recorded for the same reason
     # bin/fm-seat-respawner.sh records its three: a keeper receives its version
     # and PATH as launch arguments that would otherwise leave no trace, so
@@ -385,7 +403,7 @@ if [ "${1:-}" = __status ]; then
   exit $?
 fi
 
-[ "$#" -eq 0 ] || { echo "usage: $(basename "$0") [__serve <session>|__status <session>]" >&2; exit 2; }
+[ "$#" -eq 0 ] || { echo "usage: $(basename "$0") [__serve <session>|__status <session>|__status-timeout]" >&2; exit 2; }
 
 cleanup() {
   trap - HUP INT TERM

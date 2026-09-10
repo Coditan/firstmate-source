@@ -86,8 +86,11 @@ Three properties are what make this safe to land on a vessel with a full fleet a
 A reading the owner could not take is never rendered as `down`.
 A missing `herdr`, a missing `jq`, a client that does not answer, or JSON that does not parse are recorded as `unreadable` and reported as themselves, because starting a server on a `down` the owner invented could bind a second server against a live socket.
 Every reading is taken under a deadline, `FM_HERDR_RUNTIME_STATUS_TIMEOUT` (default 10s, held below the 30s poll), because a client blocked on a wedged socket is the degradation this owner exists to notice and an unbounded read would stop the loop inside it - no beat, no reading, and no signal serviced until the call returned.
-That deadline binds a second one: a converging session waits `FM_HERDR_CONFIRM_TIMEOUT` (default `FM_HERDR_RUNTIME_STATUS_TIMEOUT` + 15s) for the owner's first reading, and the first thing a new owner does is one bounded status read.
-The convergence wait must outlast that read with margin, or convergence times out inside it and the digest reports a failed tier and an unsupervised runtime instead of the `unreadable` reading the owner is about to publish; an override that leaves the two equal is reported and refused rather than obeyed.
+That deadline binds a second one: a converging session waits `FM_HERDR_CONFIRM_TIMEOUT` for the owner's first reading, and the first thing a new owner does is one bounded status read.
+The convergence wait must outlast that read with margin, or convergence times out inside it and the digest reports a failed tier and an unsupervised runtime instead of the `unreadable` reading the owner is about to publish; an override that leaves the wait the shorter of the two is reported and refused rather than obeyed.
+The wait is sized from the deadline the owner is ACTUALLY using, not from the converging shell's own environment: an owner records its deadline as `status-timeout` in `state/.herdr-runtime.lock/record`, and a home with no owner yet is asked through `bin/fm-herdr-runtime.sh __status-timeout`, so the default is decided in exactly one place.
+That matters because `FM_HERDR_RUNTIME_STATUS_TIMEOUT` does not reach a supervised owner - `tmux new-session` runs the keeper under the tmux server's environment, and the unit reads only `state/.herdr-service.env` - so exporting it in a session changes what that session waits for and nothing about what the owner does.
+Set it where the owner is actually started, and the wait follows on its own.
 A reading that times out says so in its own words, so a wedged client stays distinguishable from a missing tool in the digest.
 
 The owner and the server write to two separate files under `state/`, and only one of them is bounded:

@@ -965,7 +965,7 @@ test_a_wedged_client_is_not_reported_as_an_unsupervised_runtime() {
     FM_SERVICE_TOOLS='herdr jq tmux' \
     FM_TEST_TMUX_LOG="$log" FM_TEST_KEEPER_PID_FILE="$pidfile" \
     FM_HERDR_RUNTIME_STATUS_TIMEOUT=1 FM_HERDR_CONFIRM_TIMEOUT=3 \
-    "$SERVICE" ensure || fail "the keeper tier did not establish an owner against a wedged client"
+    "$SERVICE" ensure 2>/dev/null || fail "the keeper tier did not establish an owner against a wedged client"
   owner=$(sed -n 's/^pid=//p' "$home/state/.herdr-runtime.lock/record" | head -1)
   TRACKED_PIDS+=("$(cat "$pidfile")" "$owner")
   [ "$(reading_field "$home" reading)" = unreadable ] \
@@ -1045,6 +1045,169 @@ test_installing_the_unit_clears_a_leftover_keeper() {
   pass "an approved install clears a leftover keeper and leaves one owner"
 }
 
+# Leaves the state every systemd-tier path has to cope with: a keeper-tier owner
+# whose keeper was SIGKILLed, so the owner survives reparented and still writes
+# the record, with its runtime up.  Sets ORPHAN_* for the caller.
+setup_orphaned_keeper_owner() {  # <tag>
+  local tag=$1 state keeper_pid
+  state="$TMP_ROOT/herdr-state"
+  ORPHAN_BIN="$TMP_ROOT/$tag-bin"
+  ORPHAN_HOME=$(make_home "$TMP_ROOT/$tag-home")
+  ORPHAN_UNITDIR="$TMP_ROOT/$tag-units"
+  ORPHAN_UNITPID="$TMP_ROOT/$tag-unit.pid"
+  ORPHAN_LOG="$TMP_ROOT/$tag-tmux.log"
+  ORPHAN_KEEPER_PIDFILE="$TMP_ROOT/$tag-keeper.pid"
+  make_fake_herdr "$ORPHAN_BIN" "$state"
+  make_fake_tmux_keeper "$ORPHAN_BIN"
+  make_fake_systemd "$ORPHAN_BIN"
+  mkdir -p "$ORPHAN_UNITDIR"
+  install -m 0644 "$ROOT/systemd/fm-herdr@.service" "$ORPHAN_UNITDIR/fm-herdr@.service"
+  : > "$ORPHAN_LOG"
+
+  PATH="$ORPHAN_BIN:$PATH" FM_HOME="$ORPHAN_HOME" FM_HERDR_SERVICE_FORCE_BACKEND=keeper \
+    FM_HERDR_TMUX="$ORPHAN_BIN/tmux" FM_HERDR_RUNTIME_SESSION="$tag" \
+    FM_SERVICE_TOOLS='herdr jq tmux' \
+    FM_TEST_TMUX_LOG="$ORPHAN_LOG" FM_TEST_KEEPER_PID_FILE="$ORPHAN_KEEPER_PIDFILE" \
+    "$SERVICE" ensure || fail "[$tag] the keeper tier did not establish a runtime owner"
+  keeper_pid=$(cat "$ORPHAN_KEEPER_PIDFILE")
+  ORPHAN_OWNER=$(sed -n 's/^pid=//p' "$ORPHAN_HOME/state/.herdr-runtime.lock/record" | head -1)
+  TRACKED_PIDS+=("$keeper_pid" "$ORPHAN_OWNER")
+  wait_for_file "$state/running-$tag" || fail "[$tag] the keeper-owned runtime never came up"
+  ORPHAN_SERVER=$(stub_server_pid "$state" "$tag")
+
+  kill -KILL "$keeper_pid" 2>/dev/null || fail "[$tag] could not kill the keeper"
+  wait_for_dead "$keeper_pid" || fail "[$tag] the keeper did not die"
+  kill -0 "$ORPHAN_OWNER" 2>/dev/null || fail "[$tag] the fixture left no orphaned owner behind"
+}
+
+run_systemd_tier() {  # <tag> <subcommand>
+  PATH="$ORPHAN_BIN:$PATH" FM_HOME="$ORPHAN_HOME" FM_HERDR_SERVICE_FORCE_BACKEND=systemd \
+    FM_HERDR_SYSTEMCTL="$ORPHAN_BIN/systemctl" FM_HERDR_SYSTEMD_ESCAPE="$ORPHAN_BIN/systemd-escape" \
+    FM_HERDR_SYSTEMD_UNIT_DIR="$ORPHAN_UNITDIR" FM_HERDR_TMUX="$ORPHAN_BIN/tmux" \
+    FM_HERDR_RUNTIME_SESSION="$1" FM_SERVICE_TOOLS='herdr jq tmux' \
+    FM_TEST_TMUX_LOG="$ORPHAN_LOG" FM_TEST_KEEPER_PID_FILE="$ORPHAN_KEEPER_PIDFILE" \
+    FM_TEST_UNIT_PID_FILE="$ORPHAN_UNITPID" FM_TEST_SERVICE_ENV="$ORPHAN_HOME/state/.herdr-service.env" \
+    "$SERVICE" "$2"
+}
+
+# Every systemd-tier path that ends or replaces the watching has to clear the
+# owner it is displacing, and this asserts it of all four at once: if any one of
+# them stopped doing it, its iteration leaves the orphan alive and fails here.
+test_every_systemd_tier_path_clears_a_replaced_owner() {
+  local tag state survivor
+  state="$TMP_ROOT/herdr-state"
+  for tag in ensure install-unit restart stop-owner; do
+    setup_orphaned_keeper_owner "$tag"
+    run_systemd_tier "$tag" "$tag" >/dev/null || fail "[$tag] the systemd-tier path failed over an orphaned owner"
+    TRACKED_PIDS+=("$(cat "$ORPHAN_UNITPID" 2>/dev/null || true)")
+
+    wait_for_dead "$ORPHAN_OWNER" 50 \
+      || fail "[$tag] left the orphaned owner running beside whatever it started"
+    survivor=$(sed -n 's/^pid=//p' "$ORPHAN_HOME/state/.herdr-runtime.lock/record" 2>/dev/null | head -1)
+    case "$tag" in
+      stop-owner)
+        if [ -n "$survivor" ] && kill -0 "$survivor" 2>/dev/null; then
+          fail "[$tag] the rollback reported success while an owner kept watching"
+        fi
+        ;;
+      *)
+        { [ -n "$survivor" ] && kill -0 "$survivor" 2>/dev/null; } \
+          || fail "[$tag] left no owner watching the runtime"
+        [ "$survivor" != "$ORPHAN_OWNER" ] || fail "[$tag] did not replace the orphaned owner"
+        ;;
+    esac
+
+    kill -0 "$ORPHAN_SERVER" 2>/dev/null || fail "[$tag] ended the runtime it was supposed to leave running"
+    [ "$(stub_server_pid "$state" "$tag")" = "$ORPHAN_SERVER" ] \
+      || fail "[$tag] replaced the runtime instead of readopting it"
+  done
+  pass "every systemd-tier path clears the owner it replaces"
+}
+
+# The wait is sized from the deadline the OWNER is using, which it records, not
+# from the converging shell's own environment - that value never reaches a
+# supervised owner, so sizing a wait from it would be sizing it from fiction.
+test_the_convergence_wait_is_sized_from_the_owners_recorded_deadline() {
+  local fakebin state home log pidfile err
+  fakebin="$TMP_ROOT/deadline-record-bin"
+  state="$TMP_ROOT/herdr-state"
+  home=$(make_home "$TMP_ROOT/deadline-record-home")
+  log="$TMP_ROOT/deadline-record-tmux.log"
+  pidfile="$TMP_ROOT/deadline-record-keeper.pid"
+  make_fake_herdr "$fakebin" "$state"
+  make_fake_tmux_keeper "$fakebin"
+  : > "$log"
+
+  PATH="$fakebin:$PATH" FM_HOME="$home" FM_HERDR_SERVICE_FORCE_BACKEND=keeper \
+    FM_HERDR_TMUX="$fakebin/tmux" FM_HERDR_RUNTIME_SESSION=deadlinerec \
+    FM_SERVICE_TOOLS='herdr jq tmux' \
+    FM_TEST_TMUX_LOG="$log" FM_TEST_KEEPER_PID_FILE="$pidfile" \
+    FM_HERDR_RUNTIME_STATUS_TIMEOUT=20 \
+    "$SERVICE" ensure || fail "the keeper tier did not establish a runtime owner"
+  TRACKED_PIDS+=("$(cat "$pidfile")")
+  TRACKED_PIDS+=("$(sed -n 's/^pid=//p' "$home/state/.herdr-runtime.lock/record" | head -1)")
+  [ "$(sed -n 's/^status-timeout=//p' "$home/state/.herdr-runtime.lock/record" | head -1)" = 20 ] \
+    || fail "the owner did not record the status deadline it reads with"
+
+  # This session sets no status deadline of its own, so a wait sized from its own
+  # environment would use the default and find 15s perfectly adequate.  Sized
+  # from the owner's recorded 20s it is not, and the service says so.
+  err=$(PATH="$fakebin:$PATH" FM_HOME="$home" FM_HERDR_SERVICE_FORCE_BACKEND=keeper \
+    FM_HERDR_TMUX="$fakebin/tmux" FM_HERDR_RUNTIME_SESSION=deadlinerec \
+    FM_SERVICE_TOOLS='herdr jq tmux' FM_SERVICE_PATH_BASE='/usr/bin:/bin' \
+    FM_TEST_TMUX_LOG="$log" FM_TEST_KEEPER_PID_FILE="$pidfile" \
+    FM_HERDR_CONFIRM_TIMEOUT=15 "$SERVICE" ensure 2>&1 >/dev/null) \
+    || fail "convergence failed over an owner with a raised status deadline: $err"
+  TRACKED_PIDS+=("$(cat "$pidfile")")
+  assert_contains "$err" "is not longer than the owner's status read deadline (20s)" \
+    "the convergence wait was not sized from the owner's own recorded deadline: $err"
+  pass "the convergence wait is sized from the deadline the owner records"
+}
+
+# Trading a false sentence for no sentence is not the trade: a convergence that
+# failed while its owner survived has to say so too.
+test_a_failed_convergence_over_a_live_owner_still_says_so() {
+  local fakebin state home log pidfile digest owner
+  fakebin="$TMP_ROOT/silent-bin"
+  state="$TMP_ROOT/herdr-state"
+  home=$(make_home "$TMP_ROOT/silent-home")
+  log="$TMP_ROOT/silent-tmux.log"
+  pidfile="$TMP_ROOT/silent-keeper.pid"
+  make_fake_herdr "$fakebin" "$state"
+  make_fake_tmux_keeper "$fakebin"
+  : > "$log"
+
+  PATH="$fakebin:$PATH" FM_HOME="$home" FM_HERDR_SERVICE_FORCE_BACKEND=keeper \
+    FM_HERDR_TMUX="$fakebin/tmux" FM_HERDR_RUNTIME_SESSION=silent \
+    FM_SERVICE_TOOLS='herdr jq tmux' \
+    FM_TEST_TMUX_LOG="$log" FM_TEST_KEEPER_PID_FILE="$pidfile" \
+    FM_HERDR_RUNTIME_STATUS_TIMEOUT=1 \
+    "$SERVICE" ensure || fail "the keeper tier did not establish a runtime owner"
+  owner=$(sed -n 's/^pid=//p' "$home/state/.herdr-runtime.lock/record" | head -1)
+  TRACKED_PIDS+=("$(cat "$pidfile")" "$owner")
+  wait_for_reading "$home" running || fail "the owner never settled on a running reading"
+
+  # A convergence that must replace the owner and cannot, while that owner stays
+  # up and reading `running` - the case report_reading is deliberately silent on.
+  digest=$(PATH="$fakebin:$PATH" FM_HOME="$home" FM_HERDR_SERVICE_FORCE_BACKEND=keeper \
+    FM_HERDR_TMUX="$fakebin/tmux" FM_HERDR_RUNTIME_SESSION=silent \
+    FM_SERVICE_TOOLS='herdr jq tmux' FM_SERVICE_PATH_BASE='/usr/bin:/bin' \
+    FM_TEST_TMUX_LOG="$log" FM_TEST_KEEPER_PID_FILE="$pidfile" \
+    FM_TEST_TMUX_KILL_NOOP=1 FM_HERDR_CONFIRM_TIMEOUT=3 \
+    "$SERVICE" bootstrap 2>/dev/null)
+  kill -0 "$owner" 2>/dev/null || fail "the fixture lost the owner the digest was supposed to describe"
+  [ "$(reading_field "$home" reading)" = running ] || fail "the fixture's owner stopped reading running"
+  [ -n "$digest" ] || fail "a failed convergence over a live owner printed nothing at all"
+  [ "$(printf '%s\n' "$digest" | wc -l)" -eq 1 ] || fail "a failed convergence printed more than one line: $digest"
+  assert_contains "$digest" "convergence failed" \
+    "the digest did not name the step that failed: $digest"
+  case "$digest" in
+    *"nothing supervises the runtime"*) fail "the digest called a live owner an unsupervised runtime: $digest" ;;
+    *"has not published a reading yet"*) fail "the digest denied a reading the owner had published: $digest" ;;
+  esac
+  pass "a convergence that fails over a live owner still reports itself"
+}
+
 test_the_entrypoint_command_is_printed_verbatim() {
   local home out
   home=$(make_home "$TMP_ROOT/entrypoint-home")
@@ -1072,4 +1235,7 @@ test_the_systemd_tier_clears_a_leftover_keeper
 test_the_convergence_wait_outlasts_one_status_read
 test_a_wedged_client_is_not_reported_as_an_unsupervised_runtime
 test_installing_the_unit_clears_a_leftover_keeper
+test_every_systemd_tier_path_clears_a_replaced_owner
+test_the_convergence_wait_is_sized_from_the_owners_recorded_deadline
+test_a_failed_convergence_over_a_live_owner_still_says_so
 test_the_entrypoint_command_is_printed_verbatim
