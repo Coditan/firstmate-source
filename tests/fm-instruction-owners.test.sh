@@ -731,10 +731,14 @@ test_claims_that_outrun_measurement_agree_across_surfaces() {
 # line byte for byte; a short quoted span is a scare-quoted word rather than a
 # reproduction, and is deliberately not compared.
 test_omega_line_citations_resolve() {
-  local file cite target lineno text quote source_line count=0
+  local file name cite target lineno text quote source_line count=0
 
   for file in "$OMEGA_SKILL" "$OMEGA_DUTY"; do
     assert_present "$file" "omega material is missing: $file"
+    # Named once up here: a basename call in the loop body reads $file inside
+    # the same construct the loop redirects from, which ShellCheck reads as a
+    # read-and-write of one file (SC2094).
+    name=$(basename "$file")
     while IFS= read -r source_line; do
       while IFS= read -r cite; do
         [ -n "$cite" ] || continue
@@ -743,16 +747,16 @@ test_omega_line_citations_resolve() {
         count=$((count + 1))
 
         assert_present "$ROOT/$target" \
-          "$(basename "$file") cites $cite but $target does not exist"
+          "$name cites $cite but $target does not exist"
         [ "$(wc -l < "$ROOT/$target")" -ge "$lineno" ] \
-          || fail "$(basename "$file") cites $cite but $target has no line $lineno"
+          || fail "$name cites $cite but $target has no line $lineno"
 
         text=$(sed -n "${lineno}p" "$ROOT/$target")
         [ -n "${text//[[:space:]]/}" ] \
-          || fail "$(basename "$file") cites $cite but that line is blank"
+          || fail "$name cites $cite but that line is blank"
         case "$text" in
           '#'*|'```'*|'---'*|'|'*)
-            fail "$(basename "$file") cites $cite but that line is structure, not prose:"$'\n'"$text" ;;
+            fail "$name cites $cite but that line is structure, not prose:"$'\n'"$text" ;;
         esac
 
         # A reproduction on the citing line has to be the cited line itself.
@@ -762,7 +766,7 @@ test_omega_line_citations_resolve() {
           quote=${quote%\"}
           case "$text" in
             *"$quote"*) : ;;
-            *) fail "$(basename "$file") reproduces as $target:$lineno a line that file does not carry there:"$'\n'"$quote" ;;
+            *) fail "$name reproduces as $target:$lineno a line that file does not carry there:"$'\n'"$quote" ;;
           esac
         fi
       done <<<"$(printf '%s\n' "$source_line" | grep -oE '[A-Za-z0-9._/-]+\.md:[0-9]+')"
