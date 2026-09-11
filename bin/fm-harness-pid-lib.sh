@@ -34,14 +34,27 @@ FM_HARNESS_PID_ERROR=
 # leave the caller unable to say why it failed.
 FM_HARNESS_PID=
 
+# The pids the walk actually visited, nearest first, whether or not it found a
+# harness among them. It is published because a caller that gets the SETTLED
+# negative - the walk completed and no ancestor was a harness - still learns
+# something real from it: these numbers are the processes this one runs under,
+# and therefore the only ones it could be confused with. bin/fm-sessionstart-nudge.sh
+# reads it to decide which stashes a run that cannot name its own harness must
+# clear. It says nothing after harness-lookup-failed, where the table itself
+# could not be read and the walk stopped early with the rest unknown.
+FM_HARNESS_PID_ANCESTRY=
+
 # Print the nearest harness pid at or above the sourcing shell's own pid,
 # walking at most eight parents. Return 1 when no harness ancestor is found,
 # with FM_HARNESS_PID_ERROR naming which of the two failures above it was.
 fm_harness_pid() {
   local pid=$$ comm args _
   FM_HARNESS_PID=
+  # shellcheck disable=SC2034 # Read by callers after fm_harness_pid returns.
+  FM_HARNESS_PID_ANCESTRY=
   FM_HARNESS_PID_ERROR=no-harness-process
   for _ in 1 2 3 4 5 6 7 8; do
+    FM_HARNESS_PID_ANCESTRY="${FM_HARNESS_PID_ANCESTRY:+$FM_HARNESS_PID_ANCESTRY }$pid"
     if ! comm=$(ps -o comm= -p "$pid" 2>/dev/null); then
       FM_HARNESS_PID_ERROR=harness-lookup-failed
       return 1
@@ -114,6 +127,47 @@ fm_harness_alive() {
   kill -0 "$pid" 2>/dev/null || return 1
   comm=$(ps -o comm= -p "$pid" 2>/dev/null) || return 1
   printf '%s' "$(basename "$comm") $(ps -o args= -p "$pid" 2>/dev/null)" | grep -qE "$FM_HARNESS_RE"
+}
+
+# A process's INCARNATION: what tells this process apart from a later one that
+# reuses its pid, and nothing about the image it happens to be running.
+# It is fixed at fork and survives every execve, so it is already correct for a
+# child the caller has only just forked.
+# It lives here, in the leaf library, because the two callers that need it sit on
+# opposite sides of the fleet: bin/fm-wake-lib.sh sources this file for it and
+# builds bin/fm-deferred-check.sh's fuller fm_pid_identity on top, and
+# bin/fm-sessionstart-nudge.sh - a SessionStart hook that must stay small and
+# must not load the wake queue - needs it to prove which process wrote a stashed
+# transcript position. One owner, because a second copy of "is this the same
+# process" would answer that question by its own rules the moment either is edited.
+fm_pid_incarnation() {
+  local pid=$1 out proc_root stat_line starttime
+  local -a stat_fields
+  case "$pid" in
+    ''|*[!0-9]*) return 1 ;;
+  esac
+  proc_root=${FM_PROC_ROOT_OVERRIDE:-/proc}
+  # Prefer /proc on Linux: stat field 22 (starttime, clock ticks since boot) is
+  # immune to the wall-clock steps that re-render the ps lstart fallback's date
+  # (observed as WSL2 btime drift) and would evict a live watcher.
+  if [ "$(uname)" = Linux ] && [ -r "$proc_root/$pid/stat" ]; then
+    stat_line=$(cat "$proc_root/$pid/stat" 2>/dev/null) || return 1
+    # After the final comm delimiter, array index 19 is proc stat field 22.
+    read -r -a stat_fields <<< "${stat_line##*)}"
+    [ "${#stat_fields[@]}" -ge 20 ] || return 1
+    starttime=${stat_fields[19]}
+    case "$starttime" in
+      ''|*[!0-9]*) return 1 ;;
+    esac
+    printf 'linux-starttime=%s\n' "$starttime"
+    return 0
+  fi
+  # Pin LC_ALL=C so lstart's date format is locale-invariant: the identity is
+  # written under one locale but re-read under the machine's ambient locale, which
+  # would otherwise mismatch on a non-C locale (e.g. ko_KR) and reject a live watcher.
+  out=$(LC_ALL=C ps -p "$pid" -o lstart= 2>/dev/null) || return 1
+  [ -n "$out" ] || return 1
+  printf '%s\n' "$out" | sed 's/^[[:space:]]*//'
 }
 
 # --- the pid table a recorded pid belongs to -------------------------------

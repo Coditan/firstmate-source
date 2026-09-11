@@ -104,7 +104,8 @@ The verdict also requires the record's machine-id half to differ, so it clears o
 A container that restarts with the same image-provided or persisted machine id but a fresh pid namespace still reads as foreign, and still needs the hand clear this change was meant to retire.
 `bin/fm-harness-pid-lib.sh` owns the test, `fm-lock.sh status` reports it as `dead-container`, and `fm-lock.sh acquire --supersede-dead-container` is the only path that acts on it.
 `bin/fm-session-start.sh` takes that path itself on that verdict and prints the verdict, both readings and the name of the record it kept.
-It then asks `bin/fm-sessionstart-nudge.sh --rebind-after-supersede` to rebind this home's context-ceiling transcript record to the holder the new lock names, because the SessionStart hook ran before the supersede and correctly wrote nothing for a foreign record; [sessionstart-nudge.md](sessionstart-nudge.md) owns that record and what the rebind can and cannot establish.
+The supersede also rebinds this home's context-ceiling transcript record to the holder the new lock names, because the SessionStart hook ran before it and correctly wrote nothing for a foreign record.
+That is not a step the supersede path owns: `fm-lock.sh` invokes `bin/fm-sessionstart-nudge.sh --rebind-to-lock` under `publish_record`, so every acquisition it makes rebinds and each prints what it did with its own acquisition line; [sessionstart-nudge.md](sessionstart-nudge.md) owns that record and what the rebind can and cannot establish.
 
 This is not a loosening of the liveness test, and the difference is worth stating exactly: nothing here probes a process in a table this session cannot see into.
 It reads the RECORD, twice, and both readings are about the machine and the container rather than about a pid.

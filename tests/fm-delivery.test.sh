@@ -33,10 +33,27 @@ cleanup_listeners() {
 }
 trap 'cleanup_listeners; fm_test_cleanup' EXIT
 
+# This host's own pid-table token, resolved by the one owner of it. A lock record
+# that names no table is one from before this fork wrote them, which the endpoint
+# classifier judges more strictly than a current record, so every fixture that
+# stands in for a healthy holding session writes the record a real acquisition
+# writes today.
+PIDNS=$(bash -c '. "$1/bin/fm-harness-pid-lib.sh"; fm_pid_namespace_token' _ "$ROOT") \
+  || fail "this host cannot name its own pid table"
+
+hold_lock() {  # <home> <pid>
+  printf '%s\npidns=%s\n' "$2" "$PIDNS" > "$1/state/.lock"
+}
+
+# lock_holder <home>: the holder pid the record names, which is line one.
+lock_holder() {  # <home>
+  sed -n '1p' "$1/state/.lock"
+}
+
 make_home() {  # <name> -> prints home path
   local home="$TMP_ROOT/$1"
   mkdir -p "$home/state" "$home/config"
-  printf '%s\n' "$$" > "$home/state/.lock"
+  hold_lock "$home" "$$"
   printf '%s\n' "$home"
 }
 
@@ -104,16 +121,22 @@ publish_endpoint() {  # <home> <backend> <target> [tmux-server]
   fi
   FM_HOME="$1" FM_STATE_OVERRIDE="$1/state" bash -c \
     '. "$1/bin/fm-delivery-lib.sh"; fm_delivery_endpoint_write "$2" "$3" "$4" claude "$5" "$6"' \
-    _ "$ROOT" "$1/state" "$2" "$3" "$(cat "$1/state/.lock")" "$tmux_server" \
+    _ "$ROOT" "$1/state" "$2" "$3" "$(lock_holder "$1")" "$tmux_server" \
     || fail "could not publish the endpoint"
 }
 
 test_endpoint_status_reads_the_holder_from_a_multiline_lock_record() {
-  local home status
+  local home status ns
   home=$(make_home multiline-session-lock)
+  # This host's own pid-table token, not a literal: a holder recorded in another
+  # table is one this session cannot see into, and the classifier is right to
+  # call that endpoint stale rather than deliverable. What is under test here is
+  # only that the holder pid is taken from line one of a multiline record.
+  ns=$(bash -c '. "$1/bin/fm-harness-pid-lib.sh"; fm_pid_namespace_token' _ "$ROOT") \
+    || fail "this host cannot name its own pid table"
   {
     printf '%s\n' "$$"
-    printf 'pidns=pid:[12345]\n'
+    printf 'pidns=%s\n' "$ns"
   } > "$home/state/.lock"
   FM_HOME="$home" bash -c \
     '. "$1/bin/fm-delivery-lib.sh"; fm_delivery_endpoint_write "$2" pi local pi "$3"' \
@@ -128,7 +151,7 @@ test_endpoint_status_reads_the_holder_from_a_multiline_lock_record() {
 
   {
     printf '%s\n' "$$"
-    printf 'pidns=pid:[12345]\n'
+    printf 'pidns=%s\n' "$ns"
     printf 'handover=one-time-ticket\n'
   } > "$home/state/.lock"
   status=$(FM_HOME="$home" bash -c \
@@ -139,7 +162,7 @@ test_endpoint_status_reads_the_holder_from_a_multiline_lock_record() {
 
   {
     printf '%s\n' "999999"
-    printf 'pidns=pid:[12345]\n'
+    printf 'pidns=%s\n' "$ns"
     printf 'handover=one-time-ticket\n'
   } > "$home/state/.lock"
   status=$(FM_HOME="$home" bash -c \
@@ -184,14 +207,14 @@ test_every_not_delivering_state_names_itself() {
   esac
 
   publish_endpoint "$home" tmux '%99'
-  printf '999999\n' > "$home/state/.lock"
+  hold_lock "$home" 999999
   out=$(report "$home")
   case "$out" in
     undeliverable:*"no longer holds the fleet lock"*) ;;
     *) fail "an endpoint from an exited session must be named as stale, got: $out" ;;
   esac
 
-  printf '%s\n' "$$" > "$home/state/.lock"
+  hold_lock "$home" "$$"
   touch "$home/state/.afk"
   out=$(report "$home")
   case "$out" in
@@ -307,7 +330,7 @@ test_a_session_exit_and_restart_loses_no_wake() {
   esac
 
   # A new session starts, takes the lock, and publishes its own endpoint.
-  printf '%s\n' "$$" > "$home/state/.lock"
+  hold_lock "$home" "$$"
   publish_endpoint "$home" tmux '%100'
   out=$(wait_for_report "$home" "published tmux server")
   case "$out" in
@@ -520,7 +543,7 @@ SH
     printf 'backend=tmux\n'
     printf 'target=%s\n' "$owner_pane"
     printf 'harness=claude\n'
-    printf 'session-lock-pid=%s\n' "$(cat "$home/state/.lock")"
+    printf 'session-lock-pid=%s\n' "$(lock_holder "$home")"
   } > "$home/state/.primary-endpoint"
   queue_wake "$home"
   pid=$(start_listener "$home" "TMUX=${sibling_server},0")
@@ -724,7 +747,7 @@ test_publish_endpoint_refuses_rather_than_guessing() {
   [ "$rc" -ne 0 ] || fail "publishing succeeded with no session lock to name"
   assert_contains "$out" "no fleet lock is recorded" "the lockless refusal did not name its reason"
 
-  printf '%s\n' "$$" > "$home/state/.lock"
+  hold_lock "$home" "$$"
   socket="fm-delivery-publish-refusal-$$"
   tmux -L "$socket" new-session -d -s publish-refusal 'sleep 300'
   server=$(tmux -L "$socket" display-message -p -t publish-refusal '#{socket_path},#{pid}')

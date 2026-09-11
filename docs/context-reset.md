@@ -53,7 +53,7 @@ What that sweep owes this mechanism when a ceiling wake calls it is owned by the
 
 | Piece | Owner |
 | --- | --- |
-| Where this session's transcript is | `bin/fm-sessionstart-nudge.sh` writes `state/.primary-transcript` on every primary session start this home's lock is not already held against, including the one a clear creates; [docs/sessionstart-nudge.md](sessionstart-nudge.md) owns that record's own contract, the lock gate, and what a session does when it cannot name its own process, and this mechanism only consumes the record |
+| Where this session's transcript is | `bin/fm-sessionstart-nudge.sh` writes `state/.primary-transcript` on every primary session start this home's lock is not already held against, including the one a clear creates, and rebinds it to the lock's holder after every acquisition, which `bin/fm-lock.sh` reaches from under its own record publisher so no acquisition path can miss it; [docs/sessionstart-nudge.md](sessionstart-nudge.md) owns that record's own contract, the lock gate, and what a session does when it cannot name its own process, and this mechanism only consumes the record |
 | Ceiling, quiet, and captain-present predicates | `bin/fm-context-lib.sh` |
 | The measurement and the reset, ask, blocked, or unenforced branch | `bin/fm-watch.sh`'s `context_ceiling_surface` |
 | The receipt | `bin/fm-stow-receipt.sh` |
@@ -230,7 +230,7 @@ A silent non-fire is the defect class this whole line of work exists to remove, 
 
 ### What firstmate repairs, and what it must not
 
-Only a missing or unreadable `state/.primary-transcript` record, or one whose recorded session pid differs from the lock pid, has no in-session repair: `bin/fm-sessionstart-nudge.sh` re-records it only on a fresh primary session start, so never hand-write that record.
+A missing or unreadable `state/.primary-transcript` record, or one whose recorded session pid differs from the lock pid, is not repaired by hand: `bin/fm-sessionstart-nudge.sh` is its only writer, on a fresh primary session start or through the rebind `bin/fm-lock.sh` runs after every lock acquisition, so never hand-write that record.
 Two ways that record came to name the wrong session were measured on 2026-09-03, and the nudge now refuses both.
 Claude Code's background-job daemon can start a helper session in the primary's cwd, under the primary's own process, and that helper's session-start hook runs against the same home; the invariant is that only the session whose own nearest harness process is the lock holder writes the record, and a descendant of the holder is not the holder.
 A copy of the nudge run without its harness-pid library, with a live home's `FM_HOME` still in the environment, wrote an error record into that home from inside a test run; the invariant is that a run which cannot name its own harness never replaces a good record whose owner is alive, and a wrapper that cannot load its libraries writes nothing.

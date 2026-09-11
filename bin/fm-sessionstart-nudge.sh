@@ -2,10 +2,15 @@
 # Record a genuine firstmate primary's transcript position, unless another live
 # session already holds this home's lock, then print the one-line session-start
 # instruction unless that session already acquired the home lock.
-# With --rebind-after-supersede it instead rebinds the standing record to the
-# holder bin/fm-lock.sh just published by superseding a dead container's lock,
-# which bin/fm-session-start.sh invokes because this hook already ran against
-# the superseded record and, correctly, wrote nothing for it.
+# With --rebind-to-lock it instead rebinds the standing record to the holder
+# named in this home's session lock. bin/fm-lock.sh invokes it from under
+# publish_record, its one writer of that lock, so every acquisition reaches it -
+# the plain one, the dead-container supersede, and the handover redemption alike -
+# because this hook may have run against a lock it correctly refused to write
+# over: a dead container's record it read as foreign, a stale holder cleared only
+# after the hook had already run in this same harness process, or the standing
+# offer of a seat that had not yet handed over. No further SessionStart hook ever
+# fires in any of those sessions.
 # Every silence and error path exits 0 because Claude SessionStart exit 2 blocks
 # session initialization.
 set -u
@@ -31,6 +36,20 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 . "$SCRIPT_DIR/fm-harness-pid-lib.sh" 2>/dev/null || exit 0
 
 RECORD="$STATE/.primary-transcript"
+# The payload this session saw at its own SessionStart, kept only while another
+# session's lock forbids publishing it as the record. It is the ONE place this
+# session's true transcript path and session id survive a refusal: the hook fires
+# once per harness session, so a session refused the record at its start has no
+# second payload to record from when it later takes the lock, and without this it
+# could only ever rebind to an error record. One file per session, named by the
+# harness pid that wrote it, so two refused sessions in one home - a primary and
+# a helper the harness started in the same cwd - never write the same file and
+# neither can destroy the other's only copy. Promotion reads only the file named
+# by the pid the lock publishes, and only when that file names the pid's CURRENT
+# incarnation, so a second, never-locking session's pending file can never become
+# this home's record - not even when the pid it was written under is later handed
+# to the session that does take the lock.
+PENDING_PREFIX="$RECORD.pending."
 LOCK="$STATE/.lock"
 
 # 0 when the holder in state/.lock is live, names this process's pid table, and
@@ -77,15 +96,19 @@ lock_is_in_ancestry() {  # [own-harness-pid]
 # and reads back only what it wrote; the consumer-side reader is
 # fm_context_kv in bin/fm-context-lib.sh, which is not sourced here because it
 # pulls the classification library into a hook that has to stay small.
-record_field() {  # <key>
-  local key=$1 line
-  [ -f "$RECORD" ] || return 1
+kv_field() {  # <file> <key>
+  local file=$1 key=$2 line
+  [ -f "$file" ] || return 1
   while IFS= read -r line || [ -n "$line" ]; do
     case "$line" in
       "$key"=*) printf '%s' "${line#*=}"; return 0 ;;
     esac
-  done < "$RECORD"
+  done < "$file"
   return 1
+}
+
+record_field() {  # <key>
+  kv_field "$RECORD" "$1"
 }
 
 # 0 when the record already standing is a good one whose owner is still alive.
@@ -156,12 +179,16 @@ invalidate_transcript_record() {
 # transcript is worse than one that refuses.
 # docs/sessionstart-nudge.md owns the fields and the consumer contract.
 record_transcript_position() {
-  local payload='' pid='' sid='' path='' err='' tmp
+  local payload='' pid='' sid='' path='' err='' refused=0
   # Resolved with a bounded retry, and before anything else, because everything
   # below turns on it: the gate needs it to tell this session apart from the
   # lock holder, and the record needs it to name its own owner.
   fm_harness_pid_settled >/dev/null && pid=$FM_HARNESS_PID
-  record_belongs_to_another_session "$pid" && return 0
+  record_belongs_to_another_session "$pid" && refused=1
+  # The payload is read whether or not this session may publish, and BEFORE the
+  # refusal returns, because stdin is readable exactly once: a refused session
+  # that skipped this read would have nothing to promote from when it later takes
+  # the lock. Reading it never publishes it; only publish_transcript_record does.
   [ -t 0 ] || IFS= read -r -d '' -t 2 payload 2>/dev/null
   if [ -z "$pid" ]; then
     err=${FM_HARNESS_PID_ERROR:-no-harness-process}
@@ -185,8 +212,168 @@ record_transcript_position() {
       *) err=no-transcript-path ;;
     esac
   fi
+  if [ "$refused" = 1 ]; then
+    # Another live session holds this home, so this session's payload is stashed
+    # rather than published. A payload that yielded no usable transcript is worth
+    # nothing to a later rebind, so it leaves no pending file behind to promote.
+    if [ -n "$err" ]; then
+      discard_or_sweep_pending_records "$pid"
+    else
+      publish_pending_record "$pid" "$sid" "$path"
+    fi
+    return 0
+  fi
+  # This session is publishing for real, so its own stash has nothing left to
+  # say. Another session's stash is left where it is: that session may still take
+  # the lock later, and it is the only copy of its transcript position.
+  discard_or_sweep_pending_records "$pid"
   publish_transcript_record "$pid" "$sid" "$path" "$err"
   return 0
+}
+
+# Clear the stashes this run's own session must no longer be represented by.
+# Why anything beyond its own file has to go: a stash proves which PROCESS wrote
+# it, and a clear starts a new SESSION inside that same process, so a stash left
+# by the session before this one passes every process-level proof there is. A run
+# that cannot name its own harness cannot name the file that speaks for it, so it
+# must not leave one standing as its own.
+# How WIDE that has to be is the whole question, and the two failures answer it
+# differently, which is why they are kept apart here:
+#   a pid          one file, its own, and every other session's is left alone.
+#   no-harness-process  the walk COMPLETED and simply found no harness among the
+#                  processes it read, so this run does know which processes it
+#                  runs under: only a stash naming one of those could be confused
+#                  with its own, and only those are cleared.
+#   anything else  harness-lookup-failed, where the process table could not be
+#                  read at all and this run knows nothing about its own ancestry,
+#                  so every stash is cleared.
+# The narrowing matters because both failures are measured rather than
+# hypothetical, and the wide sweep run from an unrelated helper session would
+# destroy the primary's only copy of its transcript position over a probe that
+# had nothing to do with it. Within the set it does clear, the trade is the right
+# way round: a discarded stash costs an unmeasured ceiling that says so, while a
+# stash promoted for the wrong session measures the ceiling against another
+# session's transcript and says nothing.
+discard_or_sweep_pending_records() {  # <pid-or-empty>
+  local pending ancestor
+  if [ -n "$1" ]; then
+    discard_pending_record "$1"
+    return 0
+  fi
+  if [ "${FM_HARNESS_PID_ERROR:-}" = no-harness-process ] \
+     && [ -n "${FM_HARNESS_PID_ANCESTRY:-}" ]; then
+    for ancestor in $FM_HARNESS_PID_ANCESTRY; do
+      discard_pending_record "$ancestor"
+    done
+    return 0
+  fi
+  for pending in "$PENDING_PREFIX"*; do
+    [ -e "$pending" ] || continue
+    rm -f "$pending" 2>/dev/null || : > "$pending" 2>/dev/null || true
+  done
+}
+
+pending_path() {  # <pid>
+  printf '%s%s' "$PENDING_PREFIX" "$1"
+}
+
+# Stash this session's own transcript position while another session's lock
+# forbids publishing it. Written atomically like the record itself, and a stash
+# that cannot be written leaves nothing behind rather than a partial file a
+# later rebind would read as this session's.
+# The writer's process INCARNATION is recorded beside its pid, the way
+# state/.delivery.lock/pid-identity records a listener's, because a pid alone
+# does not name a process: a session refused here can exit without ever taking
+# the lock, and its stash outlives it inside this same container, where the same
+# pid is handed to the next harness session. Promotion compares both. A writer
+# whose own incarnation cannot be read stashes nothing at all rather than a file
+# that could never be proven at promotion.
+publish_pending_record() {  # <pid> <session-id> <transcript-path>
+  local pending tmp incarnation
+  incarnation=$(fm_pid_incarnation "$1" 2>/dev/null) \
+    || { discard_pending_record "$1"; return 0; }
+  [ -n "$incarnation" ] || { discard_pending_record "$1"; return 0; }
+  pending=$(pending_path "$1")
+  tmp="$pending.$$"
+  printf 'status=ok\nharness_pid=%s\nharness_incarnation=%s\nsession_id=%s\ntranscript_path=%s\nrecorded_at=%s\n' \
+    "$1" "$incarnation" "$2" "$3" "$(date +%s)" > "$tmp" 2>/dev/null \
+    || { rm -f "$tmp" 2>/dev/null; discard_pending_record "$1"; return 0; }
+  mv -f "$tmp" "$pending" 2>/dev/null \
+    || { rm -f "$tmp" 2>/dev/null; discard_pending_record "$1"; }
+  return 0
+}
+
+# 0 when <pending> records the incarnation the process at <pid> is running under
+# right now, which proves that very process wrote it and is still alive. A
+# reading that cannot be taken on either side is NOT PROVEN and answers 1.
+# This is the strongest thing anything here can establish about a stash, and both
+# the sweep and the promotion turn on it.
+pending_incarnation_is_current() {  # <pending-path> <pid>
+  local stashed live
+  stashed=$(kv_field "$1" harness_incarnation) || return 1
+  [ -n "$stashed" ] || return 1
+  live=$(fm_pid_incarnation "$2" 2>/dev/null) || return 1
+  [ -n "$live" ] || return 1
+  [ "$stashed" = "$live" ]
+}
+
+# Remove only the stash named by <pid>. Every other session's stash is left
+# where it is, for the reason record_transcript_position gives.
+discard_pending_record() {  # <pid>
+  local pending
+  pending=$(pending_path "$1")
+  rm -f "$pending" 2>/dev/null || : > "$pending" 2>/dev/null || true
+}
+
+# Remove the files under this prefix that can never be used again, on two
+# readings that hold on different hosts.
+#
+# The LIVENESS reading holds everywhere and needs nothing from /proc: a stash
+# whose named pid is no longer live can never be promoted by anybody, because
+# promotion needs that pid's process incarnation to be readable NOW and to match
+# what the stash recorded, and a process that is gone satisfies neither. Removing
+# it is therefore lossless on any host, and it is what bounds the one file per
+# refused session that would otherwise accumulate for the life of the container:
+# a helper session the harness starts in the primary's own cwd is refused the
+# record, stashes, and exits without ever taking the lock. The same reading
+# clears the half-written temporaries publish_pending_record leaves if it dies
+# between writing and renaming, which nothing else ever removes: those are named
+# <stash>.<writer pid>, so a live writer's file is a rename still in flight and
+# is left alone, while a dead writer's is an orphan no rename will ever claim.
+#
+# The AGE reading needs this container's start and so holds only where that can
+# be read: a stash written before this container started names a process in a pid
+# table that no longer exists, where the same small numbers are handed out again.
+# Where the start cannot be read that half stands down rather than guessing,
+# because deleting on an unprovable reading would throw away the very stashes the
+# rebind promotes on exactly the hosts that need them most.
+sweep_stale_pending_records() {
+  local pending suffix pid
+  for pending in "$PENDING_PREFIX"*; do
+    [ -e "$pending" ] || continue
+    suffix=${pending#"$PENDING_PREFIX"}
+    pid=${suffix##*.}
+    case "$pid" in
+      ''|*[!0-9]*) ;;
+      *)
+        if ! kill -0 "$pid" 2>/dev/null; then
+          rm -f "$pending" 2>/dev/null || : > "$pending" 2>/dev/null || true
+          continue
+        fi ;;
+    esac
+    case "$suffix" in
+      *.*) continue ;;
+    esac
+    # A stash whose recorded incarnation is the one its pid is running under now
+    # was written by that live process, which cannot be older than the container
+    # it is running in. So the age reading is never allowed to remove it: when the
+    # two disagree the clock is the reading to doubt, and this file is that
+    # session's only copy of where its transcript is.
+    pending_incarnation_is_current "$pending" "$pid" && continue
+    if container_start_epoch_once && ! file_postdates_this_container "$pending"; then
+      rm -f "$pending" 2>/dev/null || : > "$pending" 2>/dev/null || true
+    fi
+  done
 }
 
 # publish_transcript_record <pid> <session-id> <transcript-path> <error>: write
@@ -210,11 +397,16 @@ publish_transcript_record() {
   return 0
 }
 
-# Rebind the record to the holder bin/fm-lock.sh published by superseding a
-# dead container's lock. This hook ran before that supersede, read the dead
-# container's record as foreign and wrote nothing, so without this the record
-# still names the previous container's harness and the context ceiling is
-# reported unenforced for the whole life of the new session. The owner is the
+# Rebind the record to the holder named in this home's session lock, after
+# bin/fm-session-start.sh has acquired it - whether by an ordinary acquisition
+# or by superseding a dead container's lock. This hook may have run before that
+# acquisition against a record it was right to leave alone, and wrote nothing
+# for this session; without this the record still names a dead harness and the
+# context ceiling is reported unenforced for the whole life of the new session.
+# Measured on this seat 2026-09-06: a record naming the pre-rebuild session's
+# pid 147 left the ceiling unenforced from 11:32Z to the end of the day, because
+# the lock was cleared and session start re-run inside the same harness process,
+# where no second SessionStart hook fires. The owner is the
 # pid the new lock names, in this process's own pid table, because that is the
 # value the consumer compares the record against. The SessionStart payload that
 # carries session_id and transcript_path is not available here and is never
@@ -227,17 +419,90 @@ publish_transcript_record() {
 # can name the very pid this container's harness got, and leaving it would
 # measure the previous container's transcript for the life of this session. The
 # record's age is its mtime, the same kernel-set reading the lock predicate
-# uses, and an age or container start that cannot be read never proves the
-# record current. Prints one line saying what it did.
-record_postdates_this_container() {
-  local mtime started
-  mtime=$(fm_file_mtime_epoch "$RECORD") || return 1
-  started=$(fm_container_start_epoch) || return 1
-  [ "$mtime" -ge "$started" ]
+# uses, weighed against this container's start. A reading that CAN be taken and
+# shows the record predates this container replaces it; a container start that
+# cannot be read on this host at all proves nothing either way, and there a
+# record naming a live holder is left alone rather than destroyed. Prints one
+# line saying what it did, and nothing at all when the record already names the
+# holder and is kept, so an ordinary healthy session start carries no extra line.
+
+# The epoch second this container started, read at most once per run and kept,
+# because every question below asks it of the same host. Empty means this host
+# cannot answer it AT ALL, which is not the same as an old file and must never
+# be collapsed into one: fm_container_start_epoch reads /proc/stat and
+# /proc/1/stat, so it answers nothing on Darwin, and nothing in a Linux
+# container whose hidepid hides /proc/1. Returns 1 in that case.
+CONTAINER_START=
+CONTAINER_START_TAKEN=0
+container_start_epoch_once() {
+  if [ "$CONTAINER_START_TAKEN" = 0 ]; then
+    CONTAINER_START_TAKEN=1
+    CONTAINER_START=$(fm_container_start_epoch) || CONTAINER_START=
+  fi
+  [ -n "$CONTAINER_START" ]
 }
 
-rebind_record_after_supersede() {
-  local lock_pid mine_ns
+# Three answers rather than two, because "this file was written before this
+# container started" and "this host cannot say when this container started" are
+# different facts and only the first one condemns a file:
+#   0  proven written after this container started
+#   1  proven older, or its own mtime cannot be read while the container start can
+#   2  the container start cannot be read here, so neither is proven
+# The readability of the container start is tested directly rather than inferred
+# from a comparison that failed, so answer 1 always means a reading was taken.
+file_postdates_this_container() {  # <path>
+  local mtime
+  container_start_epoch_once || return 2
+  mtime=$(fm_file_mtime_epoch "$1") || return 1
+  [ "$mtime" -ge "$CONTAINER_START" ]
+}
+
+record_postdates_this_container() {
+  file_postdates_this_container "$RECORD"
+}
+
+# Promote the stash this session left at its own SessionStart into the record.
+# Only the file named by <holder> - the pid the lock now publishes - is read, and
+# it is promoted when it proves it was written by that very process, as that
+# process is running now: its harness_pid names the holder, and its recorded
+# incarnation is the one the holder is running under at this moment. A stash
+# naming another pid belongs to another session; a stash naming that pid in
+# another incarnation belongs to whoever held the number before this harness
+# session did, inside this same container.
+# The incarnation is asked FIRST and is decisive, and this function no longer
+# consults the container-age reading at all: a live process cannot be older than
+# the container it is running in, so an age reading that disagrees with a matching
+# incarnation is the reading that is wrong, and refusing on it would delete the
+# only copy of this session's transcript position over a clock. The age reading
+# still runs in the sweep, where it removes what no incarnation vouches for.
+# A reading that cannot be taken on either side is NOT PROVEN and refuses the
+# promotion, because this is the one failure here that would be silent: an error
+# record says the ceiling is unmeasured, while a wrong record measures it against
+# another session's transcript and says nothing.
+# Returns 1 when there is nothing promotable, leaving the record untouched for
+# the caller's error path. The holder's stash is discarded either way: it has
+# served its one purpose, and a stash left behind would be promoted again by a
+# later rebind against a pid it no longer describes. Every other session's stash
+# is left alone.
+promote_pending_record() {  # <holder-pid>
+  local holder=$1 pending pid sid path
+  pending=$(pending_path "$holder")
+  pid=$(kv_field "$pending" harness_pid) || return 1
+  sid=$(kv_field "$pending" session_id) || { discard_pending_record "$holder"; return 1; }
+  path=$(kv_field "$pending" transcript_path) || { discard_pending_record "$holder"; return 1; }
+  if [ "$pid" != "$holder" ] || [ -z "$sid" ] || [ -z "$path" ] \
+     || ! pending_incarnation_is_current "$pending" "$holder"; then
+    discard_pending_record "$holder"
+    return 1
+  fi
+  discard_pending_record "$holder"
+  publish_transcript_record "$holder" "$sid" "$path" ""
+  [ "$(record_field status)" = ok ] && [ "$(record_field harness_pid)" = "$holder" ]
+}
+
+rebind_record_to_lock() {
+  local lock_pid mine_ns record_age
+  sweep_stale_pending_records
   if ! fm_session_lock_record_read "$LOCK"; then
     invalidate_transcript_record
     printf 'context-ceiling record: the lock cannot be read back (%s), so the previous record was removed rather than left naming a dead harness\n' \
@@ -260,13 +525,43 @@ rebind_record_after_supersede() {
       "$FM_LOCK_RECORD_PIDNS"
     return 0
   fi
-  if [ "$(record_field harness_pid)" = "$lock_pid" ] && record_postdates_this_container; then
-    printf 'context-ceiling record: already names harness pid %s and was written after this container started\n' "$lock_pid"
+  # Promotion is attempted FIRST, before any question about the record standing.
+  # A stash and a record that name the same process are not equal claims: the
+  # stash is always the newer of the two, because every hook run that publishes
+  # the record clears the stashes it owns before writing, and promotion clears
+  # the stash before publishing. So a record naming this holder can be one an
+  # EARLIER session wrote in this same process, which a clear leaves behind, and
+  # letting it win would measure this session's ceiling against that session's
+  # transcript with nothing said - the wrong number rather than no number, which
+  # is the one outcome this record's design refuses.
+  if promote_pending_record "$lock_pid"; then
+    printf 'context-ceiling record: rebound to harness pid %s from the transcript this session recorded at its own start, which the lock standing then forbade publishing\n' \
+      "$lock_pid"
     return 0
   fi
-  publish_transcript_record "$lock_pid" "" "" superseded-without-hook-payload
+  # Nothing promotable, so what is standing is all there is, and a record that
+  # already names this holder is kept rather than replaced by an error.
   if [ "$(record_field harness_pid)" = "$lock_pid" ]; then
-    printf 'context-ceiling record: rebound to harness pid %s as an explicit error (superseded-without-hook-payload), because the SessionStart payload naming this session'"'"'s transcript is not available after a supersede; the ceiling is reported unenforced with that cause until this session records its transcript again\n' \
+    record_postdates_this_container
+    record_age=$?
+    # Proven current, so there is nothing to rebind. Or this host cannot say when
+    # its container started, in which case a record naming a holder that is alive
+    # right now is left exactly as it is: it is almost always the one this
+    # session's own SessionStart hook wrote seconds ago, and replacing it with an
+    # error record would report the ceiling unenforced for the life of EVERY
+    # session on that host - the failure this rebind exists to remove, made
+    # unconditional. The cost is stated rather than hidden: on such a host a
+    # record left by a previous container whose harness pid is live again here is
+    # kept when no stash contradicts it, because nothing else on that host tells
+    # the two apart.
+    case "$record_age" in
+      0) return 0 ;;
+      2) kill -0 "$lock_pid" 2>/dev/null && return 0 ;;
+    esac
+  fi
+  publish_transcript_record "$lock_pid" "" "" rebound-without-hook-payload
+  if [ "$(record_field harness_pid)" = "$lock_pid" ]; then
+    printf 'context-ceiling record: rebound to harness pid %s as an explicit error (rebound-without-hook-payload), because no SessionStart payload naming this session'"'"'s transcript is available to rebind from; the ceiling is reported unenforced with that cause until this session records its transcript again\n' \
       "$lock_pid"
   else
     printf 'context-ceiling record: could not be rebound to harness pid %s, so the previous record was removed rather than left naming a dead harness\n' \
@@ -277,8 +572,8 @@ rebind_record_after_supersede() {
 
 fm_is_gate_agent "$FM_ROOT" && exit 0
 fm_primary_scope_matches "$FM_ROOT" "$STATE" || exit 0
-if [ "${1-}" = --rebind-after-supersede ]; then
-  rebind_record_after_supersede
+if [ "${1-}" = --rebind-to-lock ]; then
+  rebind_record_to_lock
   exit 0
 fi
 record_transcript_position

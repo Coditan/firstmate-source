@@ -100,6 +100,35 @@ run_sync() {
   FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" "$ROOT/bin/fm-fleet-sync.sh" "$@" 2>/dev/null
 }
 
+# run_bootstrap <home>: a session start against an isolated home, stdout only,
+# plus whatever its clone refresh reported after the digest closed.
+#
+# The refresh is DEFERRED (bin/fm-deferred-check.sh): bootstrap starts it early,
+# collects it at the end with no grace, and a run that has not finished by then
+# reports itself pending and delivers its own result afterwards. So a case about
+# what a session start RELAYS has to ask for the whole delivery rather than race
+# the collect call and call the loser a regression - which is what a loaded CI
+# runner did to the recovered/STUCK case on 2026-09-10, while the same fixture
+# won the race on every unloaded machine. Same shape as
+# append_deferred_fleet_sync_result in tests/fm-bootstrap.test.sh.
+run_bootstrap() {
+  local home=$1 out generation dir waited=0
+  out=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" "$ROOT/bin/fm-bootstrap.sh" 2>/dev/null)
+  printf '%s\n' "$out"
+  case "$out" in
+    *"FLEET_SYNC: fleet: pending:"*) ;;
+    *) return 0 ;;
+  esac
+  generation=$(cat "$home/state/.deferred/fleet-sync/current" 2>/dev/null || true)
+  [ -n "$generation" ] || return 0
+  dir="$home/state/.deferred/fleet-sync/$generation"
+  while [ ! -f "$dir/done" ] && [ "$waited" -lt 600 ]; do
+    sleep 0.1
+    waited=$((waited + 1))
+  done
+  [ ! -f "$dir/out" ] || cat "$dir/out"
+}
+
 # --- packed-refs.lock fixtures ----------------------------------------------
 
 # build_packed_prunable <home> <name>: like build_pair, but the clone has PACKED
@@ -596,7 +625,7 @@ test_bootstrap_surfaces_a_refresh_that_could_not_read_the_registry() {
     return 0
   }
 
-  out=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" "$ROOT/bin/fm-bootstrap.sh" 2>/dev/null)
+  out=$(run_bootstrap "$home")
   chmod 644 "$home/data/projects.md"
 
   assert_contains "$out" "cannot read the project registry" \
@@ -805,7 +834,7 @@ test_bootstrap_surfaces_a_projects_path_it_cannot_resolve() {
     || fail "could not stage a dangling projects symlink"
   printf -- '- a-clone - test project (added 2026-08-31)\n' > "$home/data/projects.md"
 
-  out=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" "$ROOT/bin/fm-bootstrap.sh" 2>/dev/null)
+  out=$(run_bootstrap "$home")
 
   assert_contains "$out" "cannot list the projects directory" \
     "the session start must relay the projects path the refresh could not resolve: $out"
@@ -827,7 +856,7 @@ test_bootstrap_surfaces_a_projects_path_that_is_not_a_directory() {
   : > "$home/projects" || fail "could not stage a regular file at the projects path"
   printf -- '- a-clone - test project (added 2026-08-31)\n' > "$home/data/projects.md"
 
-  out=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" "$ROOT/bin/fm-bootstrap.sh" 2>/dev/null)
+  out=$(run_bootstrap "$home")
 
   assert_contains "$out" "cannot list the projects directory" \
     "the session start must relay a projects path that is not a directory: $out"
@@ -856,7 +885,7 @@ test_bootstrap_surfaces_an_unreadable_registry_when_it_keeps_no_clones() {
     return 0
   fi
 
-  out=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" "$ROOT/bin/fm-bootstrap.sh" 2>/dev/null)
+  out=$(run_bootstrap "$home")
   chmod 644 "$reg"
 
   assert_contains "$out" "cannot read the project registry" \
@@ -874,7 +903,7 @@ test_bootstrap_stays_silent_for_a_home_that_keeps_no_clones() {
   rm -rf "$home"
   mkdir -p "$home/data"
 
-  out=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" "$ROOT/bin/fm-bootstrap.sh" 2>/dev/null)
+  out=$(run_bootstrap "$home")
 
   assert_not_contains "$out" "FLEET_SYNC" \
     "a home that keeps no clones must not report on a fleet refresh at all: $out"
@@ -894,7 +923,7 @@ test_bootstrap_relays_recovered_and_stuck() {
 
   # Full bootstrap: no state/ dir -> secondmate sync no-ops; no .env -> X mode off.
   # We only assert the fleet-sync relay lines; other detect lines are irrelevant.
-  out=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" "$ROOT/bin/fm-bootstrap.sh" 2>/dev/null)
+  out=$(run_bootstrap "$home")
 
   assert_contains "$out" "FLEET_SYNC: stuck-clone: STUCK:" "bootstrap relays the STUCK outcome"
   assert_contains "$out" "FLEET_SYNC: rec-clone: recovered:" "bootstrap relays the recovered outcome"

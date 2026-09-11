@@ -56,10 +56,27 @@ lib_verdicts() {
   bash -c '. "$1/bin/fm-delivery-lib.sh"; printf "%s\n" "$FM_DELIVERY_VERDICTS"' _ "$ROOT"
 }
 
+# This host's own pid-table token, resolved by the one owner of it. A lock record
+# that names no table is a record from before this fork wrote them, and the
+# classifier now judges such a record more strictly than a current one, so a
+# fixture standing in for a healthy session writes the record a real acquisition
+# writes today.
+PIDNS=$(bash -c '. "$1/bin/fm-harness-pid-lib.sh"; fm_pid_namespace_token' _ "$ROOT") \
+  || fail "this host cannot name its own pid table"
+
+hold_lock() {  # <home> <pid>
+  printf '%s\npidns=%s\n' "$2" "$PIDNS" > "$1/state/.lock"
+}
+
+# lock_holder <home>: the holder pid the record names, which is line one.
+lock_holder() {  # <home>
+  sed -n '1p' "$1/state/.lock"
+}
+
 make_home() {  # <name> -> prints home path
   local home="$TMP_ROOT/$1"
   mkdir -p "$home/state" "$home/config"
-  printf '%s\n' "$$" > "$home/state/.lock"
+  hold_lock "$home" "$$"
   printf '%s\n' "$home"
 }
 
@@ -91,7 +108,7 @@ queue_wake() {  # <home>
 publish_endpoint() {  # <home>
   FM_HOME="$1" FM_STATE_OVERRIDE="$1/state" bash -c \
     '. "$1/bin/fm-delivery-lib.sh"; fm_delivery_endpoint_write "$2" tmux "%7" claude "$3" "/tmp/fm-contract-$$.sock,99999"' \
-    _ "$ROOT" "$1/state" "$(cat "$1/state/.lock")" \
+    _ "$ROOT" "$1/state" "$(lock_holder "$1")" \
     || fail "could not publish the endpoint"
 }
 
@@ -231,6 +248,82 @@ test_every_verdict_reaches_the_machine_line_with_its_exit_status() {
   pass "every verdict reaches the machine line through the service command with its documented exit status"
 }
 
+# A rebuilt container leaves this home's own lock record and its own endpoint
+# record behind, both naming the same pid of a process that died with the
+# previous container - and in a pid table this session cannot see into. Pid
+# equality alone reads that pair as deliverable, and the listener then types a
+# drain nudge into a seat that holds no lock, on every retry. Two fixtures, one
+# for each half of what the classifier must now establish: the holder's table,
+# and the holder's liveness.
+test_a_foreign_or_dead_lock_holder_is_never_deliverable() {
+  local home dead
+
+  home=$(make_home foreign-table)
+  make_live_listener "$home"
+  queue_wake "$home"
+  publish_endpoint "$home"
+  check_verdict "$home" delivering ''
+  {
+    printf '%s\n' "$$"
+    printf 'pidns=linux:00000000000000000000000000000000:pid:[4026531836]\n'
+  } > "$home/state/.lock"
+  check_verdict "$home" undeliverable endpoint-stale-session
+
+  home=$(make_home dead-holder)
+  make_live_listener "$home"
+  queue_wake "$home"
+  # A pid that has already exited, obtained the way tests/fm-turnend-guard.test.sh
+  # obtains one: a subshell that exits at once, reaped before its number is used.
+  # Never `sleep N &` then `kill $!`: the signal can land before the child has
+  # exec'd sleep, while it is still a bash that inherited this test's TERM trap,
+  # and that trap's EXIT cleanup removes the temp root and kills every holder
+  # under the test's feet (or the child swallows the signal and sleeps out the
+  # full N seconds, past the listener holder's own lifetime).
+  ( exit 0 ) & dead=$!
+  wait "$dead" 2>/dev/null || true
+  printf '%s\npidns=%s\n' "$dead" "$PIDNS" > "$home/state/.lock"
+  publish_endpoint "$home"
+  check_verdict "$home" undeliverable endpoint-stale-session
+
+  pass "an endpoint whose lock holder sits in another pid table, or is no longer alive, is undeliverable rather than typed into"
+}
+
+# The same rebuilt-container pair, reached through the older door: a lock record
+# written before this fork recorded pid tables names none, so nothing about the
+# table is compared and the holder pid is read as a number in this container's
+# table. This test process is alive and is not a harness, which is exactly the
+# shape a recycled pre-rebuild pid has, and asking only whether the number
+# resolves reads that pair as deliverable again.
+test_a_legacy_lock_record_needs_a_live_harness_rather_than_a_live_number() {
+  local home holder
+
+  home=$(make_home legacy-table)
+  # The holder whose SHAPE this case turns on has to be a process the fixture
+  # controls. On the legacy branch the classifier asks fm_harness_alive, which
+  # reads `ps -o args=`, and this test script's own command line carries the
+  # checkout path: a repository sitting under a directory named for one of the
+  # harnesses would answer "harness" and flip the verdict, making the assertion
+  # depend on where the tree lives rather than on the code. A sleeping process
+  # names no path and is a harness on no host.
+  sleep 300 &
+  holder=$!
+  HOLDERS+=("$holder")
+  hold_lock "$home" "$holder"
+  make_live_listener "$home"
+  queue_wake "$home"
+  publish_endpoint "$home"
+  check_verdict "$home" delivering ''
+
+  # Same holder pid, same endpoint, and the only change is that the record names
+  # no pid table - the state a home carries until its first acquisition on this
+  # fork replaces the record.
+  holder=$(lock_holder "$home")
+  printf '%s\n' "$holder" > "$home/state/.lock"
+  check_verdict "$home" undeliverable endpoint-stale-session
+
+  pass "a lock record naming no pid table needs a live harness, not merely a live pid, before its endpoint is deliverable"
+}
+
 test_the_library_vocabulary_is_covered_and_agrees_with_the_documented_exits() {
   local verdict lib_exit
   for verdict in $(lib_verdicts); do
@@ -300,6 +393,8 @@ test_the_documentation_names_every_verdict_and_every_key() {
 }
 
 test_every_verdict_reaches_the_machine_line_with_its_exit_status
+test_a_foreign_or_dead_lock_holder_is_never_deliverable
+test_a_legacy_lock_record_needs_a_live_harness_rather_than_a_live_number
 test_the_library_vocabulary_is_covered_and_agrees_with_the_documented_exits
 test_the_reason_token_travels_with_the_listener_record
 test_unknown_flags_are_refused_rather_than_ignored

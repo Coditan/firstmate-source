@@ -22,6 +22,14 @@ mkdir -p "$STATE"
 # forget. The guard breaks the cycle: bin/fm-journal-lib.sh sources this file
 # back when it is loaded first, and each half sets its own directory variable
 # before sourcing the other.
+# The pid-identity leaf: it owns fm_pid_incarnation, which fm_pid_identity below
+# extends, and it is a leaf with no side effects on source, so loading it here
+# costs nothing and keeps one owner for "is this the same process".
+if ! declare -F fm_pid_incarnation >/dev/null 2>&1; then
+  # shellcheck source=bin/fm-harness-pid-lib.sh
+  . "$FM_WAKE_LIB_DIR/fm-harness-pid-lib.sh"
+fi
+
 if [ -z "${FM_JOURNAL_LIB_DIR:-}" ]; then
   # shellcheck source=bin/fm-journal-lib.sh
   . "$FM_WAKE_LIB_DIR/fm-journal-lib.sh"
@@ -39,45 +47,15 @@ fm_pid_alive() {
   kill -0 "$pid" 2>/dev/null
 }
 
-# A process's INCARNATION: what tells this process apart from a later one that
-# reuses its pid, and nothing about the image it happens to be running.
-# It is fixed at fork and survives every execve, so it is already correct for a
-# child the caller has only just forked.
+# fm_pid_incarnation - a process's INCARNATION, what tells it apart from a later
+# process that reuses its pid - is owned by bin/fm-harness-pid-lib.sh, sourced
+# above, because a SessionStart hook that must not load this queue needs it too.
 # fm_pid_identity below adds the image on top; use that only for a process that
 # has already settled into its final image, never for one still walking a
 # shebang chain (see the warning on fm_pid_identity).
 # fm_pid_identity extends the incarnation rather than replacing it, so a record
 # written as a full identity still carries its incarnation as its leading fields;
 # fm_pid_incarnation_matches_record is what reads it back out of one.
-fm_pid_incarnation() {
-  local pid=$1 out proc_root stat_line starttime
-  local -a stat_fields
-  case "$pid" in
-    ''|*[!0-9]*) return 1 ;;
-  esac
-  proc_root=${FM_PROC_ROOT_OVERRIDE:-/proc}
-  # Prefer /proc on Linux: stat field 22 (starttime, clock ticks since boot) is
-  # immune to the wall-clock steps that re-render the ps lstart fallback's date
-  # (observed as WSL2 btime drift) and would evict a live watcher.
-  if [ "$(uname)" = Linux ] && [ -r "$proc_root/$pid/stat" ]; then
-    stat_line=$(cat "$proc_root/$pid/stat" 2>/dev/null) || return 1
-    # After the final comm delimiter, array index 19 is proc stat field 22.
-    read -r -a stat_fields <<< "${stat_line##*)}"
-    [ "${#stat_fields[@]}" -ge 20 ] || return 1
-    starttime=${stat_fields[19]}
-    case "$starttime" in
-      ''|*[!0-9]*) return 1 ;;
-    esac
-    printf 'linux-starttime=%s\n' "$starttime"
-    return 0
-  fi
-  # Pin LC_ALL=C so lstart's date format is locale-invariant: the identity is
-  # written under one locale but re-read under the machine's ambient locale, which
-  # would otherwise mismatch on a non-C locale (e.g. ko_KR) and reject a live watcher.
-  out=$(LC_ALL=C ps -p "$pid" -o lstart= 2>/dev/null) || return 1
-  [ -n "$out" ] || return 1
-  printf '%s\n' "$out" | sed 's/^[[:space:]]*//'
-}
 
 # The incarnation plus the process image, so that PID reuse stays a mismatch even
 # on a starttime tick collision.
