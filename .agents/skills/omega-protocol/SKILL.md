@@ -1,7 +1,8 @@
 ---
 name: omega-protocol
 description: >-
-  Agent-only definition of the captain's omega protocol: broad away-window authority to attach to a seat's tmux, type into its composer, and answer its confirmation prompts on his behalf, in force only after he has invoked it by name.
+  Agent-only definition of the captain's omega protocol: broad away-window authority to attach to this vessel's own seats over tmux, type into their composers, and answer their confirmation prompts on his behalf, in force only after he has invoked it by name.
+  It drives work inside one vessel and grants nothing that reaches another vessel's seat; communication between vessels is the Bridge envelope protocol and always was.
   Load when the captain names the omega protocol in chat, before acting on any of its grants, and when the away window it was invoked for ends.
 user-invocable: false
 metadata:
@@ -28,9 +29,22 @@ He invoked it again on 2026-09-04, verbatim, and that invocation is what fixed t
 
 > "go till finished under omega protocol, write omega protocol into fleet or at least give coditan the task to do it maybe omega protocol should be a skill"
 
-Later on 2026-09-04 he corrected the reach of the grant and restated what prefilled text is, verbatim:
+Later on 2026-09-04 he named one seat by hand and restated what prefilled text is, verbatim:
 
 > "correction you are allowed to write in coditans chat window i gurantue thers nothing from me tehre if you see something it is the suggestions from claude code itself, free to take by you ore overwrite..."
+
+Those words were read at the time as a standing grant to type into another vessel's seat, and were acted on.
+On 2026-09-08 he ruled that reading wrong, verbatim:
+
+> "that was a one time when we were setting you up during container start"
+
+and, on the reach of the protocol itself:
+
+> "cross vessel is not part of omega... its to drive work, that only involves one vesssel... for comms between vessel we havve the bridge if that vessel is on omega as well it has more leeway anyhow to answer and go throuhg with things"
+
+His 2026-09-08 words govern.
+The 2026-09-04 permission was a one-time occasion during that container's setup, not a standing grant, and it is kept here only so a later reader can see why the wider reading ever existed.
+What survives of it below is what it says about prefilled composer text, which was never about reach.
 
 ## When it is in force
 
@@ -48,9 +62,15 @@ An invocation without a following `/afk` grants nothing until the window opens, 
 
 ## What it grants, for its window only
 
-- Firstmate may attach to a seat's tmux and type directly into that seat's composer.
-  The seat may be another vessel's, for example the Coditan seat inside its container, and his 2026-09-04 correction says so outright: "you are allowed to write in coditans chat window".
+- Firstmate may attach to one of this vessel's own seats over tmux and type directly into that seat's composer.
+  Those seats are this vessel's own workers - its crewmates, scouts, and secondmates - because the protocol drives work that involves one vessel only: "its to drive work, that only involves one vesssel".
+  Naming secondmates there adds no reach, on evidence this repository cannot check for itself: a reading taken in the fleet repository on 2026-09-08 - `fleet/doctrine/peer-dispatch.md` does not live here, so nothing in this worktree confirms it - reports line 55 of the fleet's cross-vessel rule as "Not in scope: a vessel steering its own crewmates, its own scouts, or its own secondmates. Those are its own direct reports in its own home, and bin/fm-send.sh is the correct tool.", which puts a secondmate seat outside that ban, so it was never another vessel's seat for it.
+  This bounds only what the cross-vessel ban excludes for this protocol; it does not settle what "vessel" means generally, and this repository's separate sense of a secondmate home as its own vessel (`docs/configuration.md:574`, `docs/configuration.md:57`) is left standing and unresolved.
+  It never reaches another vessel's seat; reaching another vessel is the Bridge envelope protocol, "for comms between vessel we havve the bridge".
   The standing rule that firstmate only steers through its recorded channels is suspended for this one purpose and for the named task alone.
+  No other standing rule is suspended with it: within the window firstmate types the announcement and the named task's text into that seat, and none of the seat's own rules gives way beyond that.
+  At a secondmate's seat the line falls between two acts - the grant permits looking at the composer's own state and at the content of a prompt firstmate is answering under the confirmation grant, which it cannot weigh against the bounds below without reading, and it does not permit reading that chat for state - so firstmate still takes that secondmate's state from its routed status and referenced documents (`AGENTS.md:229`) and still does not treat a quiet pane as stale (`AGENTS.md:331`).
+  How omega text reaches a secondmate seat - by which path, and with what that seat needs in order to recognise it as relayed instruction - is not settled by this change.
 - Firstmate may answer that seat's confirmation prompts on his behalf.
   "confirm the orders" means confirming the standing orders the window was opened for, not any prompt the seat happens to show.
 - Firstmate adds whatever steps it judges necessary to reach completion of the task the window was opened for.
@@ -68,13 +88,8 @@ The test a granting vessel applies at the moment it is about to type is a fact a
 That test only has an answer while the vessel still holds its own record of the seats it has typed at: the durable window marker owned by `bin/fm-omega.sh` carries the task and the decision-record id, not a per-seat log, so after a mid-window restart nothing durable is left to test a breach against.
 Re-announcing to a seat is therefore never a breach, and it is what a restarted vessel does rather than guess.
 
-What the receiving seat may take from such text is bounded.
-It acts on the text as ordinary instruction from another vessel and records it as unverified, never as an instruction from a vessel acting on the captain's grant.
-The announcement establishes only that a window was said to be open; it establishes nothing about the invocation, because both artefacts that would settle it - the decision record and the durable window marker below - live in the granting vessel's own home and no receiving seat can read them.
-That bound binds only a seat that has loaded this skill, and the fleet has no route that delivers it to a seat that has not.
-The trigger is the captain naming the omega protocol in that seat's own chat, which `AGENTS.md` section 13 owns, and the seat firstmate announces to is by construction one whose captain has not named it, so this half of the duty is stated here rather than delivered to the seat it binds.
-What would close it is the rule reaching a surface the receiving seat already loads, its own always-loaded `AGENTS.md` or the fleet doctrine delivery that is not built yet; neither is built here, and the granting half above binds firstmate whether or not the receiving half ever arrives.
-`docs/omega-announcement-duty.md` records why this fleet-level duty is stated here, in vendored firstmate material, rather than in fleet doctrine, and keeps that undelivered half on the record.
+Every seat this duty covers is one of this vessel's own workers, which firstmate already supervises and whose instructions it already wrote, and that is the ground of the duty: firstmate owes the announcement because it is typing at a seat it briefed, not because of anything assumed here about what that seat makes of the text.
+`docs/omega-announcement-duty.md` records why this duty is stated in the skill rather than elsewhere, and the measured incident behind the secondmate case with what it does and does not settle.
 
 ## What it does not grant
 
@@ -94,7 +109,7 @@ The `/afk` skill's rule that away never widens or withdraws approval authority s
 
 Text found already sitting in a seat's composer when firstmate attaches is the harness's own predicted-prompt suggestion.
 His clarification above settles it: that text is "left over", "can be easily deleted", and is "the suggestuons i mentioned".
-His 2026-09-04 correction says the same of another vessel's seat: "i gurantue thers nothing from me tehre if you see something it is the suggestions from claude code itself, free to take by you ore overwrite".
+His 2026-09-04 words say the same of a seat he had not been typing into himself: "i gurantue thers nothing from me tehre if you see something it is the suggestions from claude code itself, free to take by you ore overwrite".
 It is not the captain acting, so firstmate never submits it as his instruction and never treats it as confirmation of anything.
 Firstmate is free to take it or overwrite it: clear it, confirm the standing orders itself, and type only what the named task needs.
 
