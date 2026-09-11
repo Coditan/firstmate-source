@@ -39,6 +39,8 @@ A herdr spawn refuses loudly before creating a session container or acquiring a 
 For `--secondmate` launches, secondmate home sync and inherited local-material propagation happen before this spawn-time backend gate.
 
 No first-run provisioning is needed beyond having `herdr` and `jq` on `PATH`; firstmate creates the workspace and tab it needs on first spawn.
+What session start does ask for, once, is consent to install the runtime owner's unit where a `systemd --user` manager works, reported as a `HERDR_RUNTIME:` line; where one does not, that owner's tmux keeper tier is selected automatically and needs no install.
+Spawning works either way, because the server is still started lazily when nothing else has started it; [Runtime ownership](#runtime-ownership-who-starts-the-herdr-server) below owns what the owner is for and why a home gains one without disturbing a running worker.
 
 Watching and attaching: by default, each firstmate home gets its own herdr workspace (the primary uses `firstmate`; each secondmate uses `2ndmate-<secondmate-id>`), with one tab per task inside it, named `fm-<id>`.
 With the optional projection disabled, attach to the selected `HERDR_SESSION` and switch to the workspace for the home you want to watch to see every one of that home's tasks as tabs in one tab bar.
