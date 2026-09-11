@@ -201,6 +201,7 @@ SH
 make_fake_systemd() {  # <fakebin>
   local fakebin=$1
   mkdir -p "$fakebin"
+  # shellcheck disable=SC2016  # single quotes are deliberate: the stub's own "$2" and command substitution must reach the generated file verbatim so the stub expands them at its own runtime against its own argument.
   printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$(printf "%%s" "$2" | tr / -)"\n' > "$fakebin/systemd-escape"
   cat > "$fakebin/systemctl" <<'SH'
 #!/usr/bin/env bash
