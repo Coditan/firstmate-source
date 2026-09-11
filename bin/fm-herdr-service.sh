@@ -541,6 +541,30 @@ recorded_service_path() {
   printf '%s' "$line"
 }
 
+# The reach question asked of whichever tier is watching, because the recorded
+# value lives somewhere different on each: the keeper receives its PATH as a
+# launch argument and the owner's own record is the only trace of what it got,
+# while the unit's is the environment file this service wrote.  One place decides
+# that, so a path that converges cannot ask it of the wrong tier or skip it - and
+# every path that converges asks it, because an owner that cannot reach herdr
+# comes up healthy, reads the runtime as unreadable forever and never starts it,
+# which is indistinguishable from a converged home in an exit status alone.
+report_selected_reach() {  # <tier>
+  local recorded
+  case "$1" in
+    keeper)
+      recorded=$(recorded_keeper_path)
+      [ -n "$recorded" ] || return 0
+      ;;
+    systemd)
+      systemd_installed || return 0
+      recorded=$(recorded_service_path 2>/dev/null || true)
+      ;;
+    *) return 0 ;;
+  esac
+  report_recorded_path "$recorded"
+}
+
 # What the owner last established about the runtime, said in the digest rather
 # than left in a file: an owner that is up but reading `unreadable` looks exactly
 # like a healthy home from the outside, and that is the state this whole area
@@ -605,9 +629,7 @@ bootstrap_check() {
       # Same question, same wording, asked of the keeper's own record.  Skipped
       # when there is no record at all, because "nothing is watching" is the
       # branch above's sentence to say, not this one's.
-      if [ -n "$(recorded_keeper_path)" ]; then
-        report_recorded_path "$(recorded_keeper_path)"
-      fi
+      report_selected_reach keeper
       report_reading
       return 0
       ;;
@@ -631,9 +653,7 @@ bootstrap_check() {
   fi
   # Asked after any convergence above, so it reports what the running owner can
   # actually reach.
-  if systemd_installed; then
-    report_recorded_path "$(recorded_service_path 2>/dev/null || true)"
-  fi
+  report_selected_reach systemd
   report_reading
 }
 
@@ -663,13 +683,27 @@ status_report() {
   return 1
 }
 
+# The documented vessel-entrypoint call, so what it says is the whole contract a
+# container definition in another repository gets: an exit status, plus whatever
+# the tier printed.  Its success means an owner is watching, never that the
+# runtime is up - the owner publishes its first reading before it has started
+# anything - so the one convergence that succeeds into a permanently useless
+# state, an owner whose recorded PATH cannot reach herdr, has to be said here
+# rather than waited for until the first session's locked bootstrap.  That window
+# is the gap this command exists to close.  On stderr, because everything else
+# this path says goes there.
 ensure_selected() {
+  local tier rc
   home_runs_herdr || { echo "this home does not spawn workers into herdr; nothing to supervise" >&2; return 0; }
-  case "$(select_backend)" in
+  tier=$(select_backend)
+  case "$tier" in
     systemd) ensure_systemd ;;
     keeper) ensure_keeper ;;
     *) echo "error: no herdr runtime service backend available" >&2; return 1 ;;
   esac
+  rc=$?
+  report_selected_reach "$tier" >&2
+  return "$rc"
 }
 
 restart_selected() {

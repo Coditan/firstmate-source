@@ -1331,6 +1331,40 @@ test_stopping_a_keeper_does_not_wait_on_the_other_tiers_owner() {
   pass "stopping a keeper is not judged by the other tier's owner"
 }
 
+# The entrypoint call is made from a container's own shell, whose reach is
+# whatever the image gives it, and the owner it starts runs with a PATH composed
+# from exactly that reach.  An owner that cannot resolve herdr comes up healthy
+# and reads the runtime as unreadable forever without ever starting it, so a
+# convergence that reported only its exit status would report that home as
+# converged until the first session's locked bootstrap.
+test_ensure_says_when_the_owner_it_started_cannot_reach_herdr() {
+  local tmuxbin toolpath home log out recorded
+  tmuxbin="$TMP_ROOT/reach-bin"
+  home=$(make_home "$TMP_ROOT/reach-home")
+  log="$TMP_ROOT/reach-tmux.log"
+  make_fake_tmux_keeper "$tmuxbin"
+  : > "$log"
+  # No herdr for the owner to resolve, which is the whole premise: the composed
+  # PATH is drawn from this value and from the pinned base, so establishing it
+  # here establishes it for the owner too.
+  toolpath="$tmuxbin:/usr/bin:/bin"
+  assert_herdr_resolution "$toolpath" none "the PATH this case hands the owner"
+
+  out=$(PATH="$toolpath" FM_HOME="$home" FM_HERDR_SERVICE_FORCE_BACKEND=keeper \
+    FM_HERDR_TMUX="$tmuxbin/tmux" FM_HERDR_RUNTIME_SESSION=reach \
+    FM_SERVICE_TOOLS='tmux' FM_SERVICE_PATH_BASE='/usr/bin:/bin' \
+    FM_TEST_TMUX_LOG="$log" FM_TEST_KEEPER_PID_FILE="$TMP_ROOT/keeper.pid" \
+    FM_HERDR_CONFIRM_TIMEOUT=15 "$SERVICE" ensure 2>&1) \
+    || fail "the keeper tier did not establish an owner: $out"
+  recorded=$(sed -n 's/^service-path=//p' "$home/state/.herdr-runtime.lock/record" | head -1)
+  assert_herdr_resolution "$recorded" none "the PATH the owner was launched with"
+  [ "$(reading_field "$home" reading)" = unreadable ] \
+    || fail "an owner that cannot reach herdr recorded '$(reading_field "$home" reading)'"
+  assert_contains "$out" "cannot reach herdr" \
+    "a convergence that left an owner unable to reach herdr reported nothing: $out"
+  pass "ensure says when the owner it converged cannot reach the herdr client"
+}
+
 test_the_entrypoint_command_is_printed_verbatim() {
   local home out
   home=$(make_home "$TMP_ROOT/entrypoint-home")
@@ -1362,4 +1396,5 @@ test_a_failed_convergence_over_a_live_owner_still_says_so
 test_a_client_that_wedges_after_a_start_is_not_reported_as_down
 test_a_keeper_stop_that_fails_fails_the_convergence
 test_stopping_a_keeper_does_not_wait_on_the_other_tiers_owner
+test_ensure_says_when_the_owner_it_started_cannot_reach_herdr
 test_the_entrypoint_command_is_printed_verbatim
