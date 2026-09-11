@@ -332,6 +332,7 @@ family_for_basename() {
       printf '%s\n' messaging-relay
       ;;
     fm-bosun-service.test.sh|fm-frequency-monitor-service.test.sh|\
+    fm-herdr-service.test.sh|\
     fm-tg-recv-service.test.sh|fm-watcher-service.test.sh)
       printf '%s\n' service-units
       ;;
@@ -990,6 +991,12 @@ families_for_changed_path() {
       # delivery listener's health predicate is read by the session-start digest.
       printf '%s\n' afk
       printf '%s\n' session-bootstrap
+      ;;
+    bin/fm-herdr-service.sh|bin/fm-herdr-runtime.sh|bin/fm-herdr-keeper.sh)
+      # Named rather than left to the basename fallback: no test file mentions
+      # fm-herdr-keeper.sh, so that fallback refuses the path outright, and the
+      # other two resolve only by happening to be named inside one test.
+      printf '%s\n' service-units
       ;;
     bin/fm-seat-stay-down.sh|bin/fm-seat-respawner-service.sh)
       printf '%s\n' service-units

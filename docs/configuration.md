@@ -326,6 +326,20 @@ Both `--arm` paths retire their pre-rename predecessor shim and `.check-trust` b
 The respawner itself reads the wake-delivery service verdict rather than probing panes, refuses to launch while the session lock names a live first mate, honors `state/.seat-stay-down`, uses `config/seat-launch-command` as its fresh-start launch command, gives the fresh seat one typed first turn, and reports exhausted retry episodes through the findings surface.
 [`docs/seat-respawner.md`](seat-respawner.md) owns the mechanism, retry bound, accepted manual-close trade, and verification limits, and [`docs/seat-absence.md`](seat-absence.md) owns the detection half, the supervision arrangement, and what is still not covered.
 
+## Herdr runtime service
+
+`bin/fm-herdr-service.sh` owns the supervised owner of this home's herdr runtime, and is selected only on a home whose resolved runtime backend is herdr; on any other home it installs nothing and reports nothing.
+The tracked template is `systemd/fm-herdr@.service` and the instance is `fm-herdr@$(systemd-escape --path "$FM_HOME").service`.
+The first unit copy and `enable --now` require explicit captain consent through `HERDR_RUNTIME:` and `bin/fm-bootstrap.sh install herdr-unit`.
+If `systemd --user` is unavailable, a detached home-scoped tmux keeper is selected automatically, exactly as it is for the watcher, the delivery listener, and the seat respawner.
+Convergence, the recorded `PATH`, and the keeper tier's handed-down `PATH` argument all follow the watcher's rules above; `state/.herdr-service.env` is its environment file and `state/.herdr-runtime.lock/record` its keeper-tier record, which also carries the herdr session name the owner is responsible for.
+That session is resolved as a spawn resolves it, `HERDR_SESSION` then `default`, so the owner and the fleet name one server.
+The owner's own lines go to `state/.herdr-runtime.log`; the detached server's stdout and stderr go to `state/.herdr-server.log`, capped at `FM_HERDR_SERVER_LOG_MAX_BYTES` (default 4 MiB) by one copy to `.herdr-server.log.1` and an in-place truncation, as [`docs/herdr-backend.md`](herdr-backend.md#runtime-ownership-who-starts-the-herdr-server) describes.
+
+One rule separates this service from its three siblings and is worth stating where a reader configuring it will meet it: convergence here replaces the WATCHING process and never the runtime.
+Restarting the delivery listener costs a few seconds of queued wakes, while restarting the herdr server ends every worker's agent process on the home at once, so no path in this service stops a running runtime and none ever will.
+[`docs/herdr-backend.md`](herdr-backend.md#runtime-ownership-who-starts-the-herdr-server) owns the mechanism, the measurement that produced it, the vessel-entrypoint command a container definition must call, and the rollback.
+
 ## Seat absence alarm
 
 `bin/fm-seat-alarm.sh` is the per-home watch for the seat's own absence, armed as a watcher check at every session start and reported by `SEAT_ALARM:` when it is unarmed or has stopped running.
@@ -1078,6 +1092,20 @@ FM_SEAT_WATCHER_GRACE=       # seconds before the respawner reads a watcher beac
 FM_SEAT_WATCHER_REVIVE_EVERY=120   # seconds between attempts to revive a provably DEAD watcher; a live watcher whose beacon aged out is never restarted here (docs/seat-absence.md)
 FM_SEAT_LAUNCH_COMMAND=      # test or specialized override for config/seat-launch-command; must be a fresh start, not resume-style
 # FM_SEAT_KEEPER_* tune the hand-started container stopgap instead (bin/fm-seat-keeper.sh); its own header owns that list, and docs/seat-respawner.md owns what the keeper is for
+FM_HERDR_GRACE=120      # seconds before a herdr runtime owner's beacon or its published reading reads as stale; a live owner whose beacon is older answers status stalled rather than up, and a reading older than this is reported as established by no current owner
+FM_HERDR_CONFIRM_TIMEOUT=10   # seconds fm-herdr-service waits to confirm a converged runtime owner, and to confirm one it stopped is gone
+# The knobs below are read by the OWNER process, not by the converging session, and neither supervised tier inherits that session's environment - so exporting one beside `ensure` or a session start changes nothing about the owner.
+# On the systemd tier the owner's whole environment is state/.herdr-service.env, which fm-herdr-service.sh rewrites from a fixed template at every convergence and which carries none of these: an entry added there is discarded at the next locked bootstrap. The durable seam is a unit drop-in - `systemctl --user edit fm-herdr@$(systemd-escape --path "$FM_HOME").service` - which nothing in this repository writes to or reads.
+# On the keeper tier the owner inherits the tmux SERVER's environment - the keeper's own launch arguments carry only the home, the code root, the state dir, the source version, the service PATH and the session - so the value has to be in that server's environment before the keeper is next started, either because the server was started with it or through `tmux set-environment -g`.
+# On both tiers a running owner keeps what it was launched with until it is replaced, and none of these knobs is compared when convergence decides whether to replace one, so follow the change with `bin/fm-herdr-service.sh restart`.
+FM_HERDR_RUNTIME_POLL=30     # seconds between the owner's `herdr status --json` readings, chosen against what one call per interval costs forever
+FM_HERDR_RUNTIME_STATUS_TIMEOUT=10   # seconds one of those readings may take before it is recorded as unreadable; held below the poll so a wedged client still leaves the loop beating
+FM_HERDR_RUNTIME_START_TIMEOUT=20    # seconds the owner waits for a runtime it started detached to report itself running
+FM_HERDR_RUNTIME_CONFIRM_SLEEP=1     # seconds before a first reading of down is re-read, because a start against a live socket would cost the fleet its workers
+FM_HERDR_RUNTIME_BACKOFF=30          # seconds before a second start attempt after one that did not report a running server; doubles per attempt
+FM_HERDR_RUNTIME_MAX_BACKOFF=300     # ceiling on that doubling
+FM_HERDR_RUNTIME_RESTART_SEC=2       # seconds bin/fm-herdr-keeper.sh waits before respawning its own owner child
+FM_HERDR_SERVER_LOG_MAX_BYTES=4194304   # size cap on state/.herdr-server.log before one copy is taken to .herdr-server.log.1 and the live file truncated in place
 FM_TG_RECV_ATTACH_POLL=0.5  # seconds between checks while fm-tg-recv-arm is attached to an existing receiver
 FM_TG_RECV_ATTACH_CONFIRM_TIMEOUT=2  # seconds fm-tg-recv-arm waits for a competing arm to publish receiver metadata
 FM_TG_RECV_TERM_WAIT_CYCLES=30  # termination polling cycles before fm-tg-recv-arm preserves a live receiver lock after wrapper shutdown

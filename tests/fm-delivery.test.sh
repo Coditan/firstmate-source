@@ -75,6 +75,32 @@ wait_for_report() {  # <home> <expected-text>
   fail "delivery verdict never contained '$expected'; last verdict: $out"
 }
 
+# Wait until the listener's own log records a condition, which is how a test
+# waits for the listener to be back on a poll boundary rather than still inside
+# the work that produced the condition.
+#
+# It is stop_listener that needs this. The listener services SIGTERM through a
+# bash trap, and a trap runs only at a command boundary in the listener's MAIN
+# shell: a TERM that lands while `verdict=$(fm_backend_send_text_submit ...)` is
+# still running is held until that command substitution returns, and the submit
+# it wraps is a settle sleep plus up to three Enter retries with their own sleeps
+# and tmux round trips. Nothing on this side bounds how long that takes, so the
+# two tests that stop the listener the instant a real pane receives the text were
+# stopping it mid-submit and racing stop_listener's wait - measured here at ~11
+# poll iterations against 1-3 for every other stop in this file, and observed in
+# CI as "the listener did not exit after SIGTERM". Waiting for the submit the
+# listener already confirmed puts the TERM on the same idle poll boundary the
+# rest of the file delivers it on.
+wait_for_delivery_log() {  # <home> <expected-text>
+  local home=$1 expected=$2 i=0
+  while [ "$i" -lt 400 ]; do
+    grep -qF "$expected" "$home/state/.delivery.log" 2>/dev/null && return 0
+    sleep 0.05
+    i=$((i + 1))
+  done
+  fail "the listener log never recorded '$expected'; log: $(cat "$home/state/.delivery.log" 2>/dev/null)"
+}
+
 start_listener() {  # <home> [extra env assignments...] -> prints pid
   local home=$1
   shift
@@ -499,6 +525,7 @@ SH
   esac
   [ "$(wc -l < "$home/state/.wake-queue" | tr -d ' ')" -eq 1 ] \
     || fail "delivery consumed the durable queue record instead of leaving it for the drain"
+  wait_for_delivery_log "$home" 'delivered:'
   stop_listener "$pid"
   tmux -L "$socket" kill-server 2>/dev/null || true
   pass "the listener submits the canonical typed wake into a real tmux agent composer"
@@ -573,6 +600,7 @@ SH
   done
   [ -s "$home/owner.received" ] || fail "the server-bound endpoint did not reach its owning pane"
   [ ! -e "$home/sibling.received" ] || fail "the server-bound endpoint still reached the sibling vessel"
+  wait_for_delivery_log "$home" 'delivered:'
   stop_listener "$pid"
   [ "$(tmux -L "$owner_socket" list-sessions -F '#{session_name}')" = owner ] \
     || fail "guarded delivery leaked control sessions on the owning server"

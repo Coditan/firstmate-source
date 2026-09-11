@@ -127,6 +127,9 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-delivery-lib.sh`     | Delivery records, listener health, the primary-endpoint record, and the one-line delivery verdict |
 | `fm-delivery-service.sh` | Install, converge, restart, and report this home's delivery listener; publish the session endpoint |
 | `fm-delivery-keeper.sh`  | tmux keeper tier for the delivery listener where systemd --user is unusable          |
+| `fm-herdr-runtime.sh`    | Keep this home's herdr runtime up, started detached, and publish what the owner last saw |
+| `fm-herdr-service.sh`    | Install, converge, restart, and report this home's herdr runtime owner; print the vessel entrypoint command |
+| `fm-herdr-keeper.sh`     | tmux keeper tier for the herdr runtime owner where systemd --user is unusable        |
 | `fm-seat-stay-down.sh`   | Declare or clear this home's primary-seat stay-down marker for the respawner         |
 | `fm-seat-keeper.sh`      | Terminal-hosted primary-seat keeper for a home with no per-user service manager      |
 | `fm-seat-respawner.sh`   | Bounded per-home primary-seat respawner driven by the delivery service verdict       |
